@@ -66,6 +66,14 @@ inline double DAY_NIGHT_FADE;         //seconds a fade between them takes (40)
 inline double DAY_NIGHT_BATTLE;       //battles run the clock this many times slower (3)
 inline int DAY_NIGHT_KEYS;            //Ctrl+F7 swap, Ctrl+F8 pause, Ctrl+F9 speed (1x, 10x, 60x), Ctrl+F6 to just before the next fade
 inline int DAY_NIGHT_BAR;             //a thin bar across the top while the clock is paused or sped up (and after a key)
+inline double FIELD_PBR_LOOK;         //the look's master dial: how far the maps change the painting itself (0: not at all; 1; up to 2)
+inline double FIELD_PBR_RELIGHT;      //the look: the painted light follows the normal map (times FIELD_PBR_LOOK)
+inline double FIELD_PBR_HIGHLIGHTS;   //the look: highlights from the painted lamps (times FIELD_PBR_LOOK)
+inline double FIELD_PBR_AO;           //the look: the AO map darkens the painting too (times FIELD_PBR_LOOK)
+inline int FIELD_MOVING_LIGHTS;       //the moving lights module: the sun and the party light
+inline double FIELD_SUN;              //the sun's strength (fields with sky = 1, or [sun] on = 1 in their _lights.txt); 0: off
+inline int FIELD_PARTY_LIGHT;         //the light the party leader carries: 0 off, 1 at night, 2 always
+inline double FIELD_PARTY_LIGHT_STRENGTH;
 inline int FIELD_GL_TRACK;            //1: remember the GL state as it is set instead of asking the driver around every draw (gl_state.h)
 
 void ReadConfigFile();

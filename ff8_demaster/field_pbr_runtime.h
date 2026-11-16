@@ -5,6 +5,7 @@
 
 #include "field_layers.h"
 #include "field_pbr.h"
+#include "field_moving_lights.h"
 
 #include <GL/glew.h>
 
@@ -114,7 +115,11 @@ namespace fieldrt
 		float color[fieldpbr::MAX_LIGHTS * 4] = {}; //light added now; specular
 		float flicker[fieldpbr::MAX_LIGHTS * 4] = {}; //painted light's change now, owns the mask, shadow strength, a night lamp (1: the
 		                                              //painting keeps its light around it at night)
+		//the look (FIELD_PBR_LOOK): the lamp's own colour now, for the highlights dial; its weight in the relight dial (negative:
+		//a moving light)
+		float paint[fieldpbr::MAX_LIGHTS * 4] = {};
 		bool castsShadow[fieldpbr::MAX_LIGHTS] = {}; //characters cast shadows from it (shadow maps)
+		int fieldCount = 0; //the first of them are the field's own; the rest (count - fieldCount) the moving lights
 		//DAY_NIGHT: how night it is (0-1), the light left away from the night's lamps, how much the lamps keep; the tint (rgb)
 		float night[4] = {};
 		float nightTint[4] = { 1, 1, 1, 0 };
@@ -134,6 +139,7 @@ namespace fieldrt
 		int probeSlices = 0;
 		float probeExposure = 1.0f;
 		uint32_t parallaxLayers = 0; //layer ids (bits) that moved on their own last frame
+		int partyFollow = -1; //the lights file's [party] follow: the script entity that carries the party light (-1: DEMASTER picks)
 	};
 	const FieldView& PbrView();
 	const LightUniforms& PbrLights(); //the field's lights now (flicker, light groups)
@@ -157,6 +163,23 @@ namespace fieldrt
 	};
 	void PbrSetCharacters(const CharFrame* frame); //null: none this frame
 	bool PbrDrewThisFrame(); //a PBR page was drawn since the last SwapBuffers
+
+	//--- the moving lights module (texturepatch_v2_fieldMovingLights.cpp; the maths: field_moving_lights.h)
+	//
+	//The sun and the party light, as lights added after the field's own. The PBR module asks for them whenever it works out
+	//the lights (Lights() in texturepatch_v2_fieldPbr.cpp); the character module says each frame which characters it drew.
+	constexpr int MAX_MOVING_LIGHTS = 2;
+	//the character module, once per frame before anything asks for the lights: the characters it drew this frame, and the
+	//"playable character" byte most of the field's script entities have (-1: not known)
+	void MovingLightsCharacters(uint64_t entry, const std::vector<fieldpbr::LeaderCandidate>& drawn, int pcOfMost);
+	//how many places among the field's lights they need now (0 to MAX_MOVING_LIGHTS)
+	int MovingLightsWanted(const fieldpbr::Settings& settings, const fieldpbr::Lights& lights, double night);
+	//the moving lights that are on now, into out (MAX_MOVING_LIGHTS of them); how many
+	int MovingLightsNow(const FieldView& view, const fieldpbr::Settings& settings, const fieldpbr::Lights& lights, double night,
+		fieldpbr::MovingLight* out);
+	//changes whenever MovingLightsNow would give something else (the leader moved, the sun moved on)
+	uint64_t MovingLightsSerial();
+	void MovingLightsEndFrame(); //SwapBuffers
 
 	//--- FIELD_PBR_QUALITY: how much of the GPU the PBR field spends
 	struct Quality

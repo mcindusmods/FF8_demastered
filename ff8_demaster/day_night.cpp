@@ -332,6 +332,14 @@ double DayNightClockAmount()
 	return fieldpbr::NightAmount(cycle, clockTime);
 }
 
+fieldpbr::SkyTime DayNightSky()
+{
+	if (!DAY_NIGHT)
+		return { false, 0.3 };
+	Start();
+	return fieldpbr::SkyTimeOf(cycle, clockTime);
+}
+
 double DayNightAmount(const fieldpbr::FieldTime time)
 {
 	if (!DAY_NIGHT)

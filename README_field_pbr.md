@@ -145,6 +145,72 @@ One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, w
 - While the clock is paused or sped up, and for 4 seconds after a key, a thin bar across the top of the screen shows the cycle, starting at dawn on the left: amber day, blue night. The mark on it is where the clock is: white at 1x, yellow at 10x, orange at 60x, red paused, grey in a field that holds the clock. `DAY_NIGHT_BAR=0` turns it off.
 - The log says what each key did and the time: `DAY_NIGHT: swapped: night, 0:00 in (dawn starts in 3:20)`. You can also set the time in `daynight.txt` while the game is closed (`time = 500` is the start of the night).
 
+## The look (v15.10): the maps change the painting itself
+
+Until v15.10 a PBR field at rest was its painting, exactly: the normal, roughness and AO maps only shaped light that was *added* (lights with `intensity`, flicker, shadows, reflections, the night). That is still what you get with `FIELD_PBR_LOOK=0`, the default. The look is for when you want the maps to show.
+
+| In `demaster.conf` | Default | What |
+|---|---|---|
+| `FIELD_PBR_LOOK` | 0 | The master dial. 0: off. 1: the three dials below as set. Up to 2: twice that. |
+| `FIELD_PBR_RELIGHT` | 0.5 | The painted light follows the normal map: what is turned towards the lamps that are on gets brighter, what is turned away gets darker (at 1: up to about half again as bright, down to about a fifth). The field as a whole keeps its brightness. |
+| `FIELD_PBR_HIGHLIGHTS` | 0.5 | The painted lamps make highlights on glossy and metal surfaces (GGX, from roughness and metallic), without their diffuse light a second time. |
+| `FIELD_PBR_AO` | 0.5 | The AO map darkens the painting too (at 1: the painting times the AO map). |
+
+Each dial's strength is its own value × `FIELD_PBR_LOOK` × the field's `look` in `_pbr.txt`.
+
+- **Per field, in `_pbr.txt`** (fieldprep keeps them): `look = 1` is this field's share of the master dial (0: this field stays as painted; 2: twice). `look_relight`, `look_highlights`, `look_ao` are `auto` (demaster.conf's value) or a number of this field's own. DEMASTER reads `_pbr.txt` again within a second of saving it, so set `FIELD_PBR_LOOK=1` once and tune a field while you stand in it. The log says what a field ended up with: `FIELD_PBR: bdifrit1: the look: relight 0.50, highlights 0.50, AO 0.50`.
+- **Which lamps count.** Relight and highlights use the lamps that are *in the painting* (`baked = 1` in `_lights.txt`: fieldprep's found lamps, your marks), as much as each is on (day and night lamps fade with the clock; a lamp its light group turned off counts for nothing), and the sun (below). A lamp you added with `baked = 0` is new light: it has its own `intensity` and `specular`. A field with no baked lamps and no sun only gets the AO dial.
+- **Where it doesn't apply.** Layers without a normal map (relight), sky, glowing pixels (a bulb is a light, not a lit surface), and anything out of every lamp's `range`: so `range` is also how far a lamp's relight reaches.
+- **It needs a decent albedo.** Relight multiplies the painted light, so it works on any split. Highlights take their strength from the albedo and metallic maps: on a field whose albedo is nearly the painting itself (the lightmap doing all the work the other way round, as bdifrit1's is now) they will look chalky.
+- **Cost:** a few multiplications per pixel and lamp, no extra texture reads. The same at every `FIELD_PBR_QUALITY`.
+
+In graphics terms: relight is a shading-ratio relight (the painting's own light times computed shading over a reference), highlights are specular-only lights, the AO dial is a multiply. None of it is new as a technique; what's specific here is that the reference is worked out per field and per frame so the average brightness holds (below, "How it's drawn").
+
+## Moving lights (v15.10)
+
+Lights that aren't at a fixed place in `_lights.txt`. Their own module: `FIELD_MOVING_LIGHTS=1` (0: none of this). To the shaders each is one more light among the field's 8, so when a field already has 8 on, the faintest of its own steps aside.
+
+### The sun (`FIELD_SUN`, default 1.0: its strength)
+
+On fields open to the sky a sun crosses the sky with the day/night clock: rising at the middle of dawn's fade, highest at the middle of the day, setting at the middle of dusk's fade; orange near the horizon, near white high up. At night a faint moon takes the same path.
+
+- **Which fields:** those with `sky = 1` in `_pbr.txt`, or `[sun] on = 1` in `_lights.txt` (an open street with no sky in the picture). `on = 0` turns it off for a field.
+- **What it does:** adds its light to what faces it (`intensity`), the characters cast shadows from it (long at dawn and dusk), and with the relight dial the painted light follows it from morning to evening (`shade`). With `FIELD_PBR_LOOK=0` only its added light and the shadows show.
+- **A field with `time = day`** has it standing still at `fixed` (0.3: mid-morning). `time = night`: the moon at its highest. With `DAY_NIGHT=0` every field is a day field.
+- **Walls keep it out** at medium and high quality (the same wall checks added lights get, looking as far as the field is wide).
+
+```
+[sun]
+on = auto          ; auto: only with sky = 1 in _pbr.txt; 1: on; 0: off
+azimuth = 0.0      ; degrees: where it rises. 0: on the right of the picture, setting on the left; 180: the other way;
+                   ; 90: it rises behind the scene and sets behind you
+height = 60.0      ; degrees above the horizon at noon (it leans towards the camera, so what faces you is lit)
+intensity = 0.350  ; the light it adds on top of the painting
+shade = 1.000      ; how much the painted light follows it (the relight dial)
+moon = 0.250       ; the moon's share of both at night (0: no moon)
+fixed = 0.300      ; where on its arc it stands with time = day (0 rising, 0.5 noon, 1 setting)
+```
+
+### The party light (`FIELD_PARTY_LIGHT`: 0 off, 1 at night, 2 always; default 1)
+
+A warm light the party leader carries, a little above the middle of the body and towards the camera. At 1 it comes on as the room goes dark and goes out at dawn. It lights the room (normals, roughness and wall checks as for any added light) and the characters near it. `FIELD_PARTY_LIGHT_STRENGTH` scales it everywhere.
+
+```
+[party]
+on = auto          ; auto: as demaster.conf says; off; night; always
+color = 1.000 0.740 0.450
+intensity = 1.000
+range = 72.0       ; native pixels
+height = 0.70      ; 0: the leader's middle, 1: the top of the head
+follow = auto      ; auto: DEMASTER picks the leader; a number: that script entity
+```
+
+- **Who the leader is.** DEMASTER has no address for "the party leader", so it works it out: each script entity has a byte the script's SETPC command sets (found in FFNx's description of the entity structure). The characters whose byte differs from what most of the field's entities have are the playable ones; among those drawn, the one that moved last carries the light, and keeps it until another moves. The log says who it took: `MOVING_LIGHTS: bdifrit1: the party light's carrier is script entity 3 (...)`. **This is the least certain part of v15.10: it has not run in the game yet.** If it picks wrong on a field, `follow = <entity>` fixes that field, and the log line tells me what to correct.
+- Fields without a measured camera (`camera = estimated` in `_pbr.txt`) have no script entities to go by: the character that moved last carries it.
+- It fades in and out over a third of a second when its carrier appears or is hidden.
+
+Both sections are written into new `_lights.txt` files by fieldprep and kept when it finds the lights again. A file without them (every file so far) uses the values above.
+
 ## Your keys in `_pbr.txt`
 
 fieldprep rewrites `_pbr.txt` every run but keeps these:
@@ -154,6 +220,8 @@ fieldprep rewrites `_pbr.txt` every run but keeps these:
 | `time = cycle/day/night` | (v15.8) `cycle` (default): the field follows the day/night clock. `day`: always as painted. `night`: always night (a story scene, a boss). In a `day` or `night` field the clock waits until you leave it (battles started from it too), then goes on. |
 | `sky = 0/1` | 1: pixels at the farthest depth of your depth map are sky (no added light, no shadows, nothing reflected, characters never hidden by them). For a sky painted into the same layer as the foreground. Layers that scroll on their own (parallax, script scrolls) are found automatically and treated as sky either way. |
 | `character_shade = replace/keep` | The game darkens characters by one value per field (for example −0.094 in bvtr_1) and scripts change it (flashes, silhouettes, fades). `replace` (default): DEMASTER notes each character's value once it has settled after the field loads; the room's light replaces that value, and later changes from scripts are added on top the way the game adds them. `keep`: the game's darkening on top of the room's light (for a field that sets its look after the fade-in). |
+| `look = <number>` | (v15.10) This field's share of `FIELD_PBR_LOOK`: 1 all of it (default), 0 the field stays as painted, 2 twice. |
+| `look_relight`, `look_highlights`, `look_ao` = `auto` / `<number>` | (v15.10) `auto` (default): demaster.conf's dial. A number: this field's own value for that dial (still × `FIELD_PBR_LOOK` × `look`). |
 | `character_light = auto / <number>` | How bright the room makes the characters. `auto` (default): as bright as the game draws them, on average; the room gives the direction and colour. A number: the room's real light times it (1 = as bright as the room is). |
 
 ## Depth, camera and walkmesh
@@ -183,6 +251,8 @@ fieldprep rewrites `_pbr.txt` every run but keeps these:
 With shadows, reflections or face pictures on, DEMASTER turns off the game's own back-face removal on PBR fields (two 6-byte jumps in its model code, turned back on in every other field), so the whole model arrives: the back for reflections, a solid body for shadows. The GPU hides the back faces when the model is drawn on screen, so it looks the same.
 
 ## Checking it in the game
+
+**Checking the look and the moving lights.** `FIELD_PBR_VIEW=9` shows only what is added (the highlights dial, the sun's and the party light's own light); `FIELD_PBR_VIEW=12` the shadows, the sun's among them. For relight and AO compare with `look = 0` in the field's `_pbr.txt` (saved while you stand there: the picture switches within a second). The day/night test keys move the sun: Ctrl+F9 for 10× or 60× sweeps it across the sky.
 
 `FIELD_PBR_VIEW` shows one thing at a time: on PBR layers 1 albedo, 2 lightmap, 3 normals, 4 depth, 5 AO, 6 roughness, 7 metallic, 8 flicker mask, 9 only the added light, 10 with every light at rest, **12 shadows** (blue: sky), **13 reflections** (×4), **14 how far each pixel is behind its tile's nearest part** (black: at the tile's own depth, nothing gets through; white: twice as far or more; orange: a tile without a measured nearest part; blue: sky); **16 the glows as they'll show at night** (the emissive map × the painting's colour there, with `[emissive]`'s hue, tint and strength; black: no glow), **17 the emissive map**; on characters **11 the room's light on grey** and **15 their normals**. 0 is normal.
 
@@ -280,7 +350,12 @@ For each pixel of a PBR layer, inside the draw the game already makes (with DEMA
 4. **Reflections.** The reflected ray meets the characters' cards (their pictures stood up where they are), blurred by roughness.
 5. **Depth.** The tile's depth goes to the depth buffer exactly as the game sends it (the GPU can skip hidden pixels before lighting them). With `FIELD_PBR_DEPTH`, a pixel with a character between the tile and what it shows isn't drawn, so the character shows.
 6. **Glows.** The emissive map (`_ORME`'s alpha) says which pixels are the painting's own glow: a bulb, a screen, a sign. By day nothing changes (the painting has them already). As the room goes dark at night, they stay lit: the painting's own colour there, turned and tinted by `[emissive]` in `_lights.txt`, takes the dimmed painting's place by as much as the emissive map says (mix(dimmed painting, glow, emissive × night)). The game's additive glow layers are drawn as painted either way.
-7. **Night.** The painted light (step 2) times `[night] level` × `tint` away from the night's lamps, kept around them (`lamps`, within their range); how much of that applies follows the clock (0 by day, 1 at night, smooth through the fades).
+7. **The look** (`FIELD_PBR_LOOK`). In the same pass over the lights as steps 2 and 3:
+   - *Relight:* for every lamp that reaches the pixel, its weight w = (how much of it is on) × the range falloff, and how the pixel's normal faces it, s = clamp((n·l + 0.5) / 1.5, 0, 1): 0 turned away, 2/3 half turned, 1 facing it. With W = Σw and S = Σw·s the painted light is multiplied by 1 + relight × ((0.25 + scale × S) / (0.25 + W) − 1). The 0.25 is the share of the painted light no lamp moves, so out of every lamp's range nothing changes. `scale` is worked out by DEMASTER every frame from a 32 × 24 grid of the room's normals and depths (`fieldpbr::RelightScale`) so that the average over the field is exactly 1: the field keeps its brightness whatever the lamps and the sun are doing. A moving light's share is also kept out by the room's walls.
+   - *Highlights:* step 3's GGX term alone, with the painted lamp's own colour instead of colour × intensity.
+   - *AO:* the painted light × (1 − ao dial × (1 − AO)).
+   - Glowing pixels are left out of all three by as much as they glow.
+8. **Night.** The painted light (step 2) times `[night] level` × `tint` away from the night's lamps, kept around them (`lamps`, within their range); how much of that applies follows the clock (0 by day, 1 at night, smooth through the fades).
 
 Cost: three more textures per page (1 MB each in BC7 at 4x), the room's `_ND` once per field, two loops over at most 8 lights per pixel, and per frame a few thousand character triangles sent to the GPU once and drawn a handful of times (on bvtr_3: about 1.1 MB once, instead of about 7 times; 6 extra draws for 3 characters instead of 18).
 
@@ -302,6 +377,11 @@ Cost: three more textures per page (1 MB each in BC7 at 4x), the room's `_ND` on
   - `tests/pbr_shader_test.cpp`: at night with no lamps the shader gives the painting × level × tint (within 1 level, mean 0.39); with a night lamp, at the lamp the painting keeps `lamps` of its light (within 1) while far from it it's level × tint; by day (night 0) the paintings come back as before.
   - `tests/chara_shader_test.cpp`: characters lit by a flat room at night get the room's light × level × tint (within 2); night 0 is exactly the day.
 - **v15.10:**
+  - The look and the moving lights (`tests/field_pbr_test.cpp`, 173 more checks): the dials times the master dial and the field's own; `_pbr.txt` and `_lights.txt` round trips with the new keys and sections, old files reading as the defaults; the relight's scale makes the samples' average exactly 1; the sun's path (rises on the right at azimuth 0, never below the horizon, the right height at noon, also with a tilted camera), its colour, its falloff flat to within 4% across a field, off below the horizon, fixed in `time = day` fields, the moon; the leader choice (the playable one over a walking NPC, the last one to move of two, `follow`, no entity data); the party light's place, modes and strength.
+  - `tests/pbr_shader_test.cpp` on a field with an AO and emissive map: every dial at 0 with a painted lamp in the field: 0 values differ from the painting. Relight at 1 and at 0.5 against the same sums worked out on the CPU from the field's `_ND`: mean 0.24 and 0.21 levels off, the field's brightness × 1.000. AO at 1: the painting × the AO map within 1 level. Highlights: 109,234 pixels brighter, none darker, none outside the lamp's range. The sun with relight: morning and evening both × 1.000 of the painting's brightness, and the picture changes between them; its own light only adds; wall checks never brighten. The party light: +3.5 levels around its carrier, nothing far from it, nothing darker.
+  - Timing (`BENCH=10`, software rendering, 1344×960, so only the ratios mean anything, and run to run they move by about 8%): the field program with 3 lights and no wall checks takes 79 to 84 ms against v15.9's 75 to 79, which is within that noise (v15.9's three per-light loops are one now, and the roll-off costs a little where light is added). The look on top: no difference that shows above the noise. Sun and party light on top of that: about +30% at low quality and +50% at medium and high (each is one more light with its wall checks, and the sun reaches every pixel).
+  - `tools/syntax_check.sh` (new): MinGW's compiler reads 22 of the DLL's 35 source files, the ones that only build on Windows among them (the PBR, character, moving lights, day/night and config code), and finds no errors. Not Microsoft's compiler, and the files with inline assembly can't be read this way, but the new DLL-side code has been through a compiler's type checking now.
+  - **Not run anywhere:** the DLL itself. The look's default strengths and the sun's are first guesses that have not been seen on a real field; the party leader choice is untested against the game (above).
   - `tests/pbr_shader_test.cpp`: the roll-off: from the picture at rest and the picture with a test light, the picture with that light 4 times as strong is what the curve gives (417,105 values, mean 0.56 levels off, max 3), nothing gets darker, and of the 98,960 values a cut-off would have drawn white 11,007 are; the glows at night: on a field with an emissive map, mix(painting × level × tint, glow, emissive) within 1 level, as painted and with a tint and half strength, and nothing brighter than painted. Both checks fail on the v15.9 shader.
   - bx and bimg from `ff8_demaster\vendor\src` (the Release build's): compiled for 32-bit Windows with MinGW and linked against a program making DEMASTER's calls; built natively they read fieldprep's BC7 DDS files (with and without mip levels) and PNGs. The Release configuration itself has not been through Microsoft's compiler yet.
   - Not run here: the clock, the keys, the bar and the file in the game.
@@ -309,6 +389,9 @@ Cost: three more textures per page (1 MB each in BC7 at 4x), the room's `_ND` on
 - **Not run here: the DLL in the game.** Characters drawn by DEMASTER, the back faces, shadows, reflections, light groups and the model DDS swap all need a test in the game. Use `FIELD_DEBUG=1`, a frame log (Ctrl+F11: the log now notes where DEMASTER drew the characters and which round shadows it left out) and send `demasterlog.txt`.
 
 ## Not covered yet
+
+- **Moving lights that the game moves.** The sun and the party light are the first two. Spells, summons, a train's headlights, lightning: each needs its own source of position (a script entity, a particle), which the module's interface takes (`fieldpbr::MovingLight`), but nothing feeds it yet.
+- **The sun on characters' light grid.** Characters get the sun's added light and cast its shadows, but the room light they stand in (the light grid fieldprep bakes) doesn't swing with the relight dial.
 
 - **The day/night clock and your game saves.** The time of day is DEMASTER's own (one `daynight.txt`), not saved with each game save: loading an older save keeps the time it is now. Tying it to the saves needs the game's play-time counter in memory, not found yet.
 - **Night on the rest of the game.** Battles, the world map, non-PBR fields and layers without PBR maps stay as painted at night (the clock still runs through them).

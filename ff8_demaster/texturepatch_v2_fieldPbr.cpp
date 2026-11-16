@@ -406,8 +406,14 @@ namespace
 		int probeSlices = 0;
 		float probeExposure = 1.0f;
 		float probeMean = 0.0f; //the grid's average light (e0, luminance)
+		//spots of the room (from its _ND), for the relight dial's scale (fieldpbr::RelightScale)
+		std::vector<fieldpbr::ShadeSample> shadeSamples;
 	};
 	Current current;
+	//The field program's uniforms that are the same for every draw of a frame are sent once per frame, not once per draw
+	//(SetUniforms). Whatever changes one of them raises this: the end of a frame, the characters' data arriving, another
+	//field, a file read again.
+	uint64_t uniformSerial = 1;
 	bool shaderMissing = false;
 
 	FieldView view;
@@ -441,6 +447,7 @@ namespace
 	{
 		DeleteTexture(current.room);
 		DeleteTexture(current.probes);
+		uniformSerial++;
 		current = Current();
 		view = FieldView();
 		measure = Measure();
@@ -783,10 +790,13 @@ void main()
 		glBindTexture(GL_TEXTURE_2D, target);
 	}
 
+	constexpr int SHADE_GRID_X = 32, SHADE_GRID_Y = 24;
+
 	//the whole field's _ND (the room's depth on the canvas), for shadows and walls between
 	void LoadRoom()
 	{
 		current.roomLoaded = true;
+		uniformSerial++;
 		DeleteTexture(current.room);
 		const std::string& stem = current.field->roomStem;
 		if (stem.empty())
@@ -806,8 +816,12 @@ void main()
 		glGenTextures(1, &current.room);
 		glBindTexture(GL_TEXTURE_2D, current.room);
 		bool ok = false;
+		//a coarse grid of the room's normals and depths, kept for the relight dial's scale (ShadeSamples)
+		std::vector<uint8_t> grid(static_cast<size_t>(SHADE_GRID_X) * SHADE_GRID_Y * 4);
+		bool gridOk = false;
 		{
 			UnpackState unpack;
+			static bx::DefaultAllocator allocator;
 			if (image->m_format == bimg::TextureFormat::BC7)
 			{
 				bimg::ImageMip mip{};
@@ -816,20 +830,45 @@ void main()
 					glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA_BPTC_UNORM, static_cast<GLsizei>(mip.m_width),
 						static_cast<GLsizei>(mip.m_height), 0, static_cast<GLsizei>(mip.m_size), mip.m_data);
 					ok = true;
+					//only the 4x4 blocks the grid's points are in get decoded
+					const uint32_t blocksX = (mip.m_width + 3) / 4, blocksY = (mip.m_height + 3) / 4;
+					gridOk = mip.m_size >= static_cast<uint32_t>(blocksX) * blocksY * 16;
+					for (int gy = 0; gy < SHADE_GRID_Y && gridOk; gy++)
+						for (int gx = 0; gx < SHADE_GRID_X; gx++)
+						{
+							const uint32_t px = std::min<uint32_t>(mip.m_width - 1, static_cast<uint32_t>((gx + 0.5) * mip.m_width / SHADE_GRID_X));
+							const uint32_t py = std::min<uint32_t>(mip.m_height - 1, static_cast<uint32_t>((gy + 0.5) * mip.m_height / SHADE_GRID_Y));
+							uint8_t block[64];
+							bimg::imageDecodeToRgba8(&allocator, block, mip.m_data + (static_cast<size_t>(py / 4) * blocksX + px / 4) * 16, 4, 4, 16,
+								bimg::TextureFormat::BC7);
+							memcpy(grid.data() + (static_cast<size_t>(gy) * SHADE_GRID_X + gx) * 4, block + ((py % 4) * 4 + px % 4) * 4, 4);
+						}
 				}
 			}
 			else
 			{
-				static bx::DefaultAllocator allocator;
 				if (bimg::ImageContainer* rgba = bimg::imageConvert(&allocator, bimg::TextureFormat::RGBA8, *image, false))
 				{
 					RawTexImage(GL_RGBA8, static_cast<GLsizei>(rgba->m_width), static_cast<GLsizei>(rgba->m_height), GL_RGBA, GL_UNSIGNED_BYTE,
 						rgba->m_data);
+					const uint8_t* pixels = static_cast<const uint8_t*>(rgba->m_data);
+					for (int gy = 0; gy < SHADE_GRID_Y; gy++)
+						for (int gx = 0; gx < SHADE_GRID_X; gx++)
+						{
+							const uint32_t px = std::min<uint32_t>(rgba->m_width - 1, static_cast<uint32_t>((gx + 0.5) * rgba->m_width / SHADE_GRID_X));
+							const uint32_t py = std::min<uint32_t>(rgba->m_height - 1, static_cast<uint32_t>((gy + 0.5) * rgba->m_height / SHADE_GRID_Y));
+							memcpy(grid.data() + (static_cast<size_t>(gy) * SHADE_GRID_X + gx) * 4, pixels + (static_cast<size_t>(py) * rgba->m_width + px) * 4, 4);
+						}
+					gridOk = true;
 					bimg::imageFree(rgba);
 					ok = true;
 				}
 			}
 		}
+		current.shadeSamples.clear();
+		if (ok && gridOk)
+			current.shadeSamples = fieldpbr::ShadeSamples(grid.data(), SHADE_GRID_X, SHADE_GRID_Y, current.settings,
+				current.field->canvasWidth, current.field->canvasHeight);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -914,6 +953,7 @@ void main()
 		view.probes = current.probes;
 		view.probeSlices = current.probeSlices;
 		view.probeExposure = ProbeExposure();
+		view.partyFollow = current.lights.party.follow;
 	}
 
 	//--- drawing
@@ -925,7 +965,8 @@ void main()
 		GLint tileClamp = -1, pbr = -1, space = -1, depth = -1, ambient = -1, count = -1, lightPos = -1, lightColor = -1, lightFlicker = -1;
 		GLint stepAside = -1, quality = -1, sky = -1, roomSize = -1, features = -1, charCount = -1, cardCenter = -1, cardUp = -1,
 			cardRight = -1, cardDir = -1, contact = -1, shadowCount = -1, shadowMatrix = -1, shadowInfo = -1, blendMode = -1;
-		GLint emissive = -1, emissiveTint = -1, night = -1, nightTint = -1;
+		GLint emissive = -1, emissiveTint = -1, night = -1, nightTint = -1, lightPaint = -1, look = -1;
+		uint64_t sent = 0; //the uniformSerial its per-frame uniforms were last sent at
 	};
 	FieldProgram fieldProgram;
 	bool unitsBound = false, programSwapped = false;
@@ -962,6 +1003,8 @@ void main()
 		p.lightPos = at("demasterLightPos");
 		p.lightColor = at("demasterLightColor");
 		p.lightFlicker = at("demasterLightFlicker");
+		p.lightPaint = at("demasterLightPaint");
+		p.look = at("demasterLook");
 		p.stepAside = at("demasterStepAside");
 		p.quality = at("demasterQuality");
 		p.sky = at("demasterSky");
@@ -998,20 +1041,26 @@ void main()
 		static ULONGLONG lastTick = ~0ull;
 		static uint64_t lastEntry = 0;
 		static const fieldpbr::Lights* lastLights = nullptr;
+		static uint64_t lastMoving = ~0ull;
 		const ULONGLONG now = GetTickCount64();
-		if (now == lastTick && lastEntry == current.entry && lastLights == &current.lights)
+		const uint64_t movingSerial = MovingLightsSerial();
+		if (now == lastTick && lastEntry == current.entry && lastLights == &current.lights && lastMoving == movingSerial)
 			return u;
 		lastTick = now;
 		lastEntry = current.entry;
 		lastLights = &current.lights;
+		lastMoving = movingSerial;
 		const double seconds = now / 1000.0;
 		const fieldpbr::Space& space = current.settings.space;
 		static const uint32_t groups = HasAddress(FIELD_BG_GROUPS) ? GetAddress(FIELD_BG_GROUPS) : 0; //a guest address
 		//the time of day (DAY_NIGHT): the field's own (time = day or night in _pbr.txt) or the clock's; which lights are on and
 		//how much, the night's darkness
 		const double night = DayNightAmount(current.settings.time);
+		//the moving lights (the sun, the party light) take places among the lights; the field's own get the rest
+		const int moving = MovingLightsWanted(current.settings, current.lights, night);
 		size_t dropped = 0;
-		const std::vector<fieldpbr::ActiveLight> active = fieldpbr::ActiveLights(current.lights, night, &dropped);
+		const std::vector<fieldpbr::ActiveLight> active = fieldpbr::ActiveLights(current.lights, night, &dropped,
+			static_cast<size_t>(fieldpbr::MAX_LIGHTS - moving));
 		if (dropped > 0)
 			LogOnce("daynight-dropped-" + std::to_string(current.entry), "FIELD_PBR: %s: more than %d lights on during a fade between day and "
 				"night: the %zu faintest left out until it ends\n", current.field != nullptr ? current.field->name.c_str() : "?", fieldpbr::MAX_LIGHTS,
@@ -1023,7 +1072,8 @@ void main()
 		u.night[3] = 0.0f;
 		for (int c = 0; c < 3; c++)
 			u.nightTint[c] = dark.tint[c];
-		u.count = static_cast<int>(std::min<size_t>(active.size(), fieldpbr::MAX_LIGHTS));
+		u.count = static_cast<int>(std::min<size_t>(active.size(), static_cast<size_t>(fieldpbr::MAX_LIGHTS - moving)));
+		u.fieldCount = u.count;
 		for (int i = 0; i < u.count; i++)
 		{
 			const size_t index = active[i].index;
@@ -1057,6 +1107,38 @@ void main()
 			u.flicker[i * 4 + 2] = l.ShadowStrength() * weight; //a light fading out takes its shadows with it
 			u.flicker[i * 4 + 3] = active[i].nightLamp && on ? 1.0f : 0.0f;
 			u.castsShadow[i] = on && weight > 0.0f && l.ShadowStrength() > 0.0f && (l.intensity > 0.0f || l.baked);
+			//the look: only the lamps that are in the painting. Their own colour (no intensity: that is the added light) for
+			//the highlights dial, and how much of them is on for the relight dial
+			for (int c = 0; c < 3; c++)
+				u.paint[i * 4 + c] = l.baked ? static_cast<float>(l.color[c] * flicker * group[c] * lit * weight) : 0.0f;
+			u.paint[i * 4 + 3] = l.baked ? lit * weight : 0.0f;
+		}
+		//the moving lights, after the field's own
+		if (moving > 0)
+		{
+			fieldpbr::MovingLight extra[MAX_MOVING_LIGHTS];
+			const int n = std::min(MovingLightsNow(view, current.settings, current.lights, night, extra), fieldpbr::MAX_LIGHTS - u.count);
+			for (int k = 0; k < n; k++)
+			{
+				const fieldpbr::MovingLight& m = extra[k];
+				const int i = u.count++;
+				u.pos[i * 4 + 0] = static_cast<float>(m.position.x);
+				u.pos[i * 4 + 1] = static_cast<float>(m.position.y);
+				u.pos[i * 4 + 2] = static_cast<float>(m.position.z);
+				u.pos[i * 4 + 3] = static_cast<float>(std::max(1e-6, m.range));
+				for (int c = 0; c < 3; c++)
+				{
+					u.color[i * 4 + c] = m.color[c];
+					u.paint[i * 4 + c] = m.gloss[c];
+				}
+				u.color[i * 4 + 3] = m.specular;
+				u.paint[i * 4 + 3] = -m.shade; //negative: a moving light (its share of the painted light is kept out by walls)
+				u.flicker[i * 4 + 0] = 0.0f;
+				u.flicker[i * 4 + 1] = 0.0f;
+				u.flicker[i * 4 + 2] = m.shadow;
+				u.flicker[i * 4 + 3] = 0.0f;
+				u.castsShadow[i] = m.castsShadow;
+			}
 		}
 		return u;
 	}
@@ -1144,13 +1226,19 @@ void main()
 		}
 	}
 
+	//Before a draw of a PBR page. What differs from draw to draw (the page's cells, the tile filter, the blend mode) is sent
+	//every time; everything else is the same for the whole frame and is sent once per frame (uniformSerial).
 	void SetUniforms(const PbrPage& page, const float* tileClamp, const GLint blendMode)
 	{
-		const FieldProgram& p = fieldProgram;
-		const fieldpbr::Settings& s = current.settings;
-		const fieldpbr::Space& space = s.space;
+		FieldProgram& p = fieldProgram;
 		glUniform4f(p.tileClamp, tileClamp[0], tileClamp[1], tileClamp[2], tileClamp[3]);
 		glUniform4f(p.pbr, 1.0f, static_cast<float>(FIELD_PBR_VIEW), static_cast<float>(page.cellsX), static_cast<float>(page.cellsY));
+		glUniform1i(p.blendMode, blendMode);
+		if (p.sent == uniformSerial)
+			return;
+		p.sent = uniformSerial;
+		const fieldpbr::Settings& s = current.settings;
+		const fieldpbr::Space& space = s.space;
 		glUniform4f(p.space, static_cast<float>(space.zoom), static_cast<float>(space.originX), static_cast<float>(space.originY),
 			space.model == fieldpbr::DepthModel::Inverse ? 1.0f : 0.0f);
 		glUniform4f(p.depth, static_cast<float>(space.a), static_cast<float>(space.b), static_cast<float>(space.nearest), 0.0f);
@@ -1162,22 +1250,36 @@ void main()
 		glUniform4f(p.emissiveTint, e.tint[0], e.tint[1], e.tint[2], 0.0f);
 		glUniform4fv(p.night, 1, lights.night);
 		glUniform4fv(p.nightTint, 1, lights.nightTint);
-		glUniform1i(p.blendMode, blendMode);
 		glUniform1i(p.count, lights.count);
 		if (lights.count > 0)
 		{
 			glUniform4fv(p.lightPos, lights.count, lights.pos);
 			glUniform4fv(p.lightColor, lights.count, lights.color);
 			glUniform4fv(p.lightFlicker, lights.count, lights.flicker);
+			glUniform4fv(p.lightPaint, lights.count, lights.paint);
 		}
+		//the look (FIELD_PBR_LOOK and its dials, the field's own in _pbr.txt); the relight's scale keeps the field's average
+		//brightness with the lights as they are now
+		const fieldpbr::Look look = fieldpbr::FieldLook(s, FIELD_PBR_LOOK, FIELD_PBR_RELIGHT, FIELD_PBR_HIGHLIGHTS, FIELD_PBR_AO);
+		const double scale = look.relight > 0 ? fieldpbr::RelightScale(current.shadeSamples, lights.pos, lights.paint, lights.count) : 1.5;
+		glUniform4f(p.look, look.relight, look.highlights, look.ao, static_cast<float>(scale));
+		if (look.Any())
+			LogOnce("look-" + std::to_string(current.entry), "FIELD_PBR: %s: the look: relight %.2f, highlights %.2f, AO %.2f (FIELD_PBR_LOOK %.2f x "
+				"the field's look %.2f)\n", current.field != nullptr ? current.field->name.c_str() : "?", look.relight, look.highlights, look.ao,
+				FIELD_PBR_LOOK, s.look);
 		//stepping aside for characters: the depth buffer's window value per game depth unit (0.5 + z / 2 of the game's z), the
 		//characters' depth (copied right after DEMASTER drew them)
 		const bool stepAside = FIELD_PBR_DEPTH && charsSet && chars.depth != 0 && chars.depthWidth > 0 && chars.depthHeight > 0;
 		glUniform4f(p.stepAside, stepAside ? 1.0f : 0.0f, static_cast<float>(view.depthSlope * 0.5),
 			stepAside ? 1.0f / chars.depthWidth : 0.0f, stepAside ? 1.0f / chars.depthHeight : 0.0f);
+		//wall checks towards a light look as far as the field is wide (a lamp of the field is nearer than that: the whole
+		//way; the sun: the part near the pixel)
+		fieldpbr::Vec3 centre;
+		double extent = 1.0;
+		fieldpbr::FieldExtent(s, view.canvasWidth, view.canvasHeight, centre, extent);
 		const Quality& q = CurrentQuality();
 		glUniform4f(p.quality, static_cast<float>(q.lightWallSteps), static_cast<float>(q.reflectionWallSteps),
-			static_cast<float>(q.shadowTaps), 0.0f);
+			static_cast<float>(q.shadowTaps), static_cast<float>(extent));
 		const float skyFrom = s.sky && s.skyValue >= 0 ? static_cast<float>(space.Distance(s.skyValue)) : 0.0f;
 		glUniform4f(p.sky, skyFrom, static_cast<float>(view.parallaxLayers & 0xFFFFFF), s.sky ? 1.0f : 0.0f, 0.0f);
 		glUniform4f(p.roomSize, static_cast<float>(std::max(1, view.canvasWidth)), static_cast<float>(std::max(1, view.canvasHeight)),
@@ -1312,6 +1414,8 @@ void fieldrt::PbrPoll()
 		const fieldpbr::FieldTime timeBefore = current.settings.time;
 		LoadSettings(settingsPath, nullptr, current.settings, f.name);
 		rebuildCells = true;
+		uniformSerial++;
+		current.roomLoaded = false; //the room's samples are in the camera's space, which the settings say
 		if (current.settings.time != timeBefore)
 			DayNightFieldEntered(f.name, current.settings.time); //time = day | night | cycle changed: the clock waits or goes on
 		Log("FIELD_PBR: %s: %s read again\n", f.name.c_str(), settingsPath.empty() ? "_pbr.txt (gone)" : settingsPath.c_str());
@@ -1322,6 +1426,7 @@ void fieldrt::PbrPoll()
 		current.lightsPath = lightsPath;
 		current.lightsTime = time;
 		LoadLights(lightsPath, current.lights, f.name);
+		uniformSerial++;
 		Log("FIELD_PBR: %s: %s read again, %zu light(s)\n", f.name.c_str(), lightsPath.empty() ? "_lights.txt (gone)" : lightsPath.c_str(),
 			current.lights.lights.size());
 	}
@@ -1484,6 +1589,8 @@ void fieldrt::PbrAfterDraw()
 //SwapBuffers: what this frame's tiles measured is what the characters of the next frame are put back with
 void fieldrt::PbrEndFrame()
 {
+	uniformSerial++; //the next frame sends the field program's per-frame uniforms again
+	MovingLightsEndFrame();
 	const bool drew = measure.drew;
 	view.active = drew && current.field != nullptr;
 	if (drew)
@@ -1539,6 +1646,7 @@ const LightUniforms& fieldrt::PbrLights()
 
 void fieldrt::PbrSetCharacters(const CharFrame* frame)
 {
+	uniformSerial++;
 	charsSet = frame != nullptr;
 	if (frame != nullptr)
 		chars = *frame;

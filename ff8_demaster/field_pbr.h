@@ -185,6 +185,10 @@ namespace fieldpbr
 		//how bright the room's light makes the characters: <= 0 (auto) matches the game's brightness on average (the room
 		//gives the direction and colour); a number scales the room's real light (1: as bright as the room is)
 		double characterLight = 0;
+		//the look (FIELD_PBR_LOOK and its three dials in demaster.conf; see "the look" below): this field's share of the
+		//master dial (0: this field stays as painted), and its own value for a dial in place of demaster.conf's (< 0: none)
+		float look = 1.0f;
+		float lookRelight = -1.0f, lookHighlights = -1.0f, lookAo = -1.0f;
 	};
 	//Whatever the text doesn't set keeps the value out had (set the defaults first)
 	bool ParseSettings(const std::string& text, Settings& out, std::string& warnings);
@@ -250,6 +254,30 @@ namespace fieldpbr
 		float tint[3] = { 0.6f, 0.7f, 1.0f }; //what's left times this (linear): moonlight
 		float lamps = 0.9f; //how much of the painted light the night's lamps keep around them, within their range (0-1)
 	};
+	//--- the moving lights (FIELD_MOVING_LIGHTS in demaster.conf; the maths is in field_moving_lights.h)
+	//The sun: a light that crosses the sky with the day/night clock, for fields open to the sky. on: -1 auto (fields with
+	//sky = 1 in _pbr.txt), 0 off, 1 on
+	struct Sun
+	{
+		int on = -1;
+		float azimuth = 0.0f; //degrees: where it rises, turned around the world's up from the camera's right (0: it rises on
+		                      //the right of the picture and sets on the left; 180: the other way; 90: it rises behind the scene)
+		float height = 60.0f; //degrees above the horizon at noon (it leans towards the camera, so what faces you is lit)
+		float intensity = 0.35f; //light it adds on top of the painting (as a light's intensity)
+		float shade = 1.0f; //its weight in the relight dial: how much the painted light follows it across the day
+		float moon = 0.25f; //the moon's share of all that at night (0: no moon)
+		float fixed = 0.3f; //where on its arc it stands in a field with time = day (0 rising, 0.5 noon, 1 setting)
+	};
+	//The party light: a light the party leader carries. on: -1 as FIELD_PARTY_LIGHT says, 0 off here, 1 at night, 2 always
+	struct PartyLight
+	{
+		int on = -1;
+		float color[3] = { 1.0f, 0.74f, 0.45f }; //linear: a warm lantern
+		float intensity = 1.0f;
+		float range = 72.0f; //native pixels at the leader's depth
+		float height = 0.7f; //above the leader's middle, in half body heights (1: the top of the head)
+		int follow = -1; //the script entity that carries it; -1: DEMASTER picks the leader
+	};
 	struct Lights
 	{
 		float ambient[3] = { 0, 0, 0 }; //added everywhere (light units, times albedo)
@@ -258,6 +286,10 @@ namespace fieldpbr
 		bool hasEmissive = false; //the file has an [emissive] section
 		Night night;
 		bool hasNight = false; //the file has a [night] section
+		Sun sun;
+		bool hasSun = false; //the file has a [sun] section
+		PartyLight party;
+		bool hasParty = false; //the file has a [party] section
 	};
 	bool ParseLights(const std::string& text, Lights& out, std::string& warnings);
 	//only the lights that are on by day (time = day or both), at most MAX_FOUND_LIGHTS of fieldprep's and MAX_YOUR_LIGHTS
@@ -275,7 +307,40 @@ namespace fieldpbr
 	//fieldprep's and MAX_YOUR_LIGHTS of yours (the first in the file) among those on then (time = day or both, or night or
 	//both). The day's set is on at 1 - night, the night's at night; a light in both sets at 1. At most MAX_LIGHTS, in file
 	//order; more (only during a fade): the faintest are left out, `dropped` says how many.
-	std::vector<ActiveLight> ActiveLights(const Lights& lights, double night, size_t* dropped = nullptr);
+	//limit: fewer than MAX_LIGHTS when the moving lights need places among them.
+	std::vector<ActiveLight> ActiveLights(const Lights& lights, double night, size_t* dropped = nullptr, size_t limit = MAX_LIGHTS);
+
+	//--- the look (FIELD_PBR_LOOK in demaster.conf): how far the maps change the painting itself
+	//
+	//With everything at 0 a PBR field at rest is its painting, exactly. The dials (each times the master dial, times the
+	//field's own look in _pbr.txt):
+	//  relight     the painted light follows the normal map: brighter where a surface faces the lamps that are on, darker
+	//              where it faces away (demaster_field.frag, "the look")
+	//  highlights  the painted lamps make highlights (GGX, from the roughness and metallic maps) without adding their
+	//              diffuse light again
+	//  ao          the AO map darkens the painting too (without it, only the added light)
+	struct Look
+	{
+		float relight = 0, highlights = 0, ao = 0;
+		bool Any() const { return relight > 0 || highlights > 0 || ao > 0; }
+	};
+	//demaster.conf's dials (master, relight, highlights, ao) and the field's settings, as what the shader gets
+	Look FieldLook(const Settings& settings, double master, double relight, double highlights, double ao);
+	//One spot of the field (view space), for RelightScale
+	struct ShadeSample
+	{
+		Vec3 position, normal;
+	};
+	//The relight dial multiplies the painted light by (0.25 + scale x S) / (0.25 + W): W adds up the weights of the lamps
+	//that reach a pixel (weight x falloff), S the same times how the pixel's normal faces each lamp (0 away, 1 towards it;
+	//demaster_field.frag has the same sums). This is the scale that leaves the field's average brightness where it was,
+	//worked out over `samples`. lightPos (x, y, z, range per light) and lightPaint (.., .., .., weight) are the shader's
+	//arrays. 1.5 (a surface half turned to its lamps stays as it is) when there is nothing to go by.
+	//The samples from a grid of the field's _ND (RGBA, 4 bytes a point, rows from the top: the normal as the map stores it,
+	//the depth value in alpha), spread evenly over the canvas. Sky (settings.sky) is left out.
+	std::vector<ShadeSample> ShadeSamples(const uint8_t* nd, int gridX, int gridY, const Settings& settings, int canvasWidth, int canvasHeight);
+	constexpr double RELIGHT_REST = 0.25; //the share of the painted light that no lamp moves
+	double RelightScale(const std::vector<ShadeSample>& samples, const float* lightPos, const float* lightPaint, int count);
 	const char* LightTimeName(LightTime time);
 	const char* LightSourceName(LightSource source);
 	std::string WriteLights(const Lights& lights, const std::string& field, const std::string& header);

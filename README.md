@@ -1,4 +1,13 @@
 # ff8_demaster
+
+> **This branch (`mcindus`) is MCINDUS's continuation of DEMASTER** for the Lunatic Pandora mods, on top of Maki's code: world map textures by name, field backgrounds from PuPu/FME layer images, PBR lighting for fields (backgrounds, characters, models), `fieldprep`, a day/night clock, the look dials and moving lights.
+> - What each feature does and how to prepare images: [README_field_layers.md](README_field_layers.md), [README_field_pbr.md](README_field_pbr.md)
+> - Every setting: [demaster.conf](demaster.conf). What changed in each version: [CHANGELOG.txt](CHANGELOG.txt)
+> - Building: [COMPILING.md](COMPILING.md) (double-click `build_demaster.bat`)
+> - Working on the code: [CODE_GUIDE.md](CODE_GUIDE.md)
+>
+> Maki's original README follows.
+
 FF8_Demaster is unofficial patch for Final Fantasy VIII Remastered game by SquareEnix. It works as DLL-dependency and has custom launcher with brand new functions. Patch makes it possible to load new textures, use non-fixed-resolution textures and will aim in tweaking issues
 
 ## Usage:

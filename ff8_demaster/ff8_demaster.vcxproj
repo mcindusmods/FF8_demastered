@@ -415,6 +415,8 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
       <SupportJustMyCode>false</SupportJustMyCode>
     </ClCompile>
     <ClCompile Include="day_night.cpp" />
+    <ClCompile Include="texturepatch_v2_fieldMovingLights.cpp" />
+    <ClCompile Include="field_moving_lights.cpp" />
     <ClCompile Include="frame_log.cpp" />
     <ClCompile Include="gl_state.cpp">
       <!-- Only Debug configurations exist; its hooks run on every GL call that sets state, so build this file optimized -->
@@ -617,6 +619,7 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClInclude Include="field_chars.h" />
     <ClInclude Include="gl_state.h" />
     <ClInclude Include="day_night.h" />
+    <ClInclude Include="field_moving_lights.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="minhook\dll_resources\MinHook.def" />

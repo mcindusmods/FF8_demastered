@@ -71,6 +71,14 @@ void ReadConfigFile()
         FIELD_PBR_QUALITY = quality == "low" || quality == "0" ? 0 : quality == "high" || quality == "2" ? 2 : 1;
     }
     FIELD_GL_TRACK = conf.GetInteger("", "FIELD_GL_TRACK", 1);
+    FIELD_PBR_LOOK = conf.GetReal("", "FIELD_PBR_LOOK", 0.0);
+    FIELD_PBR_RELIGHT = conf.GetReal("", "FIELD_PBR_RELIGHT", 0.5);
+    FIELD_PBR_HIGHLIGHTS = conf.GetReal("", "FIELD_PBR_HIGHLIGHTS", 0.5);
+    FIELD_PBR_AO = conf.GetReal("", "FIELD_PBR_AO", 0.5);
+    FIELD_MOVING_LIGHTS = conf.GetInteger("", "FIELD_MOVING_LIGHTS", 1);
+    FIELD_SUN = conf.GetReal("", "FIELD_SUN", 1.0);
+    FIELD_PARTY_LIGHT = conf.GetInteger("", "FIELD_PARTY_LIGHT", 1);
+    FIELD_PARTY_LIGHT_STRENGTH = conf.GetReal("", "FIELD_PARTY_LIGHT_STRENGTH", 1.0);
     DAY_NIGHT = conf.GetInteger("", "DAY_NIGHT", 1);
     DAY_NIGHT_DAY = conf.GetReal("", "DAY_NIGHT_DAY", 480);
     DAY_NIGHT_NIGHT = conf.GetReal("", "DAY_NIGHT_NIGHT", 240);

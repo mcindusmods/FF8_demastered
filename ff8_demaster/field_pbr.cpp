@@ -493,6 +493,24 @@ namespace fieldpbr
 				if (ok)
 					s.time = t == "day" ? FieldTime::Day : t == "night" ? FieldTime::Night : FieldTime::Cycle;
 			}
+			else if (kv.key == "look")
+			{
+				ok = Number(kv.value, v[0]) && v[0] >= 0 && v[0] <= 4;
+				if (ok)
+					s.look = static_cast<float>(v[0]);
+			}
+			else if (kv.key == "look_relight" || kv.key == "look_highlights" || kv.key == "look_ao")
+			{
+				float& dial = kv.key == "look_relight" ? s.lookRelight : kv.key == "look_highlights" ? s.lookHighlights : s.lookAo;
+				if (Lower(kv.value) == "auto")
+					dial = -1.0f;
+				else
+				{
+					ok = Number(kv.value, v[0]) && v[0] >= 0 && v[0] <= 4;
+					if (ok)
+						dial = static_cast<float>(v[0]);
+				}
+			}
 			else if (kv.key == "character_light")
 			{
 				if (Lower(kv.value) == "auto")
@@ -579,7 +597,30 @@ namespace fieldpbr
 			out += Format("character_light = %.4g      ; auto: the characters as bright as the game draws them, on average; a number: the room's real light times it\n", s.characterLight);
 		else
 			out += "character_light = auto      ; auto: the characters as bright as the game draws them, on average; a number: the room's real light times it\n";
+		out += Format("look = %.3g                  ; this field's share of FIELD_PBR_LOOK (demaster.conf): 1 all of it, 0 as painted, 2 twice\n", s.look);
+		const auto dial = [&](const char* key, const float value, const char* what)
+		{
+			out += value >= 0 ? Format("%s = %.3g", key, value) : std::string(key) + " = auto";
+			out += std::string("       ; ") + what + "\n";
+		};
+		dial("look_relight", s.lookRelight, "auto: demaster.conf's FIELD_PBR_RELIGHT; a number: this field's own");
+		dial("look_highlights", s.lookHighlights, "auto: FIELD_PBR_HIGHLIGHTS; a number: this field's own");
+		dial("look_ao", s.lookAo, "auto: FIELD_PBR_AO; a number: this field's own");
 		return out;
+	}
+
+	Look FieldLook(const Settings& settings, const double master, const double relight, const double highlights, const double ao)
+	{
+		const auto dial = [&](const float own, const double conf)
+		{
+			const double value = (own >= 0 ? own : conf) * master * settings.look;
+			return static_cast<float>(std::clamp(std::isfinite(value) ? value : 0.0, 0.0, 4.0));
+		};
+		Look look;
+		look.relight = dial(settings.lookRelight, relight);
+		look.highlights = dial(settings.lookHighlights, highlights);
+		look.ao = dial(settings.lookAo, ao);
+		return look;
 	}
 
 	const char* FieldTimeName(const FieldTime time)
@@ -626,6 +667,16 @@ namespace fieldpbr
 				else if (kv.section == "night")
 				{
 					result.hasNight = true;
+					light = nullptr;
+				}
+				else if (kv.section == "sun")
+				{
+					result.hasSun = true;
+					light = nullptr;
+				}
+				else if (kv.section == "party")
+				{
+					result.hasParty = true;
 					light = nullptr;
 				}
 				else
@@ -690,6 +741,83 @@ namespace fieldpbr
 				else
 				{
 					warnings += where + "unknown setting " + kv.key + " in [night] (level, tint, lamps)\n";
+					continue;
+				}
+			}
+			else if (light == nullptr && kv.section == "sun")
+			{
+				Sun& sun = result.sun;
+				const std::string word = Lower(kv.value);
+				if (kv.key == "on")
+				{
+					ok = word == "auto" || word == "0" || word == "1" || word == "off" || word == "on";
+					if (ok)
+						sun.on = word == "auto" ? -1 : word == "1" || word == "on" ? 1 : 0;
+				}
+				else if (kv.key == "azimuth" || kv.key == "height" || kv.key == "intensity" || kv.key == "shade" || kv.key == "moon"
+					|| kv.key == "fixed")
+				{
+					//azimuth: any angle; height: 5 to 90 degrees; fixed: 0 to 1; the others: not negative
+					ok = Numbers(kv.value, v, 1);
+					if (ok && kv.key == "height")
+						ok = v[0] >= 5 && v[0] <= 90;
+					else if (ok && kv.key == "fixed")
+						ok = v[0] >= 0 && v[0] <= 1;
+					else if (ok && kv.key != "azimuth")
+						ok = v[0] >= 0;
+					if (ok)
+					{
+						float& value = kv.key == "azimuth" ? sun.azimuth : kv.key == "height" ? sun.height : kv.key == "fixed" ? sun.fixed
+							: kv.key == "intensity" ? sun.intensity : kv.key == "shade" ? sun.shade : sun.moon;
+						value = static_cast<float>(v[0]);
+					}
+				}
+				else
+				{
+					warnings += where + "unknown setting " + kv.key + " in [sun] (on, azimuth, height, intensity, shade, moon, fixed)\n";
+					continue;
+				}
+			}
+			else if (light == nullptr && kv.section == "party")
+			{
+				PartyLight& party = result.party;
+				const std::string word = Lower(kv.value);
+				if (kv.key == "on")
+				{
+					ok = word == "auto" || word == "off" || word == "night" || word == "always" || word == "0" || word == "1" || word == "2";
+					if (ok)
+						party.on = word == "auto" ? -1 : word == "off" || word == "0" ? 0 : word == "night" || word == "1" ? 1 : 2;
+				}
+				else if (kv.key == "color" || kv.key == "colour")
+				{
+					ok = Numbers(kv.value, v, 3);
+					if (ok)
+						for (int i = 0; i < 3; i++)
+							party.color[i] = static_cast<float>(std::max(0.0, v[i]));
+				}
+				else if (kv.key == "intensity" || kv.key == "range" || kv.key == "height")
+				{
+					ok = Numbers(kv.value, v, 1) && (kv.key == "height" || v[0] >= 0) && (kv.key != "range" || v[0] > 0);
+					if (ok)
+					{
+						float& value = kv.key == "intensity" ? party.intensity : kv.key == "range" ? party.range : party.height;
+						value = static_cast<float>(v[0]);
+					}
+				}
+				else if (kv.key == "follow")
+				{
+					if (word == "auto")
+						party.follow = -1;
+					else
+					{
+						ok = Numbers(kv.value, v, 1) && v[0] >= 0 && v[0] < 64;
+						if (ok)
+							party.follow = static_cast<int>(v[0]);
+					}
+				}
+				else
+				{
+					warnings += where + "unknown setting " + kv.key + " in [party] (on, color, intensity, range, height, follow)\n";
 					continue;
 				}
 			}
@@ -883,8 +1011,65 @@ namespace fieldpbr
 		lights.lights = std::move(kept);
 	}
 
-	std::vector<ActiveLight> ActiveLights(const Lights& lights, const double night, size_t* dropped)
+	std::vector<ShadeSample> ShadeSamples(const uint8_t* nd, const int gridX, const int gridY, const Settings& settings, const int canvasWidth,
+		const int canvasHeight)
 	{
+		std::vector<ShadeSample> out;
+		if (nd == nullptr || gridX <= 0 || gridY <= 0 || canvasWidth <= 0 || canvasHeight <= 0)
+			return out;
+		out.reserve(static_cast<size_t>(gridX) * gridY);
+		const double skyFrom = settings.sky && settings.skyValue >= 0 ? settings.space.Distance(settings.skyValue) : 0.0;
+		for (int y = 0; y < gridY; y++)
+			for (int x = 0; x < gridX; x++)
+			{
+				const uint8_t* p = nd + (static_cast<size_t>(y) * gridX + x) * 4;
+				const double value = p[3] / 255.0;
+				if (skyFrom > 0 && settings.space.Distance(value) >= skyFrom)
+					continue;
+				ShadeSample sample;
+				sample.position = settings.space.ViewPosition((x + 0.5) * canvasWidth / gridX, (y + 0.5) * canvasHeight / gridY, value);
+				//as demaster_field.frag reads the map: x right, y up and z towards the camera, into view space (y down, z away)
+				sample.normal = Normalize({ p[0] / 255.0 * 2.0 - 1.0, 1.0 - p[1] / 255.0 * 2.0, 1.0 - p[2] / 255.0 * 2.0 });
+				out.push_back(sample);
+			}
+		return out;
+	}
+
+	double RelightScale(const std::vector<ShadeSample>& samples, const float* lightPos, const float* lightPaint, const int count)
+	{
+		double rest = 0, shaded = 0;
+		size_t n = 0;
+		for (const ShadeSample& sample : samples)
+		{
+			double weightSum = 0, shadeSum = 0;
+			for (int i = 0; i < count && i < MAX_LIGHTS; i++)
+			{
+				const double share = std::fabs(lightPaint[i * 4 + 3]);
+				if (share <= 0)
+					continue;
+				const Vec3 toLight = Vec3{ lightPos[i * 4], lightPos[i * 4 + 1], lightPos[i * 4 + 2] } - sample.position;
+				const double dd = Dot(toLight, toLight), range = lightPos[i * 4 + 3];
+				const double x2 = dd / (range * range);
+				if (!(x2 < 1.0))
+					continue;
+				const double edge = 1.0 - x2 * x2;
+				const double weight = share * edge * edge / (1.0 + 8.0 * x2);
+				const double nl = Dot(sample.normal, toLight) / std::sqrt(std::max(dd, 1e-12));
+				shadeSum += weight * std::clamp((nl + 0.5) / 1.5, 0.0, 1.0);
+				weightSum += weight;
+			}
+			rest += RELIGHT_REST / (RELIGHT_REST + weightSum);
+			shaded += shadeSum / (RELIGHT_REST + weightSum);
+			n++;
+		}
+		if (n == 0 || !(shaded > 1e-9))
+			return 1.5;
+		return std::clamp((static_cast<double>(n) - rest) / shaded, 0.75, 4.0);
+	}
+
+	std::vector<ActiveLight> ActiveLights(const Lights& lights, const double night, size_t* dropped, const size_t limit)
+	{
+		const size_t most = std::min<size_t>(limit, MAX_LIGHTS);
 		const double n = std::clamp(std::isfinite(night) ? night : 0.0, 0.0, 1.0);
 		//each time of day's set: the first MAX_FOUND_LIGHTS of fieldprep's and MAX_YOUR_LIGHTS of yours on then
 		const auto set = [&](const LightTime time)
@@ -914,11 +1099,11 @@ namespace fieldpbr
 			on.push_back({ i, static_cast<float>(std::min(weight, 1.0)), byNight[i] && lights.lights[i].baked });
 		}
 		size_t left = 0;
-		if (on.size() > static_cast<size_t>(MAX_LIGHTS))
+		if (on.size() > most)
 		{
 			std::stable_sort(on.begin(), on.end(), [](const ActiveLight& a, const ActiveLight& b) { return a.weight > b.weight; });
-			left = on.size() - MAX_LIGHTS;
-			on.resize(MAX_LIGHTS);
+			left = on.size() - most;
+			on.resize(most);
 			std::sort(on.begin(), on.end(), [](const ActiveLight& a, const ActiveLight& b) { return a.index < b.index; });
 		}
 		if (dropped != nullptr)
@@ -991,6 +1176,38 @@ namespace fieldpbr
 		out += Format("level = %.3f\n", n.level);
 		out += Format("tint = %.3f %.3f %.3f\n", n.tint[0], n.tint[1], n.tint[2]);
 		out += Format("lamps = %.3f\n", n.lamps);
+		//the moving lights (kept when fieldprep finds the lights again)
+		const Sun& sun = lights.sun;
+		out += "\n; The sun (DEMASTER's moving lights, FIELD_MOVING_LIGHTS): it crosses the sky with the day/night clock, lights what\n";
+		out += "; faces it, casts the characters' shadows, and (with the relight dial, FIELD_PBR_LOOK) moves the painted light with it.\n";
+		out += "; on        = auto: only when this field's _pbr.txt has sky = 1; 1: on; 0: off\n";
+		out += "; azimuth   = degrees: where it rises (0: on the right of the picture, setting on the left; 180: the other way;\n";
+		out += ";             90: it rises behind the scene and sets behind you)\n";
+		out += "; height    = degrees above the horizon at noon\n";
+		out += "; intensity = the light it adds on top of the painting; shade = how much the painted light follows it (relight)\n";
+		out += "; moon      = the moon's share of both at night (0: none)\n";
+		out += "; fixed     = where on its arc it stands when _pbr.txt has time = day (0 rising, 0.5 noon, 1 setting)\n";
+		out += "[sun]\n";
+		out += std::string("on = ") + (sun.on < 0 ? "auto" : sun.on ? "1" : "0") + "\n";
+		out += Format("azimuth = %.1f\n", sun.azimuth);
+		out += Format("height = %.1f\n", sun.height);
+		out += Format("intensity = %.3f\n", sun.intensity);
+		out += Format("shade = %.3f\n", sun.shade);
+		out += Format("moon = %.3f\n", sun.moon);
+		out += Format("fixed = %.3f\n", sun.fixed);
+		const PartyLight& party = lights.party;
+		out += "\n; The party light: a light the party leader carries (FIELD_PARTY_LIGHT in demaster.conf).\n";
+		out += "; on        = auto: as demaster.conf says; off; night: it comes on as the room goes dark; always\n";
+		out += "; color     = red green blue (linear); intensity = how bright; range = how far it reaches (native pixels)\n";
+		out += "; height    = how high it is carried: 0 the leader's middle, 1 the top of the head\n";
+		out += "; follow    = auto: DEMASTER picks the leader (the log says which entity); a number: that script entity\n";
+		out += "[party]\n";
+		out += std::string("on = ") + (party.on < 0 ? "auto" : party.on == 0 ? "off" : party.on == 1 ? "night" : "always") + "\n";
+		out += Format("color = %.3f %.3f %.3f\n", party.color[0], party.color[1], party.color[2]);
+		out += Format("intensity = %.3f\n", party.intensity);
+		out += Format("range = %.1f\n", party.range);
+		out += Format("height = %.2f\n", party.height);
+		out += party.follow < 0 ? std::string("follow = auto\n") : Format("follow = %d\n", party.follow);
 		for (const Light& l : lights.lights)
 		{
 			out += "\n";

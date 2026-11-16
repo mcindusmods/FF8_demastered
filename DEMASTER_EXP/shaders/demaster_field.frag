@@ -36,6 +36,8 @@ uniform int demasterLightCount;
 uniform vec4 demasterLightPos[8];      // view x, y, z; w: range
 uniform vec4 demasterLightColor[8];    // rgb: light added now (colour x intensity x flicker x its group); a: specular strength
 uniform vec4 demasterLightFlicker[8];  // x: how much its painted light changes now; y: 1 when it owns the steady mask; z: shadow strength; w: 1 = a lamp on at night (the painting keeps its light around it)
+uniform vec4 demasterLightPaint[8];    // the look: rgb the lamp's own colour now, for the highlights dial; a: its weight in the relight dial (0: none; negative: a moving light, whose share is also kept out by the room)
+uniform vec4 demasterLook;             // the look (FIELD_PBR_LOOK): x relight, y highlights, z AO on the painting (all 0: the painting as it is); w: the relight's scale, which keeps the field's average brightness (fieldpbr::RelightScale)
 uniform sampler2D demasterLF;
 uniform sampler2D demasterND;
 uniform sampler2D demasterORME;
@@ -43,7 +45,7 @@ uniform sampler2D demasterCells;
 
 uniform vec4 demasterStepAside;        // x: on (FIELD_PBR_DEPTH, the characters' depth is there); y: depth buffer per game depth unit; z, w: 1 / its size
 uniform sampler2D demasterCharDepth;   // the depth buffer with only the characters in it (copied right after DEMASTER drew them)
-uniform vec4 demasterQuality;          // x: wall-check steps for added lights (0: none); y: wall-check steps for reflections; z: shadow map taps (1 or 4); w: unused
+uniform vec4 demasterQuality;          // x: wall-check steps for added lights (0: none); y: wall-check steps for reflections; z: shadow map taps (1 or 4); w: how far a wall check towards a light looks (view units)
 uniform vec4 demasterSky;              // x: sky from this distance on (0: no sky); y: parallax layers (bit per layer id); z: 1 = sky
 uniform sampler2D demasterRoom;        // the whole field's _ND on the canvas
 uniform vec4 demasterRoomSize;         // canvas width, height (native pixels); z: 1 = there
@@ -274,23 +276,10 @@ vec4 demasterReflectionAt(vec3 p, vec3 r, float roughness)
 }
 
 // DAY_NIGHT: how much of the painted light is left here. Away from the lamps on at night it goes down to [night] level x
-// tint; within a lamp's range it keeps [night] lamps of it, most at the lamp and fading out towards the edge of its range
-vec3 demasterNightLeft(vec3 position)
+// tint; within a lamp's range it keeps [night] lamps of it, most at the lamp and fading out towards the edge of its range.
+// keep: the most any night lamp keeps here (0-1), from the loop over the lights
+vec3 demasterNightLeft(float keep)
 {
-	if (demasterNight.x <= 0.0)
-		return vec3(1.0);
-	float keep = 0.0;
-	for (int i = 0; i < 8; i++)
-	{
-		if (i >= demasterLightCount)
-			break;
-		if (demasterLightFlicker[i].w <= 0.0)
-			continue;
-		vec3 d = demasterLightPos[i].xyz - position;
-		float x2 = dot(d, d) / (demasterLightPos[i].w * demasterLightPos[i].w);
-		float window = clamp(1.0 - x2, 0.0, 1.0);
-		keep = max(keep, window * window);
-	}
 	vec3 dark = demasterNight.y * demasterNightTint.rgb;
 	return mix(vec3(1.0), mix(dark, vec3(1.0), keep * demasterNight.z), demasterNight.x);
 }
@@ -392,36 +381,14 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 			lightShadow[li] = min(lightShadow[li], demasterShadowAt(k, position + normal * position.z * 0.004));
 		}
 
-	// painted light: the part under the steady mask follows the nearest flickering light; characters standing in a lamp's
-	// light take away part of its painted light
-	float nearest = 1e30;
-	float change = 0.0;
-	float paintedShadow = 1.0;
-	for (int i = 0; i < 8; i++)
-	{
-		if (i >= demasterLightCount)
-			break;
-		vec3 d = demasterLightPos[i].xyz - position;
-		float dd = dot(d, d);
-		if (demasterLightFlicker[i].y > 0.5 && dd < nearest)
-		{
-			nearest = dd;
-			change = demasterLightFlicker[i].x;
-		}
-		if (lightShadow[i] < 1.0)
-		{
-			float x = sqrt(dd) / demasterLightPos[i].w;
-			float window = clamp(1.0 - x * x, 0.0, 1.0);
-			paintedShadow *= 1.0 - (1.0 - lightShadow[i]) * demasterLightFlicker[i].z * window;
-		}
-	}
 	float contact = effects && demasterFeatures.z > 0.5 ? demasterContactAt(position, normal) : 0.0;
-	vec3 painted = base * baked * max(1.0 + mask * change, 0.0) * paintedShadow * (1.0 - contact) * demasterNightLeft(position);
-	// at night a glowing pixel keeps its own light: the glow takes the dimmed painting's place there (it isn't added on top:
-	// the painting has the glow in it already, and adding it again burnt lamps out to white)
-	painted = mix(painted, glow, clamp(emissive * demasterEmissive.w, 0.0, 1.0));
 
-	// added light: Lambert + GGX (Smith-Schlick, Schlick Fresnel), kept out of crevices by AO
+	// One pass over the lights for everything they do here:
+	//  - painted light: the part under the steady mask follows the nearest flickering light; characters standing in a lamp's
+	//    light take away part of its painted light; at night the painting keeps its light around the night's lamps
+	//  - the look's relight dial: how this pixel's normal faces the lamps that are on, against a surface half turned to them
+	//  - added light: Lambert + GGX (Smith-Schlick, Schlick Fresnel), kept out of crevices by AO; and the look's highlights
+	//    dial: the painted lamps' highlights without their diffuse light a second time
 	vec3 diffuseColour = base * (1.0 - metallic);
 	vec3 f0 = mix(vec3(0.04), base, metallic);
 	float alpha2 = roughness * roughness * roughness * roughness;
@@ -429,43 +396,95 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 	float nv = max(dot(normal, view), 0.0001);
 	vec3 added = demasterAmbient.rgb * base * (1.0 - contact);
 	float shadowsSeen = 1.0;
-	if (!sky)
-		for (int i = 0; i < 8; i++)
+	float nearest = 1e30;
+	float change = 0.0;
+	float paintedShadow = 1.0;
+	float nightKeep = 0.0;
+	float shadeSum = 0.0;
+	float shadeWeight = 0.0;
+	bool relight = demasterLook.x > 0.0 && hasNormal && !sky;
+	bool wallChecks = demasterFeatures.w > 0.5 && demasterQuality.x > 0.5;
+	for (int i = 0; i < 8; i++)
+	{
+		if (i >= demasterLightCount)
+			break;
+		vec4 lightPos = demasterLightPos[i];
+		vec4 flicker = demasterLightFlicker[i];
+		vec3 toLight = lightPos.xyz - position;
+		float dd = dot(toLight, toLight);
+		float x2 = dd / (lightPos.w * lightPos.w); // (distance / range) squared
+		if (flicker.y > 0.5 && dd < nearest)
 		{
-			if (i >= demasterLightCount)
-				break;
-			vec3 colour = demasterLightColor[i].rgb;
-			if (colour.r + colour.g + colour.b <= 0.0)
-				continue;
-			vec3 toLight = demasterLightPos[i].xyz - position;
-			float dist = length(toLight);
-			float range = demasterLightPos[i].w;
-			if (dist >= range)
-				continue;
-			vec3 l = toLight / max(dist, 0.000001);
-			float x = dist / range;
-			float window = clamp(1.0 - x * x * x * x, 0.0, 1.0);
-			float falloff = window * window / (1.0 + 8.0 * x * x);
-			float nl = max(dot(normal, l), 0.0);
-			if (nl <= 0.0)
-				continue;
-			float lit = lightShadow[i];
-			if (demasterFeatures.w > 0.5 && demasterQuality.x > 0.5 && lit > 0.0)
-				lit *= demasterRoomClear(position, demasterLightPos[i].xyz, int(demasterQuality.x + 0.5));
-			shadowsSeen = min(shadowsSeen, lit);
-			if (lit <= 0.0)
-				continue;
-			vec3 h = normalize(l + view);
-			float nh = max(dot(normal, h), 0.0);
-			float vh = max(dot(view, h), 0.0);
-			float dd = nh * nh * (alpha2 - 1.0) + 1.0;
-			float distribution = alpha2 / (PI * dd * dd);
-			float geometry = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
-			vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
-			vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
-			added += colour * falloff * nl * lit * (diffuseColour + specular * PI * demasterLightColor[i].a);
+			nearest = dd;
+			change = flicker.x;
 		}
+		float window = clamp(1.0 - x2, 0.0, 1.0);
+		if (lightShadow[i] < 1.0)
+			paintedShadow *= 1.0 - (1.0 - lightShadow[i]) * flicker.z * window;
+		if (flicker.w > 0.0)
+			nightKeep = max(nightKeep, window * window);
+		if (sky || x2 >= 1.0)
+			continue;
+		vec4 colour = demasterLightColor[i];
+		vec4 paint = demasterLightPaint[i];
+		vec3 gloss = paint.rgb * demasterLook.y;
+		bool adds = colour.r + colour.g + colour.b > 0.0;
+		bool shines = gloss.r + gloss.g + gloss.b > 0.0;
+		float shadeShare = relight ? abs(paint.a) : 0.0;
+		if (!adds && !shines && shadeShare <= 0.0)
+			continue;
+		float inverse = inversesqrt(max(dd, 0.000000000001));
+		vec3 l = toLight * inverse;
+		float edge = 1.0 - x2 * x2;
+		float falloff = edge * edge / (1.0 + 8.0 * x2);
+		float nl = dot(normal, l);
+		float lit = lightShadow[i];
+		// a wall of the room in between: for light that is added (not for highlights alone), and for a moving light's share
+		// of the painted light. It looks demasterQuality.w far towards the light (a far light: the part near this pixel)
+		bool moving = paint.a < 0.0;
+		float clear = 1.0;
+		if (wallChecks && ((adds && nl > 0.0 && lit > 0.0) || (moving && shadeShare > 0.0)))
+			clear = demasterRoomClear(position, position + toLight * min(1.0, demasterQuality.w * inverse), int(demasterQuality.x + 0.5));
+		if (shadeShare > 0.0)
+		{
+			float weight = shadeShare * falloff;
+			shadeSum += weight * clamp((nl + 0.5) / 1.5, 0.0, 1.0) * (moving ? clear : 1.0);
+			shadeWeight += weight;
+		}
+		if (nl <= 0.0 || !(adds || shines))
+			continue;
+		if (adds)
+		{
+			lit *= clear;
+			shadowsSeen = min(shadowsSeen, lit);
+		}
+		if (lit <= 0.0)
+			continue;
+		vec3 h = normalize(l + view);
+		float nh = max(dot(normal, h), 0.0);
+		float vh = max(dot(view, h), 0.0);
+		float ggx = nh * nh * (alpha2 - 1.0) + 1.0;
+		float distribution = alpha2 / (PI * ggx * ggx);
+		float geometry = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
+		vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
+		vec3 specular = distribution * geometry * fresnel * (PI / max(4.0 * nv * nl, 0.0001));
+		added += (falloff * nl * lit) * (colour.rgb * (diffuseColour + specular * colour.a) + gloss * specular);
+	}
 	added *= ao;
+
+	vec3 painted = base * baked * max(1.0 + mask * change, 0.0) * paintedShadow * (1.0 - contact) * demasterNightLeft(nightKeep);
+	// the look: the painted light follows the normal map and the AO map. shadeSum / shadeWeight is how this pixel faces the
+	// lamps that reach it (0 away, 1 towards them); demasterLook.w scales it so the field as a whole keeps its brightness
+	// (1.5: a surface half turned to its lamps stays as it is); 0.25 is the share no lamp moves, so where no lamp reaches,
+	// nothing changes. A glowing pixel is a light itself: left alone
+	float look = 1.0;
+	if (shadeWeight > 0.0)
+		look = max(1.0 + demasterLook.x * ((0.25 + shadeSum * demasterLook.w) / (0.25 + shadeWeight) - 1.0), 0.05);
+	look *= max(1.0 - demasterLook.z * (1.0 - ao), 0.0);
+	painted *= mix(look, 1.0, emissive);
+	// at night a glowing pixel keeps its own light: the glow takes the dimmed painting's place there (it isn't added on top:
+	// the painting has the glow in it already, and adding it again burnt lamps out to white)
+	painted = mix(painted, glow, clamp(emissive * demasterEmissive.w, 0.0, 1.0));
 
 	// the characters reflected in glossy and metal surfaces
 	vec3 reflected = vec3(0.0);
@@ -483,7 +502,9 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		}
 	}
 
-	vec3 rgb = demasterToSrgb(demasterRollOff(painted, added + reflected));
+	// nothing added (no light reaches this pixel, no reflection): the painting as it is, without the roll-off's arithmetic
+	vec3 extra = added + reflected;
+	vec3 rgb = demasterToSrgb(extra == vec3(0.0) ? painted : demasterRollOff(painted, extra));
 	int viewMode = int(demasterPbr.y + 0.5);
 	if (viewMode == 1)
 		rgb = albedo.rgb;

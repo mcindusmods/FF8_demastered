@@ -15,6 +15,7 @@
 //characters lit by their room. Battles and the world map have no PBR yet; they only move the clock.
 
 #include "field_pbr.h"
+#include "field_moving_lights.h"
 
 #include <string>
 
@@ -25,3 +26,6 @@ void DayNightFieldEntered(const std::string& field, fieldpbr::FieldTime time);
 double DayNightClockAmount();
 //for a field with this time setting: its own (day 0, night 1) or the clock's
 double DayNightAmount(fieldpbr::FieldTime time);
+//where the clock is on the sun's arc (by day) or the moon's (by night), for the moving lights. With DAY_NIGHT off: the day,
+//mid-morning. Renderer thread
+fieldpbr::SkyTime DayNightSky();

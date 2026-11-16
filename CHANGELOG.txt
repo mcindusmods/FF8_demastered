@@ -1,7 +1,36 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.10 (in the source; not packaged yet) - night glows fixed, added light rolls off, a Release build
------------------------------------------------------------------------------------------------------
+v15.10 (in the source; not packaged yet) - the look, moving lights, night glows fixed, light rolls off, a Release build
+-----------------------------------------------------------------------------------------------------------------------
+The look (new: FIELD_PBR_LOOK in demaster.conf, 0 = off by default)
+  - The maps can now change the painting itself, not only light that is added. A master dial and three dials under it,
+    each times the master and times the field's own "look" in its _pbr.txt:
+      FIELD_PBR_RELIGHT (0.5)     the painted light follows the normal map: brighter towards the lamps that are on, darker
+                                  away from them; the field as a whole keeps its brightness (the scale that does that is
+                                  worked out per frame from a grid of the room's normals: fieldpbr::RelightScale)
+      FIELD_PBR_HIGHLIGHTS (0.5)  the painted lamps make highlights (GGX) without their diffuse light a second time
+      FIELD_PBR_AO (0.5)          the AO map darkens the painting too
+  - Per field in _pbr.txt (kept by fieldprep, read again live): look, look_relight, look_highlights, look_ao.
+  - With every dial at 0 nothing changes: a field at rest is still its painting, exactly.
+Moving lights (new module: FIELD_MOVING_LIGHTS, on by default)
+  - The sun (FIELD_SUN): on fields with sky = 1 (or [sun] on = 1) it crosses the sky with the day/night clock, adds light,
+    casts the characters' shadows, and with the relight dial moves the painted light from morning to evening; a faint
+    moon at night. Per field: [sun] in _lights.txt (on, azimuth, height, intensity, shade, moon, fixed).
+  - The party light (FIELD_PARTY_LIGHT: 0 off, 1 at night, 2 always): a warm light the party leader carries. Per field:
+    [party] in _lights.txt (on, color, intensity, range, height, follow). The leader is worked out from the script
+    entities' "playable character" byte and who moved last; the log names the entity; follow = <entity> overrides it.
+    Untested in the game.
+  - They take places among the field's 8 lights (the field's faintest step aside when all 8 are in use).
+Speed
+  - The field shader goes over the lights once per pixel instead of up to three times (painted light, night, added
+    light); pixels nothing is added to skip the roll-off's arithmetic.
+  - The field program's uniforms that are the same for a whole frame (all but 3 of them) are sent once per frame
+    instead of before every background draw.
+  - The look reads no extra textures; the moving lights cost what any light costs.
+For working on the code
+  - CODE_GUIDE.md: where everything is, how a frame goes through the modules, how to add a setting, a uniform or a light.
+  - tools/syntax_check.sh: MinGW type-checks the DLL's Windows-only sources on Linux. tests/build_tests.sh and
+    tests/run_tests.sh build and run fieldprep and every test from scratch.
 Shaders
   - Night glows: the glow now takes the dimmed painting's place where the emissive map says (mix(dimmed painting, glow,
     emissive x night)). It was added on top of the dimmed painting, which already has the glow in it, so lamps came out
@@ -25,7 +54,10 @@ Build
     the bx/bimg sources compile and link for 32-bit Windows with MinGW and read our DDS and PNG files.
 Tests
   - pbr_shader_test: the roll-off curve and the night glows (both fail on the v15.9 shader); the night checks leave
-    glowing pixels to the glow check.
+    glowing pixels to the glow check; the look's three dials against the same arithmetic on the CPU, every dial at 0
+    against the painting; the sun and the party light; BENCH=<frames> times the shader per setup.
+  - field_pbr_test: the look's settings and scale, the sun's path and light, the leader choice, the party light, the new
+    file sections (17,865 checks).
 
 v15.9 - fieldprep makes the DDS files: the field models' textures and every layer image
 ---------------------------------------------------------------------------------------

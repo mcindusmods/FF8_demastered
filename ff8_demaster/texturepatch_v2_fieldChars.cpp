@@ -585,6 +585,9 @@ namespace
 		int index = -1;
 		double x = 0, y = 0, z = 0; //world units
 		int facing = 0, model = -1;
+		//the "playable character" byte the script's SETPC sets (0x255 in the entity, as FFNx's ff8_field_state_other has it):
+		//the party's characters have another value there than the field's other entities. For the party light
+		int pc = -1;
 	};
 
 	std::vector<Entity> ReadEntities()
@@ -606,7 +609,10 @@ namespace
 			uint8_t facing = 0;
 			if (!GuestRead(position, at + 0x190, 12) || !GuestRead(&model, at + 0x218, 2) || !GuestRead(&facing, at + 0x241, 1))
 				break;
+			uint8_t pc = 0;
 			Entity e;
+			if (GuestRead(&pc, at + 0x255, 1))
+				e.pc = pc;
 			e.index = i;
 			e.x = position[0] / 4096.0;
 			e.y = position[1] / 4096.0;
@@ -1353,6 +1359,39 @@ namespace
 					}
 				}
 			}
+		}
+		//the moving lights module: who could be carrying the party light (texturepatch_v2_fieldMovingLights.cpp)
+		if (FIELD_MOVING_LIGHTS)
+		{
+			//the playable-character byte most entities have: the ones that differ are the party's
+			int pcOfMost = -1, pcCount = 0;
+			for (const Entity& e : f.entities)
+			{
+				int same = 0;
+				for (const Entity& other : f.entities)
+					same += other.pc == e.pc;
+				if (e.pc >= 0 && same > pcCount)
+				{
+					pcCount = same;
+					pcOfMost = e.pc;
+				}
+			}
+			std::vector<fieldpbr::LeaderCandidate> drawn;
+			drawn.reserve(f.characters.size());
+			for (const Character& ch : f.characters)
+			{
+				fieldpbr::LeaderCandidate c;
+				c.entity = ch.entity;
+				c.key = ch.entity >= 0 ? ch.entity : 1000 + static_cast<int>(ch.texture);
+				for (const Entity& e : f.entities)
+					if (e.index == ch.entity)
+						c.pc = e.pc;
+				c.center = { ch.center.x, ch.center.y, ch.center.z };
+				c.up = { ch.up.x, ch.up.y, ch.up.z };
+				c.halfHeight = ch.halfSize.y;
+				drawn.push_back(c);
+			}
+			MovingLightsCharacters(entry, drawn, f.entities.size() >= 2 ? pcOfMost : -1);
 		}
 		//nearest first: the background program takes MAX_CHARACTERS
 		std::sort(f.characters.begin(), f.characters.end(), [](const Character& a, const Character& b) { return a.center.z < b.center.z; });

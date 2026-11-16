@@ -1,11 +1,12 @@
 //Tests for ff8_demaster/field_pbr.cpp (what DEMASTER and fieldprep agree on) and fieldprep's own parts (archives,
 //lightmap split, depth fit, orientation, packing, BC7).
-//  g++ -std=c++20 -O2 -pthread field_pbr_test.cpp ../ff8_demaster/field_pbr.cpp ../ff8_demaster/field_layers.cpp
+//  g++ -std=c++20 -O2 -pthread field_pbr_test.cpp ../ff8_demaster/field_pbr.cpp ../ff8_demaster/field_moving_lights.cpp ../ff8_demaster/field_layers.cpp
 //      ../fieldprep/prep.cpp ../fieldprep/image_io.cpp ../fieldprep/archive.cpp ../fieldprep/third_party/*.cpp -o field_pbr_test
 //  ./field_pbr_test [folder with a real world.fl/fi/fs or field.fl/fi/fs, to read every entry]
 
 #include "../ff8_demaster/field_layers.h"
 #include "../ff8_demaster/field_pbr.h"
+#include "../ff8_demaster/field_moving_lights.h"
 #include "../fieldprep/archive.h"
 #include "../fieldprep/image_io.h"
 #include "../fieldprep/prep.h"
@@ -1379,6 +1380,356 @@ static void TestDayNight()
 	}
 }
 
+//the look (FIELD_PBR_LOOK): the dials, the field's own settings, the relight's scale
+static void TestLook()
+{
+	//demaster.conf's dials times the master dial times the field's look; a field's own dial replaces demaster.conf's
+	{
+		Settings s;
+		Look look = FieldLook(s, 0.0, 0.5, 0.5, 0.5);
+		CHECK(!look.Any()); //master 0: the painting as it is
+		look = FieldLook(s, 1.0, 0.5, 0.25, 0.75);
+		NEAR(look.relight, 0.5, 1e-6);
+		NEAR(look.highlights, 0.25, 1e-6);
+		NEAR(look.ao, 0.75, 1e-6);
+		CHECK(look.Any());
+		s.look = 2.0f;
+		s.lookAo = 0.1f;
+		look = FieldLook(s, 1.5, 0.5, 0.25, 0.75);
+		NEAR(look.relight, 1.5, 1e-6);
+		NEAR(look.highlights, 0.75, 1e-6);
+		NEAR(look.ao, 0.3, 1e-6); //its own 0.1 x 1.5 x 2
+		s.look = 0.0f;
+		CHECK(!FieldLook(s, 2.0, 1.0, 1.0, 1.0).Any()); //look = 0 in _pbr.txt: this field stays as painted
+		s.look = 100.0f;
+		CHECK(FieldLook(s, 100.0, 1.0, 1.0, 1.0).relight <= 4.0f); //bounded
+	}
+	//_pbr.txt: read, written, read again; whatever it doesn't say stays
+	{
+		Settings s;
+		std::string w;
+		CHECK(ParseSettings("look = 0.5\nlook_relight = 1.25\nlook_highlights = auto\nlook_ao = 0\n", s, w) && w.empty());
+		NEAR(s.look, 0.5, 1e-6);
+		NEAR(s.lookRelight, 1.25, 1e-6);
+		CHECK(s.lookHighlights < 0);
+		NEAR(s.lookAo, 0.0, 1e-6);
+		Settings again;
+		std::string w2;
+		CHECK(ParseSettings(WriteSettings(s, "test", ""), again, w2) && w2.empty());
+		NEAR(again.look, 0.5, 1e-6);
+		NEAR(again.lookRelight, 1.25, 1e-6);
+		CHECK(again.lookHighlights < 0);
+		NEAR(again.lookAo, 0.0, 1e-6);
+		ParseSettings("look = much\n", again, w2);
+		CHECK(!w2.empty());
+		NEAR(again.look, 0.5, 1e-6);
+		Settings fresh;
+		NEAR(fresh.look, 1.0, 1e-6);
+		CHECK(fresh.lookRelight < 0 && fresh.lookHighlights < 0 && fresh.lookAo < 0);
+	}
+	//the relight's scale: with it, the average of (rest + scale x S) / (rest + W) over the samples is 1
+	{
+		std::mt19937 random(7);
+		std::uniform_real_distribution<double> unit(-1.0, 1.0);
+		std::vector<ShadeSample> samples;
+		for (int i = 0; i < 400; i++)
+		{
+			ShadeSample sample;
+			sample.position = { unit(random) * 0.5, unit(random) * 0.4, 1.0 + unit(random) * 0.3 };
+			sample.normal = Normalize({ unit(random), unit(random), -0.2 - std::fabs(unit(random)) });
+			samples.push_back(sample);
+		}
+		const float pos[8] = { 0.2f, -0.5f, 0.8f, 1.2f, -0.6f, 0.1f, 1.3f, 0.9f };
+		const float paint[8] = { 0, 0, 0, 1.0f, 0, 0, 0, -0.6f }; //a lamp of the field and a moving light
+		const double scale = RelightScale(samples, pos, paint, 2);
+		CHECK(scale > 0.75 && scale < 4.0);
+		double mean = 0;
+		for (const ShadeSample& sample : samples)
+		{
+			double weightSum = 0, shadeSum = 0;
+			for (int i = 0; i < 2; i++)
+			{
+				const Vec3 toLight = Vec3{ pos[i * 4], pos[i * 4 + 1], pos[i * 4 + 2] } - sample.position;
+				const double dd = Dot(toLight, toLight), x2 = dd / (pos[i * 4 + 3] * pos[i * 4 + 3]);
+				if (x2 >= 1)
+					continue;
+				const double weight = std::fabs(paint[i * 4 + 3]) * (1 - x2 * x2) * (1 - x2 * x2) / (1 + 8 * x2);
+				shadeSum += weight * std::clamp((Dot(sample.normal, toLight) / std::sqrt(dd) + 0.5) / 1.5, 0.0, 1.0);
+				weightSum += weight;
+			}
+			mean += (RELIGHT_REST + scale * shadeSum) / (RELIGHT_REST + weightSum);
+		}
+		NEAR(mean / samples.size(), 1.0, 1e-9);
+		//nothing to go by: 1.5
+		NEAR(RelightScale({}, pos, paint, 2), 1.5, 1e-12);
+		const float none[8] = {};
+		NEAR(RelightScale(samples, pos, none, 2), 1.5, 1e-12);
+	}
+	//the samples from a grid of _ND: positions over the canvas at the map's depths, normals as the shader reads them, no sky
+	{
+		Settings s;
+		s.space = EstimatedSpace(160, 112, true);
+		std::vector<uint8_t> nd(4 * 3 * 4);
+		for (size_t i = 0; i < nd.size(); i += 4)
+		{
+			nd[i] = 128;
+			nd[i + 1] = 255; //green up
+			nd[i + 2] = 128;
+			nd[i + 3] = 200;
+		}
+		nd[3] = 0; //one far point
+		std::vector<ShadeSample> samples = ShadeSamples(nd.data(), 4, 3, s, 320, 224);
+		CHECK(samples.size() == 12);
+		NEAR(samples[5].normal.y, -1.0, 0.01); //up in the map is y down's opposite in view space
+		NEAR(samples[5].position.z, s.space.Distance(200 / 255.0), 1e-9);
+		double cx = 0, cy = 0;
+		CHECK(s.space.Project(samples[5].position, cx, cy));
+		NEAR(cx, 1.5 * 320 / 4, 1e-6);
+		NEAR(cy, 1.5 * 224 / 3, 1e-6);
+		s.sky = true;
+		s.skyValue = 0.1; //the far point is sky
+		CHECK(ShadeSamples(nd.data(), 4, 3, s, 320, 224).size() == 11);
+		CHECK(ShadeSamples(nullptr, 4, 3, s, 320, 224).empty());
+	}
+}
+
+//the moving lights (FIELD_MOVING_LIGHTS): the sun's path and light, the party leader and its light, their settings
+static void TestMovingLights()
+{
+	const DayNightCycle c; //480 s of day, 240 of night
+	//the clock on the sun's and the moon's arcs
+	{
+		SkyTime sky = SkyTimeOf(c, 0);
+		CHECK(!sky.night);
+		NEAR(sky.phase, 0.0, 1e-12);
+		sky = SkyTimeOf(c, 240);
+		CHECK(!sky.night);
+		NEAR(sky.phase, 0.5, 1e-12);
+		sky = SkyTimeOf(c, 600);
+		CHECK(sky.night);
+		NEAR(sky.phase, 0.5, 1e-12);
+		sky = SkyTimeOf(c, 720 + 120);
+		CHECK(!sky.night);
+		NEAR(sky.phase, 0.25, 1e-12);
+		sky = SkyTimeOf(c, -60);
+		CHECK(sky.night);
+		NEAR(sky.phase, 0.75, 1e-12);
+	}
+	//the sun's path: view space is x right, y down, z away from the camera
+	{
+		const Vec3 up{ 0, -1, 0 };
+		const Vec3 rise = SunDirection(up, 0, 60, 0), noon = SunDirection(up, 0, 60, 0.5), set = SunDirection(up, 0, 60, 1);
+		NEAR(rise.x, 1.0, 1e-9); //azimuth 0: it rises on the right of the picture
+		NEAR(Dot(rise, up), 0.0, 1e-9);
+		NEAR(set.x, -1.0, 1e-9);
+		NEAR(Dot(noon, up), std::sin(60 * 3.14159265358979 / 180), 1e-9);
+		CHECK(noon.z < 0); //at noon it leans towards the camera
+		for (double phase = 0; phase <= 1.0; phase += 0.05)
+		{
+			const Vec3 d = SunDirection(up, 37, 50, phase);
+			NEAR(Length(d), 1.0, 1e-9);
+			CHECK(Dot(d, up) >= -1e-9); //never below the horizon on its arc
+		}
+		const Vec3 behind = SunDirection(up, 90, 60, 0);
+		NEAR(behind.z, 1.0, 1e-9); //azimuth 90: it rises behind the scene
+		NEAR(SunDirection(up, 180, 60, 0).x, -1.0, 1e-9);
+		//a camera looking down at the ground: up tilted towards the camera
+		const Vec3 tilted = Normalize({ 0, -0.8, -0.6 });
+		NEAR(Dot(SunDirection(tilted, 20, 45, 0.5), tilted), std::sin(45 * 3.14159265358979 / 180), 1e-9);
+		NEAR(Dot(SunDirection(tilted, 20, 45, 0.0), tilted), 0.0, 1e-9);
+		//its colour: orange low, near white high; the moon blue
+		float low[3], high[3], moon[3];
+		SunColor(0.02, false, low);
+		SunColor(0.9, false, high);
+		SunColor(0.9, true, moon);
+		CHECK(low[2] < 0.4f && low[0] > 0.95f && high[2] > 0.85f && moon[2] > moon[0]);
+		NEAR(HorizonFade(0.0), 0.0, 1e-12);
+		NEAR(HorizonFade(0.3), 1.0, 1e-12);
+		CHECK(HorizonFade(0.08) > 0.0 && HorizonFade(0.08) < 1.0);
+	}
+	//the sun as a light
+	{
+		Settings s;
+		s.space = EstimatedSpace(168, 120, true);
+		Sun sun;
+		Vec3 centre;
+		double extent = 0;
+		FieldExtent(s, 336, 240, centre, extent);
+		CHECK(extent > 0 && centre.z > 0);
+		double cx = 0, cy = 0;
+		CHECK(s.space.Project(centre, cx, cy));
+		NEAR(cx, 168.0, 1e-6);
+		NEAR(cy, 120.0, 1e-6);
+		//auto: only fields open to the sky
+		CHECK(!SunLight(sun, s, FieldTime::Cycle, { false, 0.5 }, 0.0, centre, extent, 1.0).on);
+		s.sky = true;
+		const MovingLight noon = SunLight(sun, s, FieldTime::Cycle, { false, 0.5 }, 0.0, centre, extent, 1.0);
+		CHECK(noon.on && noon.castsShadow);
+		NEAR(Length(noon.position - centre), extent * 4.0, 1e-9);
+		//the shaders' falloff at the field's middle gives back the settings: intensity x colour, and shade as the weight
+		{
+			const double x = Length(noon.position - centre) / noon.range, window = 1 - x * x * x * x;
+			const double falloff = window * window / (1 + 8 * x * x);
+			float colour[3];
+			SunColor(Dot(Normalize(noon.position - centre), Normalize(s.up)), false, colour);
+			for (int k = 0; k < 3; k++)
+				NEAR(noon.color[k] * falloff, colour[k] * sun.intensity, 1e-5);
+			NEAR(noon.shade * falloff, sun.shade, 1e-5);
+			//and it is nearly the same at the field's edges (within 4%)
+			const double edge = (Length(noon.position - centre) + extent * 0.5) / noon.range, edgeWindow = 1 - edge * edge * edge * edge;
+			CHECK(std::fabs(edgeWindow * edgeWindow / (1 + 8 * edge * edge) / falloff - 1.0) < 0.04);
+		}
+		//at the horizon and below: off; fading with the night; the moon at night, fainter and blue
+		CHECK(!SunLight(sun, s, FieldTime::Cycle, { false, 0.0 }, 0.5, centre, extent, 1.0).on);
+		const MovingLight dusk = SunLight(sun, s, FieldTime::Cycle, { false, 0.9 }, 0.3, centre, extent, 1.0);
+		CHECK(dusk.on && dusk.color[0] < noon.color[0] && dusk.color[2] / dusk.color[0] < noon.color[2] / noon.color[0]);
+		const MovingLight moon = SunLight(sun, s, FieldTime::Cycle, { true, 0.5 }, 1.0, centre, extent, 1.0);
+		CHECK(moon.on && moon.color[2] > moon.color[0] && moon.shade < noon.shade * 0.3f);
+		sun.moon = 0.0f;
+		CHECK(!SunLight(sun, s, FieldTime::Cycle, { true, 0.5 }, 1.0, centre, extent, 1.0).on);
+		sun.moon = 0.25f;
+		//a field with its own time: the sun stands at `fixed` whatever the clock says; the moon highest in a night field
+		const MovingLight fixedDay = SunLight(sun, s, FieldTime::Day, { true, 0.1 }, 1.0, centre, extent, 1.0);
+		const MovingLight atFixed = SunLight(sun, s, FieldTime::Cycle, { false, sun.fixed }, 0.0, centre, extent, 1.0);
+		CHECK(fixedDay.on);
+		NEAR(Length(fixedDay.position - atFixed.position), 0.0, 1e-9);
+		CHECK(SunLight(sun, s, FieldTime::Night, { false, 0.5 }, 0.0, centre, extent, 1.0).color[2]
+			> SunLight(sun, s, FieldTime::Night, { false, 0.5 }, 0.0, centre, extent, 1.0).color[0]);
+		//off: by the field, by FIELD_SUN
+		sun.on = 0;
+		CHECK(!SunLight(sun, s, FieldTime::Cycle, { false, 0.5 }, 0.0, centre, extent, 1.0).on);
+		sun.on = 1;
+		s.sky = false;
+		CHECK(SunLight(sun, s, FieldTime::Cycle, { false, 0.5 }, 0.0, centre, extent, 1.0).on); //on = 1: without sky too
+		CHECK(!SunLight(sun, s, FieldTime::Cycle, { false, 0.5 }, 0.0, centre, extent, 0.0).on);
+		//FIELD_SUN scales it
+		NEAR(SunLight(sun, s, FieldTime::Cycle, { false, 0.5 }, 0.0, centre, extent, 0.5).color[0], noon.color[0] * 0.5, 1e-5);
+	}
+	//who carries the party light
+	{
+		const auto candidate = [](const int entity, const int pc, const double x)
+		{
+			LeaderCandidate c;
+			c.key = entity;
+			c.entity = entity;
+			c.pc = pc;
+			c.center = { x, 0, 1 };
+			c.up = { 0, -1, 0 };
+			c.halfHeight = 0.05;
+			return c;
+		};
+		LeaderTrack track;
+		//three entities drawn: 0 and 2 are the field's (pc byte 255, as most have), 1 is playable
+		std::vector<LeaderCandidate> drawn = { candidate(0, 255, -0.3), candidate(1, 0, 0.0), candidate(2, 255, 0.3) };
+		CHECK(ChooseLeader(drawn, -1, 255, 0.0, track) == 1);
+		//an NPC walks: the playable one keeps it
+		drawn[0].center.x += 0.05;
+		CHECK(ChooseLeader(drawn, -1, 255, 0.1, track) == 1);
+		//[party] follow = 2
+		CHECK(ChooseLeader(drawn, 2, 255, 0.2, track) == 2);
+		CHECK(ChooseLeader(drawn, 7, 255, 0.3, track) == -1); //not drawn: no light
+		//two playable ones (an event with the party on screen): the one that moved last, and it stays with it
+		LeaderTrack two;
+		std::vector<LeaderCandidate> party = { candidate(3, 0, -0.2), candidate(4, 1, 0.2), candidate(5, 255, 0.5) };
+		const int first = ChooseLeader(party, -1, 255, 0.0, two);
+		CHECK(first == 0 || first == 1);
+		party[1].center.x += 0.05;
+		CHECK(ChooseLeader(party, -1, 255, 1.0, two) == 1);
+		CHECK(ChooseLeader(party, -1, 255, 2.0, two) == 1); //nobody moves: it stays
+		party[0].center.x += 0.05;
+		CHECK(ChooseLeader(party, -1, 255, 3.0, two) == 0);
+		party[2].center.x += 0.05; //the NPC: not playable
+		CHECK(ChooseLeader(party, -1, 255, 4.0, two) == 0);
+		//a sway smaller than a fiftieth of the body isn't moving
+		party[1].center.x += 0.0005;
+		CHECK(ChooseLeader(party, -1, 255, 5.0, two) == 0);
+		//the byte tells nothing (every entity has the same, or the entities aren't known): the one that moved last of all
+		LeaderTrack blind;
+		std::vector<LeaderCandidate> same = { candidate(0, -1, -0.3), candidate(1, -1, 0.0) };
+		same[0].entity = same[1].entity = -1;
+		CHECK(ChooseLeader(same, -1, -1, 0.0, blind) >= 0);
+		same[1].center.x += 0.05;
+		CHECK(ChooseLeader(same, -1, -1, 1.0, blind) == 1);
+		same[0].center.x += 0.05;
+		CHECK(ChooseLeader(same, -1, -1, 2.0, blind) == 0);
+		CHECK(ChooseLeader({}, -1, -1, 3.0, blind) == -1);
+	}
+	//the party light
+	{
+		Space space = EstimatedSpace(168, 120, true);
+		LeaderCandidate leader;
+		leader.center = { 0.1, 0.05, 1.0 };
+		leader.up = { 0, -1, 0 };
+		leader.halfHeight = 0.05;
+		PartyLight party;
+		//mode 1: with the night; 2: always; 0: off
+		CHECK(!PartyLightFor(party, leader, space, 1, 0.0, 1.0).on);
+		const MovingLight half = PartyLightFor(party, leader, space, 1, 0.5, 1.0), full = PartyLightFor(party, leader, space, 1, 1.0, 1.0);
+		CHECK(half.on && full.on);
+		NEAR(half.color[0] * 2, full.color[0], 1e-6);
+		CHECK(PartyLightFor(party, leader, space, 2, 0.0, 1.0).on);
+		CHECK(!PartyLightFor(party, leader, space, 0, 1.0, 1.0).on);
+		NEAR(full.color[1], party.color[1] * party.intensity, 1e-6);
+		//above the leader's middle and nearer the camera; it doesn't cast the characters' shadows or move the painted light
+		CHECK(full.position.y < leader.center.y && full.position.z < leader.center.z);
+		CHECK(Length(full.position - leader.center) < leader.halfHeight * 2);
+		CHECK(!full.castsShadow && full.shade == 0.0f && full.shadow == 0.0f);
+		NEAR(full.range, space.ViewLength(party.range, full.position.z), 1e-9);
+		//the field's own setting wins over demaster.conf's
+		party.on = 2;
+		CHECK(PartyLightFor(party, leader, space, 0, 0.0, 1.0).on);
+		party.on = 0;
+		CHECK(!PartyLightFor(party, leader, space, 2, 1.0, 1.0).on);
+	}
+	//[sun] and [party] in _lights.txt: read, written, read again; files without them: the defaults
+	{
+		Lights lights;
+		std::string w;
+		CHECK(ParseLights("ambient = 0 0 0\n[sun]\non = 1\nazimuth = 135\nheight = 40\nintensity = 0.6\nshade = 0.5\nmoon = 0\nfixed = 0.7\n"
+			"[party]\non = always\ncolor = 0.5 0.6 1\nintensity = 2\nrange = 90\nheight = 0.2\nfollow = 3\n", lights, w) && w.empty());
+		CHECK(lights.hasSun && lights.hasParty);
+		CHECK(lights.sun.on == 1);
+		NEAR(lights.sun.azimuth, 135, 1e-6);
+		NEAR(lights.sun.height, 40, 1e-6);
+		NEAR(lights.sun.intensity, 0.6, 1e-6);
+		NEAR(lights.sun.shade, 0.5, 1e-6);
+		NEAR(lights.sun.moon, 0.0, 1e-6);
+		NEAR(lights.sun.fixed, 0.7, 1e-6);
+		CHECK(lights.party.on == 2 && lights.party.follow == 3);
+		NEAR(lights.party.color[2], 1.0, 1e-6);
+		NEAR(lights.party.intensity, 2.0, 1e-6);
+		NEAR(lights.party.range, 90.0, 1e-6);
+		NEAR(lights.party.height, 0.2, 1e-6);
+		Lights again;
+		std::string w2;
+		CHECK(ParseLights(WriteLights(lights, "test", ""), again, w2) && w2.empty());
+		CHECK(again.hasSun && again.hasParty && again.sun.on == 1 && again.party.on == 2 && again.party.follow == 3);
+		NEAR(again.sun.azimuth, 135, 1e-3);
+		NEAR(again.sun.fixed, 0.7, 1e-3);
+		NEAR(again.party.range, 90.0, 1e-3);
+		Lights old;
+		CHECK(ParseLights("ambient = 0 0 0\n", old, w2));
+		CHECK(!old.hasSun && !old.hasParty && old.sun.on == -1 && old.party.on == -1 && old.party.follow == -1);
+		std::string bad;
+		ParseLights("[sun]\nheight = 200\nwarp = 1\n[party]\non = sometimes\n", old, bad);
+		CHECK(bad.find("height") != std::string::npos && bad.find("warp") != std::string::npos && bad.find("on") != std::string::npos);
+	}
+	//the moving lights take places among the lights: the field's own get the rest
+	{
+		Lights lights;
+		for (int i = 0; i < 8; i++)
+		{
+			Light l;
+			l.source = i < 2 ? LightSource::Found : LightSource::Yours;
+			lights.lights.push_back(l);
+		}
+		size_t dropped = 0;
+		CHECK(ActiveLights(lights, 0.0, &dropped).size() == 8 && dropped == 0);
+		CHECK(ActiveLights(lights, 0.0, &dropped, 6).size() == 6 && dropped == 2);
+		CHECK(ActiveLights(lights, 0.0, &dropped, 100).size() == 8);
+	}
+}
+
 int main(int argc, char** argv)
 {
 	TestColour();
@@ -1386,6 +1737,8 @@ int main(int argc, char** argv)
 	TestSettings();
 	TestLights();
 	TestDayNight();
+	TestLook();
+	TestMovingLights();
 	TestFindLights();
 	TestV15Files();
 	TestCamera();

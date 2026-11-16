@@ -365,3 +365,5 @@ FodyWeavers.xsd
 build/
 .idea/
 cmake-build*/
+# tests built on Linux (tests/build_tests.sh)
+tests/out/

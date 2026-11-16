@@ -726,6 +726,18 @@ namespace
 					lights.hasEmissive = true;
 					Say("  lights: the old file's [emissive] settings kept\n");
 				}
+				if (old.hasSun)
+				{
+					lights.sun = old.sun;
+					lights.hasSun = true;
+				}
+				if (old.hasParty)
+				{
+					lights.party = old.party;
+					lights.hasParty = true;
+				}
+				if (old.hasSun || old.hasParty)
+					Say("  lights: the old file's [sun] and [party] settings kept\n");
 				if (old.hasNight)
 				{
 					lights.night = old.night;
@@ -950,7 +962,7 @@ namespace
 		}
 		Say("  layers: %zu use the field's _LF, %zu have their own\n", shared, own);
 
-		//settings for DEMASTER (your time, sky, character_shade and character_light stay as they were)
+		//settings for DEMASTER (your time, sky, character_shade, character_light and look settings stay as they were)
 		{
 			std::string old, oldWarnings;
 			fieldpbr::Settings previous;
@@ -960,6 +972,10 @@ namespace
 				settings.time = previous.time;
 				settings.characterShadeKeep = previous.characterShadeKeep;
 				settings.characterLight = previous.characterLight;
+				settings.look = previous.look;
+				settings.lookRelight = previous.lookRelight;
+				settings.lookHighlights = previous.lookHighlights;
+				settings.lookAo = previous.lookAo;
 			}
 		}
 		char notes[400];

@@ -7,7 +7,10 @@
 //
 //Linux with Mesa (llvmpipe works):
 //	g++ -std=c++20 -O2 -pthread pbr_shader_test.cpp ../ff8_demaster/field_layers.cpp ../ff8_demaster/field_pbr.cpp
-//	    ../fieldprep/image_io.cpp ../fieldprep/third_party/*.cpp -lEGL -lGL -o pbr_shader_test
+//	    ../ff8_demaster/field_moving_lights.cpp ../fieldprep/image_io.cpp ../fieldprep/third_party/*.cpp -lEGL -lGL -o pbr_shader_test
+//	(or tests/build_tests.sh, which builds every test)
+//BENCH=<frames> in the environment: also times the shader (the whole canvas drawn that many times per setup) and prints
+//milliseconds per frame for each setup: the field as it is, the look, the moving lights, wall checks at each quality.
 //The field folder needs <field>.map, the layer images and fieldprep's output (PNG).
 
 #define GL_GLEXT_PROTOTYPES
@@ -18,11 +21,15 @@
 
 #include "../ff8_demaster/field_layers.h"
 #include "../ff8_demaster/field_pbr.h"
+#include "../ff8_demaster/field_moving_lights.h"
 #include "../fieldprep/image_io.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -325,16 +332,55 @@ int main(int argc, char** argv)
 	std::stable_sort(order.begin(), order.end(), [&](const size_t a, const size_t b) { return tiles[a].z > tiles[b].z; });
 
 	const fieldpbr::Space& space = settings.space;
+	//the whole field's _ND: the room (wall checks, unit 5) and the samples for the relight's scale, as DEMASTER takes them
+	Image room;
+	std::string roomError;
+	const bool hasRoom = fieldprep::LoadRgba(folder + name + "_ND.png", room, roomError) && room.width == width && room.height == height;
+	std::vector<fieldpbr::ShadeSample> samples;
+	if (hasRoom)
+	{
+		constexpr int GRID_X = 32, GRID_Y = 24;
+		std::vector<uint8_t> grid(GRID_X * GRID_Y * 4);
+		for (int gy = 0; gy < GRID_Y; gy++)
+			for (int gx = 0; gx < GRID_X; gx++)
+			{
+				const int px = std::min(width - 1, static_cast<int>((gx + 0.5) * width / GRID_X));
+				const int py = std::min(height - 1, static_cast<int>((gy + 0.5) * height / GRID_Y));
+				memcpy(grid.data() + (gy * GRID_X + gx) * 4, room.rgba.data() + (static_cast<size_t>(py) * width + px) * 4, 4);
+			}
+		samples = fieldpbr::ShadeSamples(grid.data(), GRID_X, GRID_Y, settings, layout.width, layout.height);
+		const GLuint roomTexture = Texture(room, GL_LINEAR);
+		glActiveTexture(GL_TEXTURE5);
+		glBindTexture(GL_TEXTURE_2D, roomTexture);
+		glActiveTexture(GL_TEXTURE0);
+		glUniform1i(at("demasterRoom"), 5);
+		glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	}
+	glUniform4f(at("demasterRoomSize"), static_cast<float>(layout.width), static_cast<float>(layout.height), hasRoom ? 1.0f : 0.0f, 0.0f);
+	fieldpbr::Vec3 fieldCentre;
+	double fieldExtent = 1.0;
+	fieldpbr::FieldExtent(settings, layout.width, layout.height, fieldCentre, fieldExtent);
 	//night: how night it is (DAY_NIGHT); the lights on then and their weights as DEMASTER picks them (ActiveLights)
 	double night = 0.0;
 	const fieldpbr::Lights* use = &lights;
+	//the look's dials, the moving lights after the field's own, wall-check steps (FIELD_PBR_QUALITY: 0, 6, 12), as DEMASTER
+	//sends them (Lights() and SetUniforms in texturepatch_v2_fieldPbr.cpp)
+	fieldpbr::Look lookNow;
+	std::vector<fieldpbr::MovingLight> movingNow;
+	int wallSteps = 0;
+	bool timing = false; //draw without reading the picture back
+	double lastScale = 1.5;
 	const auto draw = [&](const int view, const bool lit, const double seconds, const bool smooth, const std::string& file)
 	{
 		glClearColor(0, 0, 0, 0);
 		glClear(GL_COLOR_BUFFER_BIT);
-		float pos[64] = {}, color[64] = {}, flicker[64] = {};
-		const std::vector<fieldpbr::ActiveLight> active = fieldpbr::ActiveLights(*use, night);
-		const int count = static_cast<int>(std::min<size_t>(active.size(), fieldpbr::MAX_LIGHTS));
+		float pos[64] = {}, color[64] = {}, flicker[64] = {}, paint[64] = {};
+		int movingCount = 0;
+		for (const fieldpbr::MovingLight& m : movingNow)
+			movingCount += m.on;
+		const std::vector<fieldpbr::ActiveLight> active = fieldpbr::ActiveLights(*use, night, nullptr,
+			static_cast<size_t>(fieldpbr::MAX_LIGHTS - movingCount));
+		int count = static_cast<int>(std::min<size_t>(active.size(), fieldpbr::MAX_LIGHTS - movingCount));
 		for (int i = 0; i < count; i++)
 		{
 			const fieldpbr::Light& l = use->lights[active[i].index];
@@ -352,7 +398,33 @@ int main(int argc, char** argv)
 			flicker[i * 4 + 1] = owns ? 1.0f : 0.0f;
 			flicker[i * 4 + 2] = l.ShadowStrength() * active[i].weight;
 			flicker[i * 4 + 3] = active[i].nightLamp ? 1.0f : 0.0f;
+			for (int c = 0; c < 3; c++)
+				paint[i * 4 + c] = l.baked ? static_cast<float>(l.color[c] * f * active[i].weight) : 0.0f;
+			paint[i * 4 + 3] = l.baked ? active[i].weight : 0.0f;
 		}
+		for (const fieldpbr::MovingLight& m : movingNow)
+		{
+			if (!m.on || count >= fieldpbr::MAX_LIGHTS)
+				continue;
+			const int i = count++;
+			pos[i * 4] = static_cast<float>(m.position.x);
+			pos[i * 4 + 1] = static_cast<float>(m.position.y);
+			pos[i * 4 + 2] = static_cast<float>(m.position.z);
+			pos[i * 4 + 3] = static_cast<float>(m.range);
+			for (int c = 0; c < 3; c++)
+			{
+				color[i * 4 + c] = lit ? m.color[c] : 0.0f;
+				paint[i * 4 + c] = m.gloss[c];
+			}
+			color[i * 4 + 3] = m.specular;
+			paint[i * 4 + 3] = -m.shade;
+			flicker[i * 4 + 2] = m.shadow;
+		}
+		lastScale = lookNow.relight > 0 ? fieldpbr::RelightScale(samples, pos, paint, count) : 1.5;
+		glUniform4f(at("demasterLook"), lookNow.relight, lookNow.highlights, lookNow.ao, static_cast<float>(lastScale));
+		glUniform4fv(at("demasterLightPaint"), fieldpbr::MAX_LIGHTS, paint);
+		glUniform4f(at("demasterQuality"), static_cast<float>(wallSteps), 0.0f, 1.0f, static_cast<float>(fieldExtent));
+		glUniform4f(at("demasterFeatures"), 0.0f, 0.0f, 0.0f, wallSteps > 0 && hasRoom ? 1.0f : 0.0f);
 		glUniform4f(at("demasterNight"), static_cast<float>(night), use->night.level, use->night.lamps, 0.0f);
 		glUniform4f(at("demasterNightTint"), use->night.tint[0], use->night.tint[1], use->night.tint[2], 0.0f);
 		glUniform1i(at("demasterLightCount"), count);
@@ -394,6 +466,8 @@ int main(int argc, char** argv)
 			glEnd();
 		}
 		Image result;
+		if (timing)
+			return result;
 		result.width = width;
 		result.height = height;
 		result.rgba.resize(static_cast<size_t>(width) * height * 4);
@@ -532,6 +606,387 @@ int main(int argc, char** argv)
 		}
 		else
 			printf("roll-off: no %s_ND.png at the canvas size, check skipped\n", name.c_str());
+	}
+	//--- the look (FIELD_PBR_LOOK): relight, highlights, AO on the painting
+	{
+		if (hasRoom)
+		{
+			const int cx = width / 2, cy = height / 2;
+			const auto lin = [](const uint8_t v) { return static_cast<double>(fieldpbr::SrgbToLinear(v / 255.0f)); };
+			const auto srgb = [](const double v)
+			{
+				return static_cast<int>(std::lround(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(std::clamp(v, 0.0, 1.0)))));
+			};
+			//a painted lamp (baked, no light of its own added) in front of the surface in the middle of the canvas
+			fieldpbr::Lights one;
+			one.night = lights.night;
+			fieldpbr::Light lamp;
+			lamp.name = "painted lamp";
+			lamp.baked = true;
+			lamp.intensity = 0.0f;
+			lamp.color[0] = 1.0f;
+			lamp.color[1] = 0.9f;
+			lamp.color[2] = 0.75f;
+			lamp.x = cx / static_cast<double>(scale);
+			lamp.y = cy / static_cast<double>(scale);
+			const double surface = room.rgba[(static_cast<size_t>(cy) * width + cx) * 4 + 3] / 255.0;
+			const double up = std::min(1.0, surface + 0.08), down = std::max(0.0, surface - 0.08);
+			lamp.depth = space.ViewPosition(lamp.x, lamp.y, up).z < space.ViewPosition(lamp.x, lamp.y, down).z ? up : down;
+			lamp.range = 140.0f;
+			one.lights.push_back(lamp);
+			use = &one;
+			const Image rest = draw(0, false, 0.0, false, "");
+			//what the relight does to each pixel, worked out here from the field's _ND the way the shader does it
+			const auto relightFactor = [&](const int x, const int y, const float* pos, const float* paint, const int count, const double share,
+				const double shadeScale)
+			{
+				const uint8_t* nd = room.rgba.data() + (static_cast<size_t>(y) * width + x) * 4;
+				const fieldpbr::Vec3 p = space.ViewPosition((x + 0.5) / scale, (y + 0.5) / scale, nd[3] / 255.0);
+				const fieldpbr::Vec3 n = fieldpbr::Normalize({ nd[0] / 255.0 * 2 - 1, 1 - nd[1] / 255.0 * 2, 1 - nd[2] / 255.0 * 2 });
+				double weightSum = 0, shadeSum = 0;
+				for (int i = 0; i < count; i++)
+				{
+					const double w0 = std::fabs(paint[i * 4 + 3]);
+					if (w0 <= 0)
+						continue;
+					const fieldpbr::Vec3 toLight = fieldpbr::Vec3{ pos[i * 4], pos[i * 4 + 1], pos[i * 4 + 2] } - p;
+					const double dd = fieldpbr::Dot(toLight, toLight), x2 = dd / (static_cast<double>(pos[i * 4 + 3]) * pos[i * 4 + 3]);
+					if (x2 >= 1)
+						continue;
+					const double weight = w0 * (1 - x2 * x2) * (1 - x2 * x2) / (1 + 8 * x2);
+					shadeSum += weight * std::clamp((fieldpbr::Dot(n, toLight) / std::sqrt(dd) + 0.5) / 1.5, 0.0, 1.0);
+					weightSum += weight;
+				}
+				if (weightSum <= 0)
+					return 1.0;
+				return std::max(1.0 + share * ((fieldpbr::RELIGHT_REST + shadeSum * shadeScale) / (fieldpbr::RELIGHT_REST + weightSum) - 1.0), 0.05);
+			};
+			const auto against = [&](const Image& got, const char* what, const auto& factorAt, const double meanLimit)
+			{
+				int worst = 0;
+				double sum = 0, factorSum = 0;
+				size_t n = 0, over = 0, changed = 0;
+				for (int y = 0; y < height; y++)
+					for (int x = 0; x < width; x++)
+					{
+						const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+						if (rest.rgba[i + 3] == 0)
+							continue;
+						const double factor = factorAt(x, y);
+						int d = 0;
+						for (int c = 0; c < 3; c++)
+							d = std::max(d, std::abs(got.rgba[i + c] - srgb(lin(rest.rgba[i + c]) * factor)));
+						worst = std::max(worst, d);
+						sum += d;
+						factorSum += factor;
+						over += d > 3;
+						changed += std::fabs(factor - 1.0) > 0.02;
+						n++;
+					}
+				printf("look, %s: %zu pixels (%.0f%% changed), against the shader's sums worked out here: max %d, mean %.3f, %.4f%% off by more "
+					"than 3; the field's brightness x %.3f\n", what, n, n ? 100.0 * changed / n : 0.0, worst, n ? sum / n : 0.0,
+					n ? 100.0 * over / n : 0.0, n ? factorSum / n : 0.0);
+				if (n == 0 || sum / n > meanLimit || 100.0 * over / n > 1.0)
+					failures++;
+				return n ? factorSum / n : 0.0;
+			};
+			//the lamp as the shader gets it
+			float lampPos[4], lampPaint[4] = { lamp.color[0], lamp.color[1], lamp.color[2], 1.0f };
+			{
+				const fieldpbr::Vec3 p = space.ViewPosition(lamp.x, lamp.y, lamp.depth);
+				lampPos[0] = static_cast<float>(p.x);
+				lampPos[1] = static_cast<float>(p.y);
+				lampPos[2] = static_cast<float>(p.z);
+				lampPos[3] = static_cast<float>(space.ViewLength(lamp.range, p.z));
+			}
+			//every dial at 0, lamps or not: the painting, exactly
+			{
+				const Image off = draw(0, true, 0.0, false, "");
+				size_t different = 0;
+				for (size_t i = 0; i < off.rgba.size(); i++)
+					different += off.rgba[i] != rest.rgba[i];
+				printf("look, every dial at 0 with a painted lamp: %zu values differ from the painting\n", different);
+				if (different > 0)
+					failures++;
+			}
+			//relight: each pixel times what its normal says, and the field as a whole as bright as before
+			for (const float share : { 1.0f, 0.5f })
+			{
+				lookNow = {};
+				lookNow.relight = share;
+				const Image relit = draw(0, true, 0.0, false, share == 1.0f ? "look_relight.png" : "look_relight_half.png");
+				const double scaleUsed = lastScale;
+				const double mean = against(relit, share == 1.0f ? "relight 1" : "relight 0.5",
+					[&](const int x, const int y) { return relightFactor(x, y, lampPos, lampPaint, 1, share, scaleUsed); }, 1.0);
+				if (std::fabs(mean - 1.0) > 0.06)
+				{
+					printf("look, relight: the field's brightness moved (scale %.3f)\n", scaleUsed);
+					failures++;
+				}
+			}
+			//AO on the painting: times the AO map (not where a pixel glows). ao and the glows as the shader reads them
+			{
+				lookNow = {};
+				const Image aoMap = draw(5, false, 0.0, false, ""), glowsMap = draw(17, false, 0.0, false, "");
+				size_t shaded = 0;
+				for (size_t i = 0; i < aoMap.rgba.size(); i += 4)
+					shaded += aoMap.rgba[i + 3] != 0 && aoMap.rgba[i] < 250;
+				if (shaded == 0)
+					printf("look, AO: the field has no AO map with anything in it (_ORME), check skipped\n");
+				else
+				{
+					lookNow.ao = 1.0f;
+					const Image dark = draw(0, true, 0.0, false, "look_ao.png");
+					against(dark, "AO 1", [&](const int x, const int y)
+					{
+						const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+						const double ao = aoMap.rgba[i] / 255.0, e = glowsMap.rgba[i] / 255.0;
+						return ao + (1.0 - ao) * e;
+					}, 1.0);
+				}
+			}
+			//highlights: the painted lamp shines on what faces it and never darkens anything; nothing where it doesn't reach
+			{
+				lookNow = {};
+				lookNow.highlights = 1.0f;
+				const Image shiny = draw(0, true, 0.0, false, "look_highlights.png");
+				size_t darker = 0, brighter = 0, outside = 0;
+				const double reach = lamp.range * scale * 3.0;
+				for (int y = 0; y < height; y++)
+					for (int x = 0; x < width; x++)
+					{
+						const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+						if (rest.rgba[i + 3] == 0)
+							continue;
+						int more = 0;
+						for (int c = 0; c < 3; c++)
+						{
+							darker += shiny.rgba[i + c] < rest.rgba[i + c];
+							more = std::max(more, shiny.rgba[i + c] - rest.rgba[i + c]);
+						}
+						brighter += more > 1;
+						outside += more > 1 && std::hypot(x - cx, y - cy) > reach;
+					}
+				printf("look, highlights 1: %zu pixels brighter, %zu values darker, %zu brighter far outside the lamp's range\n", brighter, darker,
+					outside);
+				if (brighter == 0 || darker > 0 || outside > 0)
+					failures++;
+			}
+			lookNow = {};
+			use = &lights;
+		}
+		else
+			printf("look: no %s_ND.png at the canvas size, checks skipped\n", name.c_str());
+	}
+	//--- the moving lights (FIELD_MOVING_LIGHTS): the sun and the party light, after the field's own lights
+	if (hasRoom)
+	{
+		fieldpbr::Lights none;
+		none.night = lights.night;
+		use = &none;
+		const Image rest = draw(0, false, 0.0, false, "");
+		const auto mean = [&](const Image& image)
+		{
+			double sum = 0;
+			size_t n = 0;
+			for (size_t i = 0; i < image.rgba.size(); i += 4)
+				if (rest.rgba[i + 3] != 0)
+				{
+					sum += fieldpbr::SrgbToLinear(image.rgba[i] / 255.0f) + fieldpbr::SrgbToLinear(image.rgba[i + 1] / 255.0f)
+						+ fieldpbr::SrgbToLinear(image.rgba[i + 2] / 255.0f);
+					n++;
+				}
+			return n ? sum / n : 0.0;
+		};
+		const auto difference = [&](const Image& a, const Image& b, size_t* brighter = nullptr, size_t* darker = nullptr)
+		{
+			double sum = 0;
+			size_t n = 0, up = 0, down = 0;
+			for (size_t i = 0; i < a.rgba.size(); i += 4)
+				if (rest.rgba[i + 3] != 0)
+				{
+					for (int c = 0; c < 3; c++)
+					{
+						sum += std::abs(a.rgba[i + c] - b.rgba[i + c]);
+						up += a.rgba[i + c] > b.rgba[i + c] + 1;
+						down += a.rgba[i + c] < b.rgba[i + c] - 1;
+					}
+					n += 3;
+				}
+			if (brighter)
+				*brighter = up;
+			if (darker)
+				*darker = down;
+			return n ? sum / n : 0.0;
+		};
+		//the sun: with the relight dial the painted light follows it across the day; the field keeps its brightness
+		fieldpbr::Sun sun;
+		sun.on = 1;
+		fieldpbr::Sun shadeOnly = sun;
+		shadeOnly.intensity = 0.0f;
+		lookNow = {};
+		lookNow.relight = 1.0f;
+		movingNow = { fieldpbr::SunLight(shadeOnly, settings, fieldpbr::FieldTime::Cycle, { false, 0.2 }, 0.0, fieldCentre, fieldExtent, 1.0) };
+		const Image morning = draw(0, true, 0.0, false, "sun_morning.png");
+		movingNow = { fieldpbr::SunLight(shadeOnly, settings, fieldpbr::FieldTime::Cycle, { false, 0.8 }, 0.0, fieldCentre, fieldExtent, 1.0) };
+		const Image evening = draw(0, true, 0.0, false, "sun_evening.png");
+		const double restMean = mean(rest), morningMean = mean(morning), eveningMean = mean(evening), swing = difference(morning, evening);
+		printf("sun, relight 1: morning x %.3f and evening x %.3f the painting's brightness; morning to evening the picture changes by %.2f "
+			"levels on average\n", morningMean / restMean, eveningMean / restMean, swing);
+		if (!movingNow[0].on || std::fabs(morningMean / restMean - 1.0) > 0.08 || std::fabs(eveningMean / restMean - 1.0) > 0.08 || swing < 1.0)
+			failures++;
+		//without the relight dial and with no light of its own, the sun changes nothing
+		lookNow = {};
+		if (difference(draw(0, true, 0.0, false, ""), rest) != 0.0)
+		{
+			printf("sun: with the look off and no intensity the picture changed\n");
+			failures++;
+		}
+		//its own light only adds
+		movingNow = { fieldpbr::SunLight(sun, settings, fieldpbr::FieldTime::Cycle, { false, 0.2 }, 0.0, fieldCentre, fieldExtent, 1.0) };
+		{
+			size_t brighter = 0, darker = 0;
+			const Image added = draw(0, true, 0.0, false, "sun_added.png");
+			difference(added, rest, &brighter, &darker);
+			printf("sun, its own light (intensity %.2f): %zu values brighter, %zu darker\n", sun.intensity, brighter, darker);
+			if (brighter == 0 || darker > 0)
+				failures++;
+		}
+		//walls of the room keep it out: with wall checks nothing gets brighter than without
+		lookNow.relight = 1.0f;
+		{
+			const Image open = draw(0, true, 0.0, false, "");
+			wallSteps = 6;
+			const Image walled = draw(0, true, 0.0, false, "sun_walls.png");
+			wallSteps = 0;
+			size_t brighter = 0, darker = 0;
+			difference(walled, open, &brighter, &darker);
+			printf("sun, wall checks (6 steps): %zu values darker than without them (the room's own shadows), %zu brighter\n", darker, brighter);
+			if (brighter > 0)
+				failures++;
+		}
+		lookNow = {};
+		//the party light: light around its carrier, nothing far from it
+		{
+			const int cx = width / 2, cy = height / 2;
+			fieldpbr::LeaderCandidate leader;
+			const double surface = room.rgba[(static_cast<size_t>(cy) * width + cx) * 4 + 3] / 255.0;
+			leader.center = space.ViewPosition(cx / static_cast<double>(scale), cy / static_cast<double>(scale), surface);
+			leader.halfHeight = space.ViewLength(24.0, leader.center.z); //a character 48 native pixels tall
+			leader.center = leader.center * ((leader.center.z - leader.halfHeight) / leader.center.z); //standing in front of the surface
+			leader.up = fieldpbr::Normalize(settings.up);
+			fieldpbr::PartyLight party;
+			movingNow = { fieldpbr::PartyLightFor(party, leader, space, 2, 0.0, 1.0) };
+			const Image carried = draw(0, true, 0.0, false, "party_light.png");
+			double nearSum = 0, farSum = 0;
+			size_t nearCount = 0, farCount = 0, darker = 0;
+			const double reach = party.range * scale;
+			for (int y = 0; y < height; y++)
+				for (int x = 0; x < width; x++)
+				{
+					const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+					if (rest.rgba[i + 3] == 0)
+						continue;
+					double more = 0;
+					for (int c = 0; c < 3; c++)
+					{
+						more += carried.rgba[i + c] - rest.rgba[i + c];
+						darker += carried.rgba[i + c] < rest.rgba[i + c];
+					}
+					const double d = std::hypot(x - cx, y - cy);
+					if (d < reach * 0.4)
+					{
+						nearSum += more;
+						nearCount++;
+					}
+					else if (d > reach * 2.0)
+					{
+						farSum += more;
+						farCount++;
+					}
+				}
+			printf("party light: +%.2f levels around its carrier, +%.3f far from it, %zu values darker\n", nearCount ? nearSum / nearCount / 3 : 0.0,
+				farCount ? farSum / farCount / 3 : 0.0, darker);
+			if (!movingNow[0].on || nearCount == 0 || nearSum / nearCount / 3 < 2.0 || (farCount && farSum / farCount / 3 > 0.05) || darker > 0)
+				failures++;
+		}
+		movingNow.clear();
+		use = &lights;
+	}
+	//--- how long the shader takes (BENCH=<frames>): the whole canvas, software rendering here, so only the ratios mean much
+	if (const char* bench = std::getenv("BENCH"); bench != nullptr && hasRoom && std::atoi(bench) > 0)
+	{
+		const int frames = std::atoi(bench);
+		const int cx = width / 2, cy = height / 2;
+		//a field like fieldprep leaves it: two painted lamps that add a little (intensity 0.2), and one of yours
+		fieldpbr::Lights typical;
+		typical.night = lights.night;
+		for (int k = 0; k < 3; k++)
+		{
+			fieldpbr::Light l;
+			l.baked = k < 2;
+			l.source = k < 2 ? fieldpbr::LightSource::Found : fieldpbr::LightSource::Yours;
+			l.intensity = k < 2 ? 0.2f : 0.8f;
+			l.x = (cx + (k - 1) * width / 4) / static_cast<double>(scale);
+			l.y = (cy + (k == 1 ? -1 : 1) * height / 6) / static_cast<double>(scale);
+			l.depth = std::clamp(room.rgba[(static_cast<size_t>(cy) * width + cx) * 4 + 3] / 255.0 + (settings.brightIsNear ? 0.08 : -0.08), 0.0, 1.0);
+			l.range = k < 2 ? 160.0f : 70.0f;
+			typical.lights.push_back(l);
+		}
+		fieldpbr::Sun sun;
+		sun.on = 1;
+		fieldpbr::LeaderCandidate leader;
+		leader.center = space.ViewPosition(cx / static_cast<double>(scale), cy / static_cast<double>(scale),
+			room.rgba[(static_cast<size_t>(cy) * width + cx) * 4 + 3] / 255.0);
+		leader.halfHeight = space.ViewLength(24.0, leader.center.z);
+		leader.up = fieldpbr::Normalize(settings.up);
+		const std::vector<fieldpbr::MovingLight> both = {
+			fieldpbr::SunLight(sun, settings, fieldpbr::FieldTime::Cycle, { false, 0.3 }, 0.0, fieldCentre, fieldExtent, 1.0),
+			fieldpbr::PartyLightFor(fieldpbr::PartyLight(), leader, space, 2, 0.0, 1.0) };
+		fieldpbr::Look full;
+		full.relight = full.highlights = full.ao = 0.5f;
+		struct Setup
+		{
+			const char* what;
+			const fieldpbr::Lights* lights;
+			fieldpbr::Look look;
+			bool moving;
+			int walls;
+		};
+		fieldpbr::Lights none;
+		const Setup setups[] = {
+			{ "no lights (the painting)", &none, {}, false, 0 },
+			{ "3 lights, low (no wall checks)", &typical, {}, false, 0 },
+			{ "3 lights + the look, low", &typical, full, false, 0 },
+			{ "3 lights + the look + sun and party light, low", &typical, full, true, 0 },
+			{ "3 lights, medium (6-step wall checks)", &typical, {}, false, 6 },
+			{ "3 lights + the look, medium", &typical, full, false, 6 },
+			{ "3 lights + the look + sun and party light, medium", &typical, full, true, 6 },
+			{ "3 lights, high (12-step wall checks)", &typical, {}, false, 12 },
+			{ "3 lights + the look + sun and party light, high", &typical, full, true, 12 },
+		};
+		timing = true;
+		printf("bench: %dx%d, %d frame(s) per setup\n", width, height, frames);
+		for (const Setup& setup : setups)
+		{
+			use = setup.lights;
+			lookNow = setup.look;
+			movingNow = setup.moving ? both : std::vector<fieldpbr::MovingLight>();
+			wallSteps = setup.walls;
+			draw(0, true, 1.25, true, "");
+			glFinish();
+			const auto started = std::chrono::steady_clock::now();
+			for (int f = 0; f < frames; f++)
+				draw(0, true, 1.25, true, "");
+			glFinish();
+			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() / frames;
+			printf("bench: %7.2f ms  %s\n", ms, setup.what);
+		}
+		timing = false;
+		use = &lights;
+		lookNow = {};
+		movingNow.clear();
+		wallSteps = 0;
 	}
 	//--- the night (DAY_NIGHT)
 	{
