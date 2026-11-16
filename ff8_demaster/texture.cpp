@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "opengl.h"
+#include "gl_state.h"
 #include "string_helper.h"
 
 
@@ -18,6 +19,7 @@ std::map<GLuint, CapturedTextureInfo> g_capturedTextures;
 void* __stdcall HookGlBindTexture(GLenum target, GLuint texture)
 {
 	lastBoundTexture = texture;
+	glstate::OnBindTexture(target, texture); //FIELD_GL_TRACK
 	return static_cast<void* (__stdcall*)(GLenum, GLuint)>(ogl_bind_texture)(target, texture);
 }
 
@@ -35,6 +37,8 @@ void* __stdcall HookGlTextParameteri(GLenum target, GLenum name, GLint param)
 	}
 	else
 	*/
+	if (target == GL_TEXTURE_2D)
+		param = FieldModelFilter(lastBoundTexture, name, param); //field model atlases with mip levels keep them
 	return static_cast<void* (__stdcall*)(GLenum, GLenum, GLint)>(ogl_tex_parametri)
 		(target, name, param);
 }
@@ -77,7 +81,7 @@ void* TextureHashingSaveLoad(GLenum target, GLint level, GLint internalformat, G
 			destinationPath.append(ss.str());
 			if (!knownTextures.contains(high64))
 			{
-				OutputDebug("New hash for textureId: %u. Hash: %016llX%016llX ",
+				OutputDebug("New hash for textureId: %u. Hash: %016llX%016llX\n",
 				            boundId, high64, low64);
 				knownTextures.insert(std::pair(high64, TexImageInformation{
 					                               low64, static_cast<GLuint>(boundId), internalformat, width, height
@@ -195,6 +199,8 @@ void* __stdcall HookGlTexImage2D(GLenum target,
 	const void* data)
 {
 	GLuint boundId = GetCurrentBoundTextureID();
+	FieldLayersForgetTexture(boundId); //the game gives this texture new content: not a field page from layers any more
+	FrameLogTextureFilled(boundId); //FIELD_FRAME_LOG: what kind of texture it is
 	if (DEBUG_GLTEXIMAGE2D)
 		OutputDebug("glTexImage2D (%d): format: %d, %dx%d, void: %08x\n",boundId, internalformat, width, height, data);
 	int lengthModifier = 0;
@@ -227,10 +233,13 @@ void* __stdcall HookGlTexImage2D(GLenum target,
 	}
 	
 	//serverInst.WriteLog(std::format("GLTexImage2D: ID: {} Width: {} Height: {}", boundId, width, height));
-	return static_cast<void* (__stdcall*)(GLenum, GLint, GLint, GLsizei, GLsizei,
+	void* result = static_cast<void* (__stdcall*)(GLenum, GLint, GLint, GLsizei, GLsizei,
 	                                      GLint, GLenum, GLenum, const void*)>(ogl_tex_image2d)
 		(target, level, internalformat, width, height
 			, border, format, type, data);
+	if (target == GL_TEXTURE_2D && level == 0)
+		FieldModelTexImage(boundId, width, height, data); //field model atlases: .dds with mip levels, PBR maps
+	return result;
 }
 
 void __stdcall HookGlTexSubImage2D( 	GLenum target,
@@ -245,6 +254,7 @@ void __stdcall HookGlTexSubImage2D( 	GLenum target,
 {
 	OutputDebug("GlTexSubImage2D: ID: %d Width: %d Height: %d. Last path: %s\n", GetCurrentBoundTextureID(),
 		width, height, LastFilePath.c_str());
+	FrameLogTextureFilled(GetCurrentBoundTextureID()); //FIELD_FRAME_LOG
 
 	bool tryToReplace = false;
 	
@@ -307,6 +317,8 @@ void __stdcall HookGlTexSubImage2D( 	GLenum target,
 	static_cast<void (__stdcall*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei,
 									  GLenum, GLenum, const void*)>(ogl_subTexImage2D)
 	(target, level, xoffset, yoffset, width, height, format, type, pixels);
+	if (target == GL_TEXTURE_2D && level == 0)
+		FieldModelTexSubImage(GetCurrentBoundTextureID(), xoffset, yoffset, width, height); //a field model image: its .dds, its maps
 }
 
 void* __stdcall HookGlTextureSubImage2D( 	GLuint texture,
@@ -524,6 +536,9 @@ void ReplaceTextureFunction()
 		OutputDebug("Applying WORLD_TEXTURES PATCH\n");
 		ApplyWorldPatch();
 	}
+	ApplyFieldLayersPatch();
+	if (!BATTLE_HOOK) //with it, ApplyBattleFieldPatch does this in place of its own 4x patch
+		ApplyFieldBgResolution();
 
 	cltBackAdd2 = InjectJMP(IMAGE_BASE + GetAddress(CLTBACKADD1), reinterpret_cast<DWORD>(_cltObtainTexHeader), 5);
 	cltBackAdd1 = InjectJMP(IMAGE_BASE + GetAddress(CLTBACKADD2), reinterpret_cast<DWORD>(_cltObtainTexStructDebug), 7);

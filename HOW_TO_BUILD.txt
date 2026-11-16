@@ -1,0 +1,31 @@
+HOW TO BUILD (this folder is the complete project)
+
+1. Unzip into a NEW, EMPTY folder, for example C:\demaster_v15.
+   Don't copy it over an older DEMASTER folder: mixing files from two versions is what breaks the build.
+
+2. Double-click build_demaster.bat.
+   - It finds Visual Studio / Build Tools and Git, downloads vcpkg next to itself the first time, builds,
+     and opens the folder with the result. Everything it downloads stays inside this folder.
+   - The first build takes several minutes. To skip the vcpkg download, you can copy the "vcpkg" folder from
+     your old C:\demaster into this folder before running it.
+   - It builds two things: ff8_demaster.dll and fieldprep.exe (64-bit; the "Desktop development with C++"
+     workload includes the 64-bit compiler).
+   - If it fails, send build_log.txt (it's written next to build_demaster.bat).
+
+3. Copy into the game folder (FINAL FANTASY VIII Remastered):
+   - .build\Debug\ff8_demaster.dll
+   - demaster.conf (or copy the FIELD_* lines from it into yours; FIELD_PBR_DEPTH, FIELD_PBR_SHADOWS,
+     FIELD_PBR_REFLECTIONS, FIELD_PBR_CHARACTERS and FIELD_AVATARS are new in v15; FIELD_PBR_QUALITY and
+     FIELD_GL_TRACK in v15.3)
+   - every file in DEMASTER_EXP\shaders\  ->  <game>\DEMASTER_EXP\shaders\  (needed for PBR):
+     main.frag, demaster_field.vert, demaster_field.frag, demaster_chara.vert, demaster_chara.frag, demaster_shadow.frag
+
+4. fieldprep.exe can go anywhere (the game folder is handy). It's a command-line program:
+   open a command prompt and run, for example,
+      fieldprep "C:\...\FINAL FANTASY VIII Remastered\DEMASTER_EXP\textures\field_bg\bv\bvtr_1"
+   README_field_pbr.md explains what to put in a field's folder and what fieldprep makes.
+   Run it again on fields you prepared with v13/v14: v15 adds the light grid and depth measurements the characters use.
+
+COMPILING.md has the full first-time setup (installing Build Tools and Git).
+README_field_layers.md explains the field layers, README_field_pbr.md the PBR lighting (backgrounds, characters, models).
+CHANGELOG.txt lists what changed in each version.

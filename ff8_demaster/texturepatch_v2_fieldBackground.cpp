@@ -5,11 +5,11 @@ BYTE* _asm_FieldBgRetAddr2;
 BYTE* _asm_FieldBgRetAddr3;
 BYTE* asmFieldBgRetAddr4DdsMod;
 
-#ifndef JAPANESE_PATCH
-int BGFILENAME2_R = 0x118;
-#else
-int BGFILENAME2_R = 0x490;
-#endif
+//Offset of the maplist text inside the BGFILENAME2 buffer: 0x118 on EFIGS, 0x490 on JP (selected at runtime)
+static int GetMaplistOffset()
+{
+	return IsJapanese() ? 0x490 : 0x118;
+}
 
 int GetPalette()
 {
@@ -38,7 +38,7 @@ bool GetFieldBackgroundFilename(char* buffer, bool force_retry = false)
 		if (maplistVector.capacity() < 982) 
 			maplistVector.reserve(982);
 		const char* const maplist_src = []() {
-			const char* tmp_ptr = (const char*)(*(DWORD*)(IMAGE_BASE + GetAddress(BGFILENAME2)) + BGFILENAME2_R + cached_maplist_size);
+			const char* tmp_ptr = (const char*)(*(DWORD*)(IMAGE_BASE + GetAddress(BGFILENAME2)) + GetMaplistOffset() + cached_maplist_size);
 			if (*tmp_ptr == '\n') //The \n tends to be left at the front on reloading.
 				(void)++tmp_ptr, ++cached_maplist_size;
 			return tmp_ptr;
@@ -224,6 +224,8 @@ __declspec(naked) void _asm_InjectFieldBackgroundModule()
 //WIP
 void FbgGl()
 {
+		if (FieldLayersUploadPending()) //FIELD_LAYERS
+			return;
  		DWORD tPage = GetTPage();
 		int palette = GetPalette();
 
@@ -263,6 +265,12 @@ DWORD GetFieldBackgroundReplacementExist()
 		return 0;
 	}
 
+	//layer images for this field (FIELD_LAYERS): those are used, not the swizzled pages
+	if (FieldLayersHasFiles(n))
+	{
+		OutputDebug("%s: %s has layer images (FIELD_LAYERS), swizzled pages not used\n", __func__, n);
+		return 0;
+	}
 
 	DDSorPNG(localn, s, "%stextures\\%s0", DIRECT_IO_EXPORT_DIR, n);
 

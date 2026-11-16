@@ -1,0 +1,340 @@
+#pragma once
+//PBR field backgrounds (FIELD_PBR): what DEMASTER and fieldprep agree on. No game, Windows or OpenGL code, so fieldprep
+//and tests/field_pbr_test.cpp build it on their own.
+//
+//The game draws a PBR layer as albedo x lightmap, then adds the lights of the field on top:
+//	visible = albedo x lightmap x (1 + flicker mask x (flicker - 1))  +  AO x added light (Lambert + GGX, from the normals)
+//With every light at rest, albedo x lightmap is the painting, pixel for pixel (fieldprep makes the lightmap as painting /
+//albedo). Only opaque layers (blend 4) are PBR; the glow and shadow layers (blend 0-3) are drawn as they are.
+//
+//Files, next to the layer images in DEMASTER_EXP\textures\field_bg\<xx>\<field>\ (PNG or BC7 DDS; with both, the newer
+//one, as for layers). <field> is "bvtr_1", or "bghall_1_fr" for a field with a .map per language.
+//	<field>_<pupu>_A      that layer's albedo (sRGB colour) and coverage (alpha)            written by fieldprep
+//	<field>_LF            the field's lightmap (RGB) and steady mask (alpha)                written by fieldprep
+//	<field>_<pupu>_LF     one layer's lightmap, where it differs from the whole field     written by fieldprep
+//	<field>_ND            normal XYZ and depth (alpha)                                    written by fieldprep
+//	<field>_ORME          AO, roughness, metallic, emissive (an older _ORMH: height, unused) written by fieldprep
+//	<field>_<pupu>_ND / _ORME   the same for one layer (from per-layer inputs)
+//	<field>_PROBES.dds    the room's light in 3D, for the characters                      written by fieldprep
+//	<field>_pbr.txt       how to read them (camera, depth, lightmap scales)               written by fieldprep
+//	<field>_lights.txt    the field's lights                                              written once by fieldprep, then yours
+//A layer is PBR when it has its own _A and an _LF (its own or the field's).
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace fieldpbr
+{
+	//--- names
+
+	enum Kind { ALBEDO, LIGHTMAP, NORMAL_DEPTH, ORME, KIND_COUNT };
+	const char* KindSuffix(Kind kind); //"_A", "_LF", "_ND", "_ORME"
+	//before v15.7 the ORM map was _ORMH, its alpha the height (nothing used it): still read, its alpha left out
+	constexpr const char* OLD_ORM_SUFFIX = "_ORMH";
+
+	//folder + field (+ "_" + language): "...\\bvtr_1"
+	std::string FieldStem(const std::string& folder, const std::string& field, const std::string& language);
+	//folder + field (+ "_" + language) + "_" + PUPU: "...\\bvtr_1_00400000"
+	std::string LayerStem(const std::string& folder, const std::string& field, const std::string& language, uint32_t pupu);
+	constexpr const char* SETTINGS_SUFFIX = "_pbr.txt";
+	constexpr const char* LIGHTS_SUFFIX = "_lights.txt";
+	constexpr int MAX_LIGHTS = 8; //on at a time (by day, or by night): fieldprep's large ones and yours
+	constexpr int MAX_FOUND_LIGHTS = 2; //fieldprep's large lights per time of day
+	constexpr int MAX_YOUR_LIGHTS = 6; //your own (marked in _LIGHTS.png or written into _lights.txt) per time of day
+
+	//--- colour
+
+	float SrgbToLinear(float c); //0-1
+	float LinearToSrgb(float c); //0-1
+	const float* SrgbTable(); //256 entries: SrgbToLinear(i / 255)
+	uint8_t LinearToSrgb8(float c);
+
+	//The lightmap is stored as LinearToSrgb(light / scale): 0..scale with the darks kept fine (scale per image, in _pbr.txt)
+	uint8_t EncodeLightmap(float light, float scale);
+	inline float DecodeLightmap(const uint8_t value, const float scale) { return SrgbTable()[value] * scale; }
+	//_LF alpha: 255 = steady light; lower = the part of the light that follows the nearest flickering light. (Stored this way
+	//round so the file stays opaque where nothing flickers: image editors throw away colour under zero alpha.)
+	inline uint8_t EncodeFlickerMask(const float mask) { return static_cast<uint8_t>(255.0f - (mask < 0 ? 0 : mask > 1 ? 1 : mask) * 255.0f + 0.5f); }
+	inline float DecodeFlickerMask(const uint8_t value) { return 1.0f - value / 255.0f; }
+
+	//--- where a pixel is
+	//
+	//View space: x right, y down (as on screen), z away from the camera; one unit is 1/4096 of the game's world units.
+	//A pixel at (x, y) on the field's canvas (native pixels: layer image pixels / scale) at distance z from the camera is at
+	//	((x - originX) * z / zoom, (y - originY) * z / zoom, z)
+	//(the game projects with screen offset = view x * zoom / z, centred on the camera axis). The depth map gives z through
+	//the depth model: linear (z = a + b * value) or inverse (z = 1 / (a + b * value), for depth maps that store disparity,
+	//like Depth Anything). Value: the depth map's 0-1. fieldprep measures zoom and the model from the field's camera and
+	//walkmesh; without them it estimates.
+
+	struct Vec3
+	{
+		double x = 0, y = 0, z = 0;
+	};
+	inline Vec3 operator+(const Vec3& a, const Vec3& b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
+	inline Vec3 operator-(const Vec3& a, const Vec3& b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
+	inline Vec3 operator*(const Vec3& a, const double s) { return { a.x * s, a.y * s, a.z * s }; }
+	inline double Dot(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+	Vec3 Cross(const Vec3& a, const Vec3& b);
+	double Length(const Vec3& a);
+	Vec3 Normalize(const Vec3& a);
+
+	enum class DepthModel { Linear, Inverse };
+
+	struct Space
+	{
+		bool measured = false; //from the field's camera and walkmesh, else estimated
+		double zoom = 384.0;
+		double originX = 0, originY = 0; //canvas pixel on the camera axis
+		DepthModel model = DepthModel::Inverse;
+		double a = 0.25, b = 0.75; //estimated: bright is near, the far wall 4 times as far as the nearest point
+		double nearest = 0.05; //smallest distance used (keeps a bad fit finite)
+
+		double Distance(double value) const;
+		double Value(double distance) const; //the depth map value at that distance (inverse of Distance)
+		Vec3 ViewPosition(double canvasX, double canvasY, double value) const;
+		//view units for a length of `pixels` canvas pixels at that distance
+		double ViewLength(const double pixels, const double distance) const { return pixels * distance / zoom; }
+		bool Project(const Vec3& view, double& canvasX, double& canvasY) const;
+	};
+	//canvas origin: Layout::shiftX/Y (the tile coordinates are relative to the camera axis)
+	Space EstimatedSpace(double originX, double originY, bool brightIsNear);
+
+	//--- the field's camera (.ca) and walkmesh (.id)
+
+	struct Camera
+	{
+		int16_t axis[3][3]{}; //x, y, z axis, 4096 = 1
+		int32_t position[3]{};
+		uint16_t zoom = 0;
+	};
+	//40 bytes per camera (38 for the last one is accepted, as Deling does)
+	std::vector<Camera> ParseCameras(const uint8_t* data, size_t size);
+
+	struct Walkmesh
+	{
+		std::vector<std::array<Vec3, 3>> triangles; //world units / 4096
+	};
+	//uint32 count, count x 3 x (int16 x, y, z, pad), then count x 3 int16 neighbours
+	Walkmesh ParseWalkmesh(const uint8_t* data, size_t size);
+
+	//World (/4096) to view space for a camera. Variant 0 is the convention Deling draws its walkmesh with over the background
+	//(axis Y and position Y negated, look-at along axis Z); 1-3 flip the screen axes, for fieldprep to check against.
+	struct CameraTransform
+	{
+		Vec3 eye, right, down, forward;
+		double zoom = 0;
+		Vec3 ToView(const Vec3& world) const;
+	};
+	CameraTransform MakeCameraTransform(const Camera& camera, int variant = 0);
+
+	//--- the game's own depth
+	//
+	//The game sorts by the camera distance its GTE works out (SZ, in world units): a character vertex arrives with
+	//1 / rhw = 4 x SZ, a background tile with 16 x its .map Z (Z is that distance / 4). View units here are world / 4096,
+	//so the game's depth is 16384 x the view z.
+	constexpr double GAME_DEPTH_PER_VIEW = 16384.0;
+	constexpr int FAR_TILE_Z = 4094; //the base picture: behind everything
+
+	//--- per-field settings, written by fieldprep: <field>_pbr.txt
+
+	//a field's time of day: the day/night clock's, or always day (as painted) or always night (a story scene, a boss)
+	enum class FieldTime
+	{
+		Cycle,
+		Day,
+		Night
+	};
+	const char* FieldTimeName(FieldTime time);
+
+	struct Settings
+	{
+		Space space;
+		//the canvas: the part of the field (.map coordinates: left, top, width, height in native pixels) that the field's own
+		//maps (_LF, _ND, _ORME), the lights and the camera's origin are on. fieldprep writes it; a file without it: FME's
+		//canvas (every file before v15.8)
+		bool hasCanvas = false;
+		int canvas[4] = { 0, 0, 0, 0 };
+		bool brightIsNear = true; //how the depth map was found (informational)
+		bool normalYDown = false; //the normal map fieldprep read had green pointing down (it was flipped when packed)
+		float lightmapScale = 1.0f; //<field>_LF
+		std::map<uint32_t, float> layerLightmapScale; //<field>_<pupu>_LF
+		float LightmapScale(uint32_t pupu, bool ownLightmap) const;
+
+		//the game's depth per view unit (GAME_DEPTH_PER_VIEW when the depth is measured; fieldprep's measure when it isn't)
+		double gameDepth = GAME_DEPTH_PER_VIEW;
+		//tiles with a nearer Z than the base picture: the view distance of the nearest part of what they show (FIELD_PBR_DEPTH
+		//keeps that part at the tile's own depth and pushes what lies behind it back)
+		std::map<int, double> occlusion;
+		//the camera in view space (fieldprep writes it when it measured the depth): world (/4096) to view
+		bool cameraKnown = false;
+		Vec3 cameraEye, cameraRight, cameraDown, cameraForward;
+		Vec3 up{ 0, -1, 0 }; //the world's up in view space (from the walkmesh's floor)
+		//depth map value where the sky starts (fieldprep: the farthest depth there is); used when sky is on
+		double skyValue = -1;
+		//the light grid (<field>_PROBES.dds): the view distances its slices run between
+		double probeNear = 0, probeFar = 0;
+		//yours (fieldprep keeps them when it writes the file again)
+		FieldTime time = FieldTime::Cycle; //cycle: follows the day/night clock; day or night: always that, the clock waits
+		bool sky = false; //pixels at the farthest depth are sky: no added light, shadows or reflections on them
+		bool characterShadeKeep = false; //characters keep the game's own darkening on top of the room's light
+		//how bright the room's light makes the characters: <= 0 (auto) matches the game's brightness on average (the room
+		//gives the direction and colour); a number scales the room's real light (1: as bright as the room is)
+		double characterLight = 0;
+	};
+	//Whatever the text doesn't set keeps the value out had (set the defaults first)
+	bool ParseSettings(const std::string& text, Settings& out, std::string& warnings);
+	std::string WriteSettings(const Settings& settings, const std::string& field, const std::string& notes);
+
+	//--- lights: <field>_lights.txt
+
+	enum class Flicker { None, Fire, Candle, Pulse, Strobe, Fluorescent };
+	const char* FlickerName(Flicker flicker);
+
+	//when a light is on: by day, by night or both (DEMASTER cross-fades them with its day/night clock)
+	enum class LightTime
+	{
+		Both,
+		Day,
+		Night
+	};
+	constexpr int MAX_LIGHTS_IN_FILE = 32; //a field's day and night lights together (MAX_LIGHTS of them are on at a time)
+	//who a light is from: fieldprep's fit, your mark in _LIGHTS.png (both written again when fieldprep finds the lights
+	//again), or you (written into _lights.txt by hand: fieldprep keeps it)
+	enum class LightSource
+	{
+		Yours,
+		Found,
+		Mark
+	};
+
+	struct Light
+	{
+		std::string name;
+		double x = 0, y = 0; //canvas, native pixels
+		double depth = 0.5; //depth map value at the light
+		float color[3] = { 1, 1, 1 }; //linear
+		float intensity = 0.0f; //light added on top of the painting (0: none)
+		float range = 64.0f; //native pixels at the light's depth
+		bool baked = true; //in the painting already: flicker scales its painted light (the _LF mask)
+		Flicker flicker = Flicker::None;
+		float amount = 0.25f; //how deep the flicker goes (0-1)
+		float speed = 1.0f;
+		float specular = 1.0f; //added light's highlights
+		float shadow = -1.0f; //how much a character's shadow takes away from this light (0-1); -1: 1 for a new light, 0.5 for a painted one
+		int follows = -1; //background light group (the animation id in the pupu: 004 01 000 is group 01) it follows; -1: none
+		std::vector<int> onStates; //on only while its group shows one of these states (empty: always on, only its colour follows)
+		LightTime time = LightTime::Both; //left out of the file: both
+		LightSource source = LightSource::Yours; //left out of the file: yours
+		std::string note; //written as a comment above it
+		float ShadowStrength() const { return shadow >= 0 ? (shadow > 1 ? 1.0f : shadow) : (baked ? 0.5f : 1.0f); }
+		//its painted light is under the _LF mask (it flickers, or its group can turn it off)
+		bool OwnsMask() const { return baked && (flicker != Flicker::None || follows >= 0); }
+	};
+	//the field's glows (the emissive map, the alpha of _ORME): their colour and strength, for the whole field
+	struct Emissive
+	{
+		float hue = 0.0f; //degrees the glows' painted colour turns around the colour wheel (-180 to 180)
+		float tint[3] = { 1, 1, 1 }; //times this colour (linear): gives white glows a colour, which hue can't
+		float strength = 1.0f; //how bright, 1 = as painted
+	};
+	//the field at night, for the whole field: the painted light goes down to level x tint, except around the lamps that are
+	//on at night (time = night or both, painted), which keep `lamps` of it
+	struct Night
+	{
+		float level = 0.18f; //how much of the painted light is left away from the night's lamps (0-1)
+		float tint[3] = { 0.6f, 0.7f, 1.0f }; //what's left times this (linear): moonlight
+		float lamps = 0.9f; //how much of the painted light the night's lamps keep around them, within their range (0-1)
+	};
+	struct Lights
+	{
+		float ambient[3] = { 0, 0, 0 }; //added everywhere (light units, times albedo)
+		std::vector<Light> lights;
+		Emissive emissive;
+		bool hasEmissive = false; //the file has an [emissive] section
+		Night night;
+		bool hasNight = false; //the file has a [night] section
+	};
+	bool ParseLights(const std::string& text, Lights& out, std::string& warnings);
+	//only the lights that are on by day (time = day or both), at most MAX_FOUND_LIGHTS of fieldprep's and MAX_YOUR_LIGHTS
+	//of yours (the first in the file): the day's set (fieldprep's flicker mask and light grid are the day's)
+	void KeepDayLights(Lights& lights);
+	//A light on now. weight: how much of it is on (fades with the time of day); nightLamp: on at night and painted, so the
+	//painting keeps its light around it at night
+	struct ActiveLight
+	{
+		size_t index = 0; //in Lights::lights
+		float weight = 1.0f;
+		bool nightLamp = false;
+	};
+	//The lights on at `night` (0: day, 1: night, between: a fade). Each time of day has its set: at most MAX_FOUND_LIGHTS of
+	//fieldprep's and MAX_YOUR_LIGHTS of yours (the first in the file) among those on then (time = day or both, or night or
+	//both). The day's set is on at 1 - night, the night's at night; a light in both sets at 1. At most MAX_LIGHTS, in file
+	//order; more (only during a fade): the faintest are left out, `dropped` says how many.
+	std::vector<ActiveLight> ActiveLights(const Lights& lights, double night, size_t* dropped = nullptr);
+	const char* LightTimeName(LightTime time);
+	const char* LightSourceName(LightSource source);
+	std::string WriteLights(const Lights& lights, const std::string& field, const std::string& header);
+	//Brightness of a light over time, 1 = as painted. seed: makes lights flicker out of step.
+	double FlickerValue(Flicker flicker, float amount, float speed, uint32_t seed, double seconds);
+	uint32_t LightSeed(const Light& light, size_t index);
+
+	//--- day and night (DAY_NIGHT in demaster.conf): one clock for the whole game
+	//
+	//The clock counts seconds into the cycle: day, then night, with a fade centred on each change; 0 is the middle of the
+	//dawn's fade. Fields, the world map and menus run it at 1 second per second, battles slower (the same day lasts longer
+	//there), so the time of day goes on from wherever the battle left it.
+	struct DayNightCycle
+	{
+		double day = 480; //seconds of day (8 minutes), from the middle of dawn's fade to the middle of dusk's
+		double night = 240; //seconds of night (4 minutes)
+		double fade = 40; //seconds each fade takes
+		double battleSlower = 3; //battles run the clock this many times slower (24 + 12 minutes, 120 s fades)
+		double Length() const { return day + night; }
+		//no zero or negative lengths, fades no longer than the shorter of day and night
+		DayNightCycle Checked() const;
+	};
+	//how night it is at `time` seconds into the cycle: 0 day, 1 night, smooth across the fades
+	double NightAmount(const DayNightCycle& cycle, double time);
+	//the clock after `seconds` of play (in battle: battleSlower times slower), wrapped into the cycle
+	double AdvanceClock(const DayNightCycle& cycle, double time, double seconds, bool battle);
+	//mostly day now: the start of the full night; mostly night: the start of the full day
+	double SwapTime(const DayNightCycle& cycle, double time);
+	//`lead` seconds before the next fade starts
+	double BeforeNextFade(const DayNightCycle& cycle, double time, double lead);
+	//"day, 2:15 in (dusk in 5:05)" for the log
+	std::string ClockText(const DayNightCycle& cycle, double time);
+	//the clock's file (DEMASTER_EXP\daynight.txt): "time = <seconds into the cycle>"
+	bool ParseClock(const std::string& text, double& time);
+	std::string WriteClock(const DayNightCycle& cycle, double time);
+
+	//--- the light grid: <field>_PROBES.dds, written by fieldprep
+	//
+	//The room's light at points in front of the camera, so the characters get the light around them. A box of probes:
+	//nx x ny across the canvas (each at the middle of its part of the canvas), nz slices of view distance from probeNear to
+	//probeFar (in _pbr.txt). Each probe holds the light arriving at it as irradiance: E(n) = e0 + ex nx + ey ny + ez nz
+	//for a surface facing n (view space), so a white wall's colour times E / pi is its brightness; and the share of that
+	//light that follows the field's flickering lights.
+	//The file is a 3D DDS (RGBA16F), nz x 4 slices deep: block 0 (e0 rgb, share), 1 (ex rgb), 2 (ey rgb), 3 (ez rgb).
+	struct ProbeGrid
+	{
+		int nx = 0, ny = 0, nz = 0;
+		std::vector<float> data; //[block][z][y][x][4]
+		float* At(int block, int x, int y, int z) { return data.data() + ((((static_cast<size_t>(block) * nz + z) * ny + y) * nx + x) * 4); }
+		const float* At(int block, int x, int y, int z) const { return data.data() + ((((static_cast<size_t>(block) * nz + z) * ny + y) * nx + x) * 4); }
+		bool IsValid() const { return nx > 0 && ny > 0 && nz > 0 && data.size() == static_cast<size_t>(nx) * ny * nz * 16; }
+	};
+	std::vector<uint8_t> WriteProbes(const ProbeGrid& grid);
+	bool ReadProbes(const uint8_t* data, size_t size, ProbeGrid& out);
+	uint16_t FloatToHalf(float f);
+	float HalfToFloat(uint16_t h);
+
+	//--- small text helpers (shared by both files)
+	std::string Trim(const std::string& text);
+	std::string Lower(std::string text);
+	std::vector<std::string> SplitWords(const std::string& text);
+}

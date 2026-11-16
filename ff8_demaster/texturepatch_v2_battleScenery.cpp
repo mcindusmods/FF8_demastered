@@ -9,6 +9,9 @@ extern BOOL BATTLE_STAGE_FORCE_RELOAD;
 
 DWORD _bspBackAdd1;
 DWORD _bspBackAdd2;
+//Where the game continues when it does not run its 2x shader pass over the uploaded page (see ApplyBattleFieldPatch).
+//0 = unknown layout, always return to _bspBackAdd1.
+DWORD _bspSkipGameUpscale;
 
 
 
@@ -179,6 +182,9 @@ DWORD _bspCheck()
 
 DWORD _fbgCheck()
 {
+	//field page from Field-Map-Editor's layers (FIELD_LAYERS): put together in FbgGl
+	if (FieldLayersBuildPage(gl_textures[50], static_cast<int>(gl_textures[48]), tex_header))
+		return 1;
 	if(!FIELD_BACKGROUND)
 		return 0;
 	return 0; //WIP
@@ -200,6 +206,10 @@ __declspec(naked) void _bsp()
 		MOV texturesPtr, EAX
 		MOV EAX, [EBP + 0x10]
 		MOV pixelsPtr, EAX
+		MOV uploadWidth, EDI //pushed as width by the original glTexImage2D call below
+		MOV uploadHeight, ESI //pushed as height
+		MOV EAX, [EBP - 0x4] //2 when the game will re-render this page with its upscale shader afterwards
+		MOV gameUpscaleFactor, EAX
 		MOV bAlreadyFreed, 0
 
 		CALL _bspCheck
@@ -249,7 +259,7 @@ __declspec(naked) void _bsp()
 			CALL EAX
 			MOV bAlreadyFreed, 1
 			CALL WtpGl
-			JMP _out
+			JMP _replaced
 
 			JMP _original
 
@@ -261,7 +271,7 @@ __declspec(naked) void _bsp()
 				MOV bAlreadyFreed, 1
 
 				CALL _bspGl
-				JMP _out
+				JMP _replaced
 
 			_fbgOk: //FIELD BACKGROUND
 			PUSH DWORD PTR[EBP + 0x10]
@@ -270,8 +280,14 @@ __declspec(naked) void _bsp()
 			CALL EAX
 			MOV bAlreadyFreed, 1
 			CALL FbgGl
-			JMP _out
+			JMP _replaced
 
+			//A page DEMASTER replaced must not go through the game's 2x shader pass: it renders the texture into a new
+			//one of 2x the PlayStation size (512x512 for a 256 page), which throws away the HD resolution
+			_replaced:
+			CMP _bspSkipGameUpscale, 0
+			JE _out
+			JMP _bspSkipGameUpscale
 	}
 }
 
@@ -298,15 +314,28 @@ void ApplyBattleFieldPatch()
 	ds_teximg = (DWORD**)(IMAGE_BASE + GetAddress(DS_TEXIMG));
 	OutputDebug("ApplyBattleFieldPatch():ds_free is at: %08X and ds_teximg is at: %08X\n", ds_free, ds_teximg);
 	_bspBackAdd1 = (DWORD)InjectJMP(IMAGE_BASE + GetAddress(_BSPBACKADD1), (DWORD)_bsp, 38);
+	//After the hooked upload: mov eax,[ebp-4]; cmp eax,1; jle +0x24 -> mov esi,[ebp+8] (no upscale pass).
+	//Same bytes in FFVIII_EFIGS and FFVIII_JP 1.0.3.0; anything else and we keep the original flow.
+	_bspSkipGameUpscale = 0;
+	if (KEEP_HD_RESOLUTION && memcmp(reinterpret_cast<const void*>(_bspBackAdd1), "\x8B\x45\xFC\x83\xF8\x01\x7E\x24", 8) == 0
+		&& memcmp(reinterpret_cast<const void*>(_bspBackAdd1 + 0x2C), "\x8B\x75\x08", 3) == 0)
+		_bspSkipGameUpscale = _bspBackAdd1 + 0x2C;
+	OutputDebug("ApplyBattleFieldPatch: game upscale pass for replaced pages %s\n",
+		_bspSkipGameUpscale ? "skipped (KEEP_HD_RESOLUTION)" : "kept");
 	_bspBackAdd2 = (DWORD)InjectJMP(IMAGE_BASE + GetAddress(_BSPBACKADD2), (DWORD)_bspFree, 9);
 
 	//fixes balamb low-res and library low-res for example @ 15.08.2022
-	DWORD bgPatchWidth = IMAGE_BASE + GetAddress(BGRESPATCH1);
-	DWORD bgPatchHeight = IMAGE_BASE + GetAddress(BGRESPATCH1) + 0xC;
-	ModPage(bgPatchWidth, 1);
-	ModPage(bgPatchHeight, 1);
-	*(BYTE*)bgPatchWidth = 0xE0; //SHL instead of SHR
-	*(BYTE*)bgPatchHeight = 0xE0; //SHL instead of SHR
+	//The buffer field backgrounds are drawn into: 640x480 / 2 in the game, x2 here (SHL instead of SHR) = 4x the
+	//PlayStation size. FIELD_BG_RESOLUTION=6 or 8 sets 6x or 8x instead.
+	if (!ApplyFieldBgResolution())
+	{
+		DWORD bgPatchWidth = IMAGE_BASE + GetAddress(BGRESPATCH1);
+		DWORD bgPatchHeight = IMAGE_BASE + GetAddress(BGRESPATCH1) + 0xC;
+		ModPage(bgPatchWidth, 1);
+		ModPage(bgPatchHeight, 1);
+		*(BYTE*)bgPatchWidth = 0xE0; //SHL instead of SHR
+		*(BYTE*)bgPatchHeight = 0xE0; //SHL instead of SHR
+	}
 
 	//this disables textureLimit for resolution
 	InjectJMP(IMAGE_BASE + GetAddress(BATTLEJMPPATCH1), (DWORD)(IMAGE_BASE + GetAddress(BATTLEJMPPATCH2)), 6);

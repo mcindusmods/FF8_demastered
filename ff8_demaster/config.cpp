@@ -1,5 +1,6 @@
 ﻿#include "config.h"
 #include <INIReader.h>
+#include <cctype>
 #include "debug.h"
 #include "GLFW/include/GLFW/glfw3.h"
 
@@ -26,6 +27,8 @@ void ReadConfigFile()
     WORLD_TEXTURES = conf.GetInteger("", "WORLD_TEXTURES", 0);
     TEXTURE_PATCH = conf.GetInteger("", "TEXTURE_PATCH", 1); //this one lacks actual demaster.conf so default to 1
     LINEAR_PATCH = conf.GetInteger("", "LINEAR_PATCH", 1);
+    LINEAR_PATCH_MIN_FILTER = conf.GetInteger("", "LINEAR_PATCH_MIN_FILTER", 0);
+    KEEP_HD_RESOLUTION = conf.GetInteger("", "KEEP_HD_RESOLUTION", 1);
     DEBUG_PATCH = conf.GetInteger("", "DEBUG_PATCH", 0);
     OPENGL_HOOK = conf.GetInteger("", "OPENGL_HOOK", 0);
     FILL_ASPECT_RATIO = conf.GetInteger("", "FILL_ASPECT_RATIO", 0);
@@ -38,7 +41,42 @@ void ReadConfigFile()
     HASH_LOAD_HD_EXT = conf.GetInteger("", "HASH_LOAD_HD_EXT", 1);
     IMGUI_DEBUG = conf.GetInteger("", "IMGUI_DEBUG", 0);
     SKIP_SPLASH = conf.GetInteger("", "SKIP_SPLASH", 0);
+    WIDESCREEN_EXPERIMENTAL = conf.GetInteger("", "WIDESCREEN_EXPERIMENTAL", 0);
     DEBUG_GLTEXIMAGE2D = conf.GetInteger("", "DEBUG_GLTEXIMAGE2D", 0);
     
     WINDOW_OVERWRITE = conf.GetInteger("", "WINDOW_OVERWRITE", 0);
+
+    WORLD_DEBUG = conf.GetInteger("", "WORLD_DEBUG", 0);
+    WORLD_VEHICLES = conf.GetInteger("", "WORLD_VEHICLES", 0);
+    REMASTER_WMSET014 = conf.Get("", "REMASTER_WMSET014", "");
+
+    FIELD_LAYERS = conf.GetInteger("", "FIELD_LAYERS", 0);
+    FIELD_LAYERS_UNSHARE = conf.GetInteger("", "FIELD_LAYERS_UNSHARE", 1);
+    FIELD_SMOOTH = conf.GetInteger("", "FIELD_SMOOTH", 1);
+    FIELD_BG_RESOLUTION = conf.GetInteger("", "FIELD_BG_RESOLUTION", 4);
+    FIELD_LAYERS_LIVE = conf.GetInteger("", "FIELD_LAYERS_LIVE", 1);
+    FIELD_DEBUG = conf.GetInteger("", "FIELD_DEBUG", 0);
+    FIELD_PBR = conf.GetInteger("", "FIELD_PBR", 1);
+    FIELD_PBR_VIEW = conf.GetInteger("", "FIELD_PBR_VIEW", 0);
+    FIELD_PBR_DEPTH = conf.GetInteger("", "FIELD_PBR_DEPTH", 1);
+    FIELD_PBR_SHADOWS = conf.GetInteger("", "FIELD_PBR_SHADOWS", 1);
+    FIELD_PBR_REFLECTIONS = conf.GetInteger("", "FIELD_PBR_REFLECTIONS", 1);
+    FIELD_PBR_CHARACTERS = conf.GetInteger("", "FIELD_PBR_CHARACTERS", 1);
+    FIELD_AVATARS = conf.GetInteger("", "FIELD_AVATARS", 0);
+    {
+        //low, medium, high (or 0, 1, 2)
+        std::string quality = conf.Get("", "FIELD_PBR_QUALITY", "medium");
+        for (char& c : quality)
+            c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        FIELD_PBR_QUALITY = quality == "low" || quality == "0" ? 0 : quality == "high" || quality == "2" ? 2 : 1;
+    }
+    FIELD_GL_TRACK = conf.GetInteger("", "FIELD_GL_TRACK", 1);
+    DAY_NIGHT = conf.GetInteger("", "DAY_NIGHT", 1);
+    DAY_NIGHT_DAY = conf.GetReal("", "DAY_NIGHT_DAY", 480);
+    DAY_NIGHT_NIGHT = conf.GetReal("", "DAY_NIGHT_NIGHT", 240);
+    DAY_NIGHT_FADE = conf.GetReal("", "DAY_NIGHT_FADE", 40);
+    DAY_NIGHT_BATTLE = conf.GetReal("", "DAY_NIGHT_BATTLE", 3);
+    DAY_NIGHT_KEYS = conf.GetInteger("", "DAY_NIGHT_KEYS", 1);
+    DAY_NIGHT_BAR = conf.GetInteger("", "DAY_NIGHT_BAR", 1);
+    FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);
 }

@@ -1,5 +1,8 @@
 #include "config.h"
 #include "coreHeader.h"
+
+#include <filesystem>
+#include <set>
 DWORD _asm_WorldRetAddr1;
 DWORD _asm_WorldRetAddr2;
 DWORD _asm_WorldRetAddr3;
@@ -11,6 +14,9 @@ struct worldTextureStructure
 	char localPath[256]{ 0 };
 	DWORD tpage{};
 	SafeBimg buffer{ SafeBimgInit() };
+	//previous image of this slot, so a page that alternates between two files does not reload from disk
+	char previousPath[256]{ 0 };
+	SafeBimg previousBuffer{ SafeBimgInit() };
 	int width{ -1 };
 	int height{ -1 };
 	int channels{ -1 };
@@ -39,6 +45,9 @@ worldTextureStructure ws[] =
 	{32},	// 22: textype=0 sm wm
 	{33},	// 28: textype=0 sm wm
 	{34},	// 29: textype=0
+	{35},	// 17: far terrain (low-res texl copies), see GetTextureIndex
+	{36},	// 18: far terrain
+	{37},	// 19: far terrain
 };
 
 int GetTextureIndex();
@@ -50,15 +59,29 @@ bool LoadImageIntoWorldStruct(size_t texIndex, const char* const localn, int tPa
 	//If you want to be able to swap out a texture at a given index you could set bActive to false and it would force load it.
 	if (ws[texIndex].bActive && ws[texIndex].buffer)//texture loaded skip
 	{
-		if (strcmp(ws[texIndex].localPath, localn) != 0)//the texture has a different name!
+		if (strcmp(ws[texIndex].localPath, localn) == 0)
+			return true;
+		//Used to keep the first file forever (only this warning was logged), so a palette variant (_2, _5...) or a page
+		//the game refilled never showed. Switch to the requested file instead, keeping the previous one in memory.
+		if (ws[texIndex].previousBuffer && strcmp(ws[texIndex].previousPath, localn) == 0)
 		{
-			OutputDebug("%s::%d::WARNING attempt to load texture with new name:\n\t%s\n\t!=\n\t%s\n", __func__,__LINE__, localn, ws[texIndex].localPath);
+			std::swap(ws[texIndex].buffer, ws[texIndex].previousBuffer);
+			std::swap(ws[texIndex].localPath, ws[texIndex].previousPath);
+			ws[texIndex].width = ws[texIndex].buffer->m_width;
+			ws[texIndex].height = ws[texIndex].buffer->m_height;
+			ws[texIndex].channels = ws[texIndex].buffer->m_hasAlpha ? 4 : 3;
+			return true;
 		}
-		return true;
+		OutputDebug("%s::%d::slot %zu now uses:\n\t%s\n\t(was %s)\n", __func__,__LINE__, texIndex, localn, ws[texIndex].localPath);
 	}
 	SafeBimg img = LoadImageFromFile(localn);
 	if (!img)
 		return false;
+	if (ws[texIndex].bActive && ws[texIndex].buffer)
+	{
+		ws[texIndex].previousBuffer = std::move(ws[texIndex].buffer);
+		strcpy(ws[texIndex].previousPath, ws[texIndex].localPath);
+	}
 	ws[texIndex].width = img->m_width;
 	ws[texIndex].height = img->m_height;
 	ws[texIndex].channels = img->m_hasAlpha ? 4 : 3;
@@ -66,18 +89,19 @@ bool LoadImageIntoWorldStruct(size_t texIndex, const char* const localn, int tPa
 	ws[texIndex].bActive = true;
 	strcpy(ws[texIndex].localPath, localn);
 
-	OutputDebug("\t%s::%d::localEAX: %d, Tpage: %d, Palette: %d, TexIndex: %d\n", __func__, __LINE__, *(DWORD*)(IMAGE_BASE + 0x1780f88), tPage, palette, texIndex);
+	OutputDebug("\t%s::%d::Tpage: %d, Palette: %d, TexIndex: %d\n", __func__, __LINE__, tPage, palette, texIndex);
 	OutputDebug("\t%s::%d::w: %d; h: %d; channels: %d\n", __func__, __LINE__, ws[texIndex].width, ws[texIndex].height, ws[texIndex].channels);
 	return true;
 }
 void WtpGl()
 {
+	if (WorldVehiclesUploadPending()) //page built by WtpCheck with the vehicles drawn in
+		return;
 	DWORD tPage = gl_textures[50];
 	int palette = tex_header[52];
 	int textureType = gl_textures[48];
 	char localn[256]{ 0 };
 
-	DWORD unk = *(DWORD*)(IMAGE_BASE + 0x17424B4);
 	size_t texIndex = lastKnownTextureId;
 
 	int getTexIndex = GetTextureIndex();
@@ -121,8 +145,17 @@ void WtpGl()
 		case 15: //characters and vehicles
 			wmStructPointer = 26;
 			break;
-		case 16: //???
+		case 16: //far terrain: low-res copies of texl, drawn for distant land
 			wmStructPointer = 27;
+			break;
+		case 17: //far terrain
+			wmStructPointer = 35;
+			break;
+		case 18: //far terrain
+			wmStructPointer = 36;
+			break;
+		case 19: //far terrain
+			wmStructPointer = 37;
 			break;
 		case 24: //???
 			wmStructPointer = 23;
@@ -216,7 +249,13 @@ int GetTextureIndex()
 		case 14: //clouds or atleast used to be
 		case 28: //water textures
 		case 29: //tracks, bridge, vehicle
-		//case 16: //??? I see it trying to load this and don't see anything using it.
+		//16-19: far terrain. The game draws distant land from these pages: half-size copies of texl 0-15, arranged as
+		//in VRAM (texl_001/003 in the left column of wmset_016, texl_002/004 on the right, and so on). Without them
+		//distant land stayed vanilla until it entered a texl slot (20/22/24/26) and popped to HD.
+		case 16:
+		case 17:
+		case 18:
+		case 19:
 		//case 15: //vehicles + character
 				 //this one is special the game mixes different textures into one and they overlap.
 			// character texture is top left. some cars are top left.
@@ -267,8 +306,24 @@ DWORD WtpCheck()
 	DWORD tPage = gl_textures[50];
 	int palette = tex_header[52];
 
+	if (WORLD_DEBUG)
+	{
+		static std::set<DWORD> logged;
+		if (logged.insert((static_cast<DWORD>(textureType) << 24) | (tPage << 12) | static_cast<DWORD>(palette)).second)
+			OutputDebug("World page: type %d tpage %u palette %d size %ux%u game upscale %u\n", textureType, tPage, palette,
+				uploadWidth, uploadHeight, gameUpscaleFactor);
+		WorldDumpPage(textureType, tPage, palette); //WORLD_DEBUG=2
+	}
+
 	char localn[256]{ 0 };
 	int textureIndex = GetTextureIndex();
+
+	//Named textures (WORLD_VEHICLES: vehicles, characters, water, effects, the select map): drawn into the page wherever
+	//the game put them, over this page's wmset_XXX file if any. Runs before the "disabled page" check below because
+	//pages such as 15 (vehicles and characters) are disabled for page files.
+	if (WORLD_VEHICLES && (textureType == 18 || textureType == 0))
+		if (WorldVehiclesBuildPage(tPage, textureType, textureIndex, palette))
+			return 1;
 
 	//OutputDebug("%s::%d::tPage: %d, textureType: %d, palette: %d\n", __func__, __LINE__, tPage, textureType, palette);
 
@@ -302,7 +357,39 @@ DWORD WtpCheck()
 	return 1;
 }
 
+//Remastered's HD loader asks for textures\FIELD.FS\field_hd_new\wmset_014_0.png for its remodelled vehicle (the one taken
+//to Dollet). That name collides with the wmset_014 world page, so REMASTER_WMSET014 points the request at another file.
+//The request is a single "push <string>" in the loader (WMSET014_PATH_PUSH); the loader adds "textures\" and ".png".
+static char remasterWmset014Name[MAX_PATH]{ 0 };
+
+static void RenameRemasterWmset014()
+{
+	if (REMASTER_WMSET014.empty())
+		return;
+	if (!HasAddress(WMSET014_PATH_PUSH))
+		return;
+	const DWORD push = IMAGE_BASE + GetAddress(WMSET014_PATH_PUSH);
+	const char* const pushed = *reinterpret_cast<const char* const*>(push + 1);
+	if (*reinterpret_cast<const BYTE*>(push) != 0x68 || pushed == nullptr
+		|| strcmp(pushed, "FIELD.FS\\field_hd_new\\wmset_014_0") != 0)
+	{
+		OutputDebug("REMASTER_WMSET014: unexpected code at %08X, name not changed\n", push);
+		return;
+	}
+	const std::string file = std::string(DIRECT_IO_EXPORT_DIR) + "textures\\" + REMASTER_WMSET014 + ".png";
+	if (!std::filesystem::exists(file))
+	{
+		OutputDebug("REMASTER_WMSET014: %s not found, Remastered keeps loading wmset_014_0\n", file.c_str());
+		return;
+	}
+	strncpy(remasterWmset014Name, REMASTER_WMSET014.c_str(), MAX_PATH - 1);
+	InjectDWORD(push + 1, reinterpret_cast<DWORD>(remasterWmset014Name));
+	OutputDebug("REMASTER_WMSET014: Remastered's vehicle texture now loads from %s\n", file.c_str());
+}
+
 void ApplyWorldPatch()
 {
+	RenameRemasterWmset014();
+	ApplyWorldVehiclesPatch();
 }
 #undef CRASHLOG

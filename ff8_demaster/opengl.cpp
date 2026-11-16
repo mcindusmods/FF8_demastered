@@ -9,7 +9,9 @@
 #include "config.h"
 #include "debug.h"
 #include "texture.h"
+#include "gl_state.h"
 #include "minhook/include/MinHook.h"
+#include "day_night.h"
 #include "imgui/imgui.h"
 #include "imgui/backends/imgui_impl_opengl3.h"
 #include "imgui/backends/imgui_impl_glfw.h"
@@ -45,7 +47,7 @@ GLFWwindow* HookGlfwWindow(const int width, const int height, const char* title,
     }
     ffWindowWidth = width;
     ffWindowHeight = height;
-    OutputDebug("OpenGL version: %s", glGetString(GL_VERSION));
+    OutputDebug("OpenGL version: %s\n", glGetString(GL_VERSION));
     return ffWindow;
 }
 ImGuiContext * imguiContext;
@@ -53,12 +55,14 @@ ImGuiContext * imguiContext;
 void* __stdcall HookGlVertexPointer(GLint size, GLenum type, GLsizei stride, const void* pointer)
 {
     LastVerticesPointer = {.size = size, .stride = stride, .pointer = pointer};
+    glstate::OnVertexPointer(size, type, stride, pointer);
     return static_cast<void* (__stdcall*)(GLint, GLenum, GLsizei, const void*)>(ogl_vertex_pointer)(size,type, stride, pointer);
 }
 
 void* __stdcall HookGlTexCoordPointer(GLint size, GLenum type, GLsizei stride, const void* pointer)
 {
     LastTexCoordPointer = {.size = size, .stride = stride, .pointer = pointer};
+    glstate::OnTexCoordPointer(size, type, stride, pointer);
     return static_cast<void* (__stdcall*)(GLint, GLenum, GLsizei, const void*)>(ogl_tex_coord_pointer)(size, type, stride, pointer);
 }
 
@@ -75,6 +79,7 @@ void* __stdcall HookGlScissors(GLint x, GLint y, GLsizei width, GLsizei height)
         finalX = 0;
         finalY = 0;
     }
+    glstate::OnScissor(finalX, finalY, finalWidth, finalHeight);
     return static_cast<void* (__stdcall*)(GLint, GLint, GLsizei, GLsizei)>(ogl_scissors)(finalX, finalY, finalWidth, finalHeight);
 }
 
@@ -108,9 +113,13 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
         }
     }
 #endif
-    
+    FrameLogDraw(mode, count, type, indices); //FIELD_FRAME_LOG, the game's own state, before DEMASTER changes any
+    if (FieldCharsDraw(mode, count, type, indices))
+        return; //FIELD_PBR_*: a field character DEMASTER draws itself (before the next thing the game draws), or a round shadow
+    FieldLayersBeforeDraw(count, static_cast<unsigned int>(type), indices); //FIELD_SMOOTH, FIELD_PBR
     static_cast<void (__stdcall*)(GLenum, GLsizei, GLenum, const void*)>(ogl_draw_elements)
     (mode,count, type, indices);
+    FieldLayersAfterDraw(); //FIELD_PBR
 }
 
 void PumpMessages()
@@ -305,9 +314,7 @@ void ImGui_DisplayAspectRatioSection()
 
 GLuint GetCurrentBoundTextureID()
 {
-    GLint currentTexture;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
-    return static_cast<GLuint>(currentTexture);
+    return glstate::BoundTexture2D(); //the remembered binding (FIELD_GL_TRACK), else the driver's
 }
 
 void DumpTextureToDisk(GLuint textureID)
@@ -474,6 +481,9 @@ void CheckCreateImGuiTextureDumpDirectory(std::string& directoryPath)
  */
 BOOL __stdcall HookSwapBuffers(const HDC hdc)
 {
+    FieldCharsSwap(); //FIELD_PBR_*: characters still waiting are drawn; what this frame measured is used by the next
+    FrameLogSwap(); //FIELD_FRAME_LOG: the logged frame ends here; Ctrl+F11 asks for one
+    DayNightSwap(); //DAY_NIGHT: the clock moves on; its test keys and bar
     if (bPaused && IMGUI_DEBUG)
     {
         while (bPaused)
@@ -552,7 +562,7 @@ BOOL __stdcall HookSwapBuffers(const HDC hdc)
  */
 void ViewportBackdoorInject(bool& backdoorUsed)
 {
-    OutputDebug("OpenGL version: %s", glGetString(GL_VERSION));
+    OutputDebug("OpenGL version: %s\n", glGetString(GL_VERSION));
     
     //Maki: PUT BACKDOORS FOR EXTENSIONS HERE
     if (TEXTURE_PATCH && DIRECT_IO)
@@ -568,6 +578,8 @@ void ViewportBackdoorInject(bool& backdoorUsed)
         MH_CreateHookApi(L"OPENGL32", "glVertexPointer", HookGlVertexPointer, &ogl_vertex_pointer);
         MH_CreateHookApi(L"OPENGL32", "glTexCoordPointer", HookGlTexCoordPointer, &ogl_tex_coord_pointer);
         MH_CreateHookApi(L"OPENGL32", "glScissor", HookGlScissors, &ogl_scissors);
+        FrameLogCreateHooks(); //FIELD_FRAME_LOG: glDrawArrays, glBegin
+        glstate::Install(); //FIELD_GL_TRACK: the GL state remembered as it is set (the field code asks the driver far less)
     }
     MH_CreateHook(&SwapBuffers, &HookSwapBuffers, reinterpret_cast<LPVOID*>(&swapBuffersTrampoline));
 
@@ -627,6 +639,7 @@ void* __stdcall HookGlViewport(const GLint x, const GLint y, const GLsizei width
         finalHeight = FinalForcedHeight;
     }
     
+    glstate::OnViewport(finalX, finalY, finalWidth, finalHeight);
     return static_cast<void* (__stdcall*)(GLint, GLint, GLsizei, GLsizei)>(oglViewport)
     (finalX, finalY, finalWidth, finalHeight);
 }

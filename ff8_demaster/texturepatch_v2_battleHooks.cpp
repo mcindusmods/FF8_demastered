@@ -70,22 +70,60 @@ __declspec(naked) void _bhpMonsterStruct()
 	}
 }
 
+//Three operands rewritten by InjectMonsterAtlasResolution. Resolved once, at first use.
+struct MonsterAtlasPatchSites
+{
+	DWORD atlasWidth1 = 0;  //sub_116059B0+13ED + 6 (EFIGS), +130F + 6 (JP)
+	DWORD atlasWidth2 = 0;  //sub_116059B0+13FE + 6 (EFIGS), +1320 + 6 (JP)
+	DWORD atlasHeight = 0;  //load_battle_ext+BC1 + 1
+	bool bResolved = false;
+	bool bUsable = false;
+};
+
+static MonsterAtlasPatchSites& GetMonsterAtlasPatchSites()
+{
+	static MonsterAtlasPatchSites sites{};
+	if (sites.bResolved)
+		return sites;
+	sites.bResolved = true;
+	if (!HasAddress(SUB_116059B0) || !HasAddress(LOAD_BATTLE_EXT))
+		return sites;
+
+	//This used to be "constexpr int" reassigned under #ifdef JAPANESE_PATCH, which does not compile, so no JP
+	//build has been possible since August 2024.
+	const int addr1Shift = IsJapanese() ? 0x130F + 6 : 0x13ED + 6;
+	const int addr2Shift = IsJapanese() ? 0x1320 + 6 : 0x13FE + 6;
+	sites.atlasWidth1 = IMAGE_BASE + GetAddress(SUB_116059B0) + addr1Shift;
+	sites.atlasWidth2 = IMAGE_BASE + GetAddress(SUB_116059B0) + addr2Shift;
+	sites.atlasHeight = IMAGE_BASE + GetAddress(LOAD_BATTLE_EXT) + 0xBC1 + 1;
+
+	//Vanilla operands are 0x300 (2 * 0x180) and 0x180 (checked on EFIGS and JP 1.0.3.0 with tools/verify_addresses.py).
+	//On JP we still refuse to write unless they read like that: Maki's JP base for SUB_116059B0 was wrong before, and a
+	//write to a wrong address corrupts code and crashes later in battle. On EFIGS the result is only logged.
+	const DWORD width1 = *reinterpret_cast<DWORD*>(sites.atlasWidth1);
+	const DWORD width2 = *reinterpret_cast<DWORD*>(sites.atlasWidth2);
+	const WORD height = *reinterpret_cast<WORD*>(sites.atlasHeight);
+	const bool bLooksVanilla = width1 == DEFAULT_MONSTER_ATLAS_TEX_RESOLUTION * 2
+		&& width2 == DEFAULT_MONSTER_ATLAS_TEX_RESOLUTION * 2 && height == DEFAULT_MONSTER_ATLAS_TEX_RESOLUTION;
+	OutputDebug("InjectMonsterAtlasResolution: operands %X %X %X (%s)\n", width1, width2, height,
+		bLooksVanilla ? "vanilla" : "UNEXPECTED");
+	sites.bUsable = bLooksVanilla || !IsJapanese();
+	if (!sites.bUsable)
+		OutputDebug("InjectMonsterAtlasResolution: JP addresses do not match, dynamic monster atlas disabled\n");
+	return sites;
+}
+
 //sub_116059B0
 void InjectMonsterAtlasResolution(const DWORD monsterTexResolution)
 {
 	OutputDebug("InjectMonsterAtlasResolution::Injecting atlas resolution of: %d\n", monsterTexResolution);
-	
-	constexpr int addr1Shift = 0x13ED + 6;
-	constexpr int addr2Shift = 0x13FE + 6;
-	
-	#ifdef JAPANESE_PATCH 
-	addr1Shift = 0x130F+6;
-	addr2Shift = 0x1320+6;
-	#endif
-	
-	InjectDWORD(IMAGE_BASE + GetAddress(SUB_116059B0)+addr1Shift, monsterTexResolution*2); //sub_116059B0+13ED + 6
-	InjectDWORD(IMAGE_BASE + GetAddress(SUB_116059B0)+addr2Shift, monsterTexResolution*2); //sub_116059B0+13FE + 6
-	InjectWORD(IMAGE_BASE + GetAddress(LOAD_BATTLE_EXT)+0xBC1+1, static_cast<WORD>(monsterTexResolution)); //load_battle_ext+BC1 + 1
+	const MonsterAtlasPatchSites& sites = GetMonsterAtlasPatchSites();
+	if (!sites.bUsable)
+		return;
+
+	InjectDWORD(sites.atlasWidth1, monsterTexResolution*2); //sub_116059B0+13ED + 6
+	InjectDWORD(sites.atlasWidth2, monsterTexResolution*2); //sub_116059B0+13FE + 6
+	InjectWORD(sites.atlasHeight, static_cast<WORD>(monsterTexResolution)); //load_battle_ext+BC1 + 1
 }
 
 BYTE _bhpVoid()
@@ -313,7 +351,8 @@ void ApplyBattleHookPatch()
 		reinterpret_cast<DWORD>(_bhp), 17));
 	_bhpBackAdd2 = reinterpret_cast<DWORD>(InjectJMP(IMAGE_BASE + GetAddress(_BHPBACKADD2),
 		reinterpret_cast<DWORD>(_bhpMonsterStruct), 5)); //GetBattleMonsterStructPalCount _notfound
-	MH_CreateHook(reinterpret_cast<LPVOID>(IMAGE_BASE + GetAddress(BHP_ATLAS)), GetAtlasResolutionGfs, &BHP_Atlas_Detour);
+	if (HasAddress(BHP_ATLAS)) //not found for JP yet (Maki's reborn table has "??????" for it)
+		MH_CreateHook(reinterpret_cast<LPVOID>(IMAGE_BASE + GetAddress(BHP_ATLAS)), GetAtlasResolutionGfs, &BHP_Atlas_Detour);
 	//ReplaceFunction(IMAGE_BASE + GetAddress(BHP_ATLAS), GetAtlasResolutionGfs);
 	
 }

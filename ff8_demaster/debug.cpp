@@ -20,7 +20,9 @@ void OutputDebug(const char* fmt, ...)
     vsnprintf(tmp_str, sizeof(tmp_str), fmt, args);
     va_end(args);
 
-    printf(tmp_str);
+    //tmp_str is already formatted: passing it to printf as the format made any "%" in a message (a file name, "97% there")
+    //a format directive, and the Debug CRT stops with "Expression: _length == length_modifier::none"
+    fputs(tmp_str, stdout);
 
     if (logFile)
     {

@@ -1,0 +1,251 @@
+DEMASTER changelog (MCINDUS's continuation)
+
+v15.8 - layer images from PuPu (its names and sizes); day and night on PBR fields
+---------------------------------------------------------------------------------
+Day and night (new: DAY_NIGHT in demaster.conf, on by default)
+  - One clock for the whole game: 8 minutes of day and 4 of night, 40-second fades, in fields, on the world map and in
+    menus; battles run it 3 times slower (24 + 12 minutes, 120-second fades) and the field goes on from where the battle
+    left it. Kept in DEMASTER_EXP\daynight.txt between sessions. Lengths: DAY_NIGHT_DAY, _NIGHT, _FADE, _BATTLE.
+  - PBR fields at night: time = day lights fade out and time = night lights fade in (each time of day keeps its own 2 of
+    fieldprep's and 6 of yours; during a fade at most 8 at once, the faintest wait). The painted light dims to the lights
+    file's [night] level x tint away from the lamps on at night; around those (night or both, baked) the painting keeps
+    [night] lamps of its light within their range. The emissive glows come on. Characters lit by the room dim the same way.
+  - A field's own time: time = cycle | day | night in its _pbr.txt (yours: fieldprep keeps it). day or night fixes it, and
+    the clock waits while you're there (battles from it too), then goes on.
+  - Testing: Ctrl+F7 swaps day and night, Ctrl+F8 pauses the clock, Ctrl+F9 runs it at 1x, 10x, 60x, Ctrl+F6 jumps to 5 s
+    before the next fade (DAY_NIGHT_KEYS). A thin bar across the top shows the cycle and the clock while it's paused or
+    sped up, and after a key (DAY_NIGHT_BAR). The log says what each key did and the time.
+  - Not tied to game saves yet (loading an older save keeps the current time). Battles, the world map and non-PBR fields
+    have no night look yet: they only move the clock.
+Lights files
+  - [night]: level (0.18), tint (0.6 0.7 1.0), lamps (0.9), for the whole field. Written by fieldprep, kept on --relight.
+  - time = day | night now works: day and night lights cross-fade with the clock.
+Shaders
+  - demaster_field.frag and demaster_chara.frag: the night (demasterNight, demasterNightTint; demasterLightFlicker.w marks
+    the night's lamps). Copy DEMASTER_EXP\shaders\ from this release.
+DEMASTER and fieldprep
+  - Read layer images exported by PuPu as well as FME's. The two tools name some layers differently (bdifrit1: FME's
+    00CFF000/00C00000/00901000/01902000 are PuPu's 004FF000/00400000/00101000/01102000) and size them differently: FME
+    makes every image the field's whole render area (bdifrit1 400x248), PuPu each layer the box around its tiles and the
+    field's centre (bdifrit1: main and lava 336x240, 01102000 and 02103000 368x144). Per tile, the PuPu-named file at
+    PuPu's size is used, else the FME-named file at FME's size. A folder can mix the two. PuPu's rule was checked
+    against PuPuSharp's code on bdifrit1 and 300 random .map files.
+  - A layer image whose size fits neither tool's frame (at a whole scale) is reported and not used; its tiles keep the
+    game's pixels. Missing layers are listed by both names.
+fieldprep
+  - The field's canvas (the whole-field maps, the lights, the camera) is FME's render area when every image is FME's,
+    else the box around the opaque layers' pictures: bdifrit1 from PuPu is 336x240 (1344x960 at 4x), so your maps
+    are no longer resized to FME's 1600x992.
+  - Maps made for the other frame (FME's canvas, or a layer picture's own) are cropped or padded into place by their
+    exact offset, not stretched. Per-layer maps and outputs (<field>_<pupu>_A, _LF, ...) are in that layer's picture's
+    frame, the same size as its layer image.
+  - Writes canvas = left top width height into _pbr.txt. The report says how many images are PuPu's and FME's and which
+    canvas it used.
+  - After an earlier run on PuPu images: run with --rebake and --relight (the old _O and lights were on FME's canvas).
+DEMASTER
+  - Reads the canvas from _pbr.txt (FIELD_PBR on); without it, FME's render area, as before. The FIELD_DEBUG summary line
+    says which canvas and how many images are PuPu's and FME's.
+Tests
+  - field_layers_test: PuPu's names and frames against PuPuSharp's code (tests/pupu_oracle, .NET), bdifrit1.map, pages
+    from PuPu pictures identical to pages from FME's. field_pbr_test: the canvas key. pbr_shader_test: reads the canvas.
+  - field_pbr_test: the clock, the lights on at each time, [night], time. pbr_shader_test: the painting at night with and
+    without a lamp. chara_shader_test: the room's light on characters at night.
+
+v15.7 - two large lights per time of day, up to six of yours; characters sent to the GPU once; instancing; emissive map
+---------------------------------------------------------------------------------------------------------------------------
+fieldprep
+  - Keeps at most 2 lights by day and 2 by night (--max-lights, at most 2): the ones that light the most of the field.
+    Small ones (a sconce, a lit sign) are left out, and the 2 are fitted again without those spots so they don't lean
+    towards them. The small spots are for the emissive map and your own lights.
+    --light-on and --light-on-share are gone: every light fieldprep keeps starts on (0.2, character shadows 0.5).
+  - Your own lights: up to 6 per time of day, written into _lights.txt (source = yours, or source left out) or marked in
+    _LIGHTS.png (marks count towards the 6). The ones you wrote are kept when the lights are found again (--relight or a
+    newer _LIGHTS.png). Files from before v15.7 have no source lines: all of it is taken as fieldprep's, so copy what you
+    added from <field>_lights_old.txt once.
+  - Says when a lights file has more than DEMASTER uses (the same warnings DEMASTER's log gives).
+  - orme (was ormh; the old name still works) packs <field>_ORME: AO, roughness, metallic and the emissive map in the
+    alpha (the height was there; nothing used it). The emissive map is your <field>_E.png (white: glows), else made from
+    _RESM: where the non-diffuse residual is most of the painting (a bulb, a lit screen, a sign), not where it's a sheen
+    or the light a lamp throws on a wall (--emissive-share, default 35%). Per layer: <field>_<pupu>_E.png.
+  - Keeps the lights file's [emissive] settings when it finds the lights again.
+Lights files
+  - source = found | mark | yours per light. Still up to 32 in a file.
+  - [emissive]: hue (degrees around the colour wheel), tint (r g b), strength, for all the field's glows. Written with
+    defaults (hue 0, tint 1 1 1, strength 1).
+DEMASTER
+  - At most 8 lights at a time (was 16): 2 of fieldprep's and 6 of yours. The field and character shaders loop over 8,
+    which is a bit cheaper per pixel. Fields with more: the first 2 found and the first 6 of yours are used.
+  - Field characters: the frame's models go to the GPU once (one vertex buffer and one index buffer per frame) and every
+    pass draws from there. Before, each pass sent them again from the game's memory (bvtr_3: about 1.1 MB about 7 times a
+    frame).
+  - Instancing (GL_ARB_draw_instanced, GL 3.1): all of a character's shadow maps in one draw, both of its reflection
+    pictures in one (bvtr_3: 6 draws instead of 18). Without it, one draw each as before; the log says which.
+  - Reads <field>_ORME first (its alpha: the emissive map), else an older _ORMH (its alpha left out). The glows show
+    nothing by day (the painting has them); they are for the day/night cycle. FIELD_PBR_VIEW=16 shows them as they'll
+    look at night (with [emissive]'s hue, tint and strength), 17 the emissive map.
+Shaders (copy DEMASTER_EXP\shaders\ with the DLL)
+  - demaster_chara.vert/.frag, demaster_shadow.frag: the instanced path (the viewer and the mirror flag come from the
+    vertex shader now). demaster_field.frag: demasterORME, the glow, views 16 and 17.
+
+v15.6 - day and night lights
+-----------------------------
+fieldprep
+  - Finds the night's lamps in _RESM (what the painting's glows give off) the same way it finds the day's in the painting's
+    light. A lamp found in both at the same place is one lamp on day and night. No _RESM: no night lights.
+  - <field>_LIGHTS.png is painted on black: green a day lamp, blue a night lamp, cyan one on day and night, red keeps lamps
+    (day and night) away. Other colours are ignored (copies of the field's pictures as a background are no longer read).
+Lights files
+  - time = day | night | both per light (left out, as in older files: both). Up to 32 lights in a file, day and night
+    together; at most 16 on at a time (v15.7: 8).
+DEMASTER
+  - Shows the day: night-only lights are left out until there is a day/night cycle. Nothing else changed.
+
+v15.5 - fieldprep: the large and strong lights on, the small faint ones off; marks on any of the field's pictures
+--------------------------------------------------------------------------------------------------------------
+  - fieldprep measures how much of the field each light it finds lights (where it adds a tenth or more to the ambient
+    there). Lights reaching a quarter of the field or more (--light-on, default 25; 0: all on) start on, at 0.2 and with
+    character shadows, and so do small ones that explain a tenth or more of the room's light (--light-on-share, default
+    10: a bright sconce). Small faint ones start off. Each light's comment says how much of the light it explains, how
+    much of the field it lights, and whether it's on. Your marked lamps are always on.
+  - <field>_LIGHTS.png can be painted on black or on a copy of <field>.png, _RESM, _BL, _AM or _N: on a copy, that
+    picture's own greens and reds aren't taken for marks.
+  - DEMASTER itself is unchanged.
+
+v15.4 - fieldprep: found lights on again
+----------------------------------------
+  - Lights fieldprep finds start on again, as before v15.3: intensity 0.2 (--light-intensity) and character shadows at
+    the usual 0.5 for a painted light. v15.3 wrote intensity 0 and shadow 0, so every light had to be turned on by hand.
+    Fields prepared with v15.3: run fieldprep --relight again (or set intensity and remove the shadow line by hand).
+  - DEMASTER itself is unchanged.
+
+v15.3 (demaster.conf 1.5.2a) - depth fixed, faster, lights found by inverse lighting
+------------------------------------------------------------------------------------
+New settings (demaster.conf, after FIELD_PBR_DEPTH):
+  FIELD_PBR_QUALITY=medium  low (integrated graphics), medium (GTX 1060 class), high
+  FIELD_GL_TRACK=1          the OpenGL state remembered as the game sets it, instead of asked of the driver around every draw
+
+Depth (bvtr_3: the black band, the ticker across the screen, Zell seen through the door)
+  - v15 wrote each background pixel's own depth (pushed back from _ND). Pushed-back tiles fell behind other tiles: the
+    ceiling went behind the black backdrop and the ticker drawn after it, the door behind Zell. Now every tile keeps the
+    game's own depth exactly, so tiles can't change places, and the GPU can skip hidden pixels again.
+  - FIELD_PBR_DEPTH now works the other way round: DEMASTER copies the characters' depth right after drawing them, and a
+    background pixel only lets a character through where the character stands between the tile and what that pixel really
+    shows (the floor inside a pillar's tile). "Really shows" is measured from each tile's own nearest part (a tenth of its
+    pixels nearer, so a sliver of door frame in a door's tile doesn't count), not per .map Z, with a 15% margin.
+  - FIELD_PBR_VIEW 14 shows how far each pixel is behind its tile's nearest part.
+
+Speed
+  - The character draws (219 a frame in bvtr_3) each asked the driver about 35 things (blend, depth, uniforms...); with a
+    threaded driver every question waits for the driver. FIELD_GL_TRACK keeps a copy of that state from hooks on the calls
+    that set it; it checks itself against the driver now and then and goes back to asking if they ever differ (logged).
+  - The field files that run every frame are built optimised (the project only has a Debug build); buffers are reused
+    instead of made for every draw; the background draws read their vertices in one go.
+  - FIELD_PBR_QUALITY sets shadow maps (how many, one or four samples), reflections, and how many steps the checks for
+    walls between a surface and an added light take, on the background and on the characters.
+  - Lights that add nothing cost nothing per pixel; found lights now start that way (below).
+  - Ctrl+F11's frame log says how long DEMASTER's steps took: CPU (average of the frames before) and GPU (that frame).
+
+fieldprep: lights by inverse lighting
+  - The old finder took bright spots (lamps' highlights on a shiny floor, signs) for lights and missed lamps whose fixture
+    isn't brighter than its pool. Now it fits point lights to the painting's diffuse light (_BL, else the lightmap) with
+    your normal and depth maps: the few lights, in view or out of it, whose n.l / r^2 light over the room best explains it
+    on top of a smooth ambient (greedy, non-negative least squares, each light moved to where it fits best). Each light's
+    comment says how much of the light it explains. --light-share sets how much a light must explain (2%).
+  - Found lights start off: intensity 0, shadow 0. Turn on the ones you want. (v15.4 turns them on again.)
+  - <field>_LIGHTS.png: your marks on a copy of the field. Pure green dots add a lamp; pure red keeps lamps (and the fit)
+    away from that part. Newer than _lights.txt: the lights are found again; the old file stays as <field>_lights_old.txt
+    (--relight keeps it too).
+  - To get the new lights on a field you've prepared: fieldprep --relight <folder> (your edited _lights.txt is kept as
+    _lights_old.txt: copy flicker and follows settings back from it).
+
+Tests
+  - tests/field_depth_test.cpp (new, Mesa): the nearest-part pass and the stepping aside, door, pillar and tile order cases.
+  - tests/field_pbr_test.cpp: inverse lighting on a box room with two lamps, and the marks.
+
+v15.2 - PBR backgrounds and characters off with an older main.frag
+-------------------------------------------------------------------
+  - With the v13/v14 main.frag still in the game's DEMASTER_EXP\shaders\, v15 took the game's background program for one
+    of its own (the old main.frag has the same PBR uniform names as demaster_field.frag), so it never drew the PBR pages:
+    the backgrounds showed their bare albedo, and with no PBR page drawn the characters were left to the game. The game's
+    main.frag is now recognised first, old or new (the log says when it is the old one), and the frame log names it right.
+  - Field model atlases are found from the model images the game copies into them (the copy must be the whole image),
+    not from the texture type the game last loaded: that stays "field model" while the background pages are made, so
+    background pages could have been taken for model atlases.
+
+v15.1 - fieldprep and fields with one .map per language
+-------------------------------------------------------
+  - Fields with text in their background (bvtr_3, for one) have only <field>_<language>.map in the game's archive, no
+    plain <field>.map. fieldprep looked only for the plain one when the images have no language in their names. It now
+    takes the images' language, else the plain .map, else English's, else any other language's, and says which.
+  - The camera and walkmesh (.ca, .id) are read from the archive even when the .map comes from the field's folder.
+  - When no .map can be found or read, the error says why and lists what the field's archive holds.
+  - DEMASTER itself is unchanged.
+
+v15 (demaster.conf 1.5.1a) - PBR for field characters and models
+---------------------------------------------------------------
+New settings (demaster.conf, after FIELD_PBR_VIEW):
+  FIELD_PBR_DEPTH=1        PBR backgrounds hide characters per pixel (from _ND), never nearer than the tile's own Z
+  FIELD_PBR_SHADOWS=1      character shadows from the field's lights, contact darkening, room shadows for added lights
+                           (replace the game's round shadows; their size and darkness are kept)
+  FIELD_PBR_REFLECTIONS=1  characters and 3D models reflected in glossy and metal background surfaces
+  FIELD_PBR_CHARACTERS=1   characters lit by the room's light grid, the field's lights and their own maps
+  FIELD_AVATARS=0          face pictures of each character, Ctrl+F10 saves them to DEMASTER_EXP\avatars\
+  FIELD_PBR_VIEW           new views: 11 room light on characters, 12 shadows, 13 reflections, 14 depth pushed back,
+                           15 character normals
+
+Backgrounds
+  - PBR pages are drawn with DEMASTER's own program (DEMASTER_EXP\shaders\demaster_field.vert/.frag), only for those
+    draws; the game's main.frag is back to what it was plus FIELD_SMOOTH. Copy every file in DEMASTER_EXP\shaders\.
+  - Per-pixel depth for PBR tiles (FIELD_PBR_DEPTH): the floor inside a pillar's tile no longer hides characters.
+  - Sky: layers that scroll on their own are found while drawing and treated as sky; "sky = 1" in _pbr.txt for a sky
+    painted into the foreground's layer.
+  - Lights can follow the game's background light groups: "follows = <group>" and "on_states = ..." in _lights.txt
+    (lamps switching on, alarm pulses, animated fires). English/European game only for now.
+  - "shadow = 0-1" per light: how much a character's shadow takes away from it (painted lights 0.5 by default).
+  - Room shadows: walls and pillars block the lights you add (stepping across the whole field's _ND).
+
+Characters and field models
+  - DEMASTER collects every model the game draws in a frame and draws them itself right before the background, in the
+    game's order and with the game's state: smooth normals over the whole model, lit by the room, the round shadows and
+    the game's script entities tell twins apart. 145 draws in bvtr_1 become a handful.
+  - The whole model: on PBR fields with shadows, reflections or avatars on, the game's own back-face removal is turned
+    off (two 6-byte jumps, turned back on in every other field); the GPU hides back faces on screen instead.
+  - The game's darkening of characters (ambientColor): its settled value is replaced by the room's light; later changes
+    from scripts are kept. "character_shade = keep" in _pbr.txt keeps the game's value; "character_light = auto/<n>" sets
+    how bright the room makes them.
+  - Model textures: d001_0.dds (newer than the PNG) goes into the model's atlas with all its mip levels; filtering is
+    nearest inside a level (no softening), blending only between your levels at a distance.
+  - Model PBR maps next to each image: <image>_N (normal, green up; alpha free) and <image>_ORME (AO, roughness, metallic,
+    emissive). Mirrored and rotated UV islands are handled per pixel (cotangent frame).
+
+fieldprep
+  - Writes <field>_PROBES.dds (the room's light in 3D for the characters), per-Z depth measurements, the game's depth
+    scale check, the camera and the world's up, sky_value and probe_depth into _pbr.txt. Keeps your sky,
+    character_shade and character_light. Run it again on fields made with v13/v14.
+
+Fixes
+  - The DDS loader uploaded every mip level at the full size (smaller levels never arrived).
+  - No more false warnings about "program 7" (the round-shadow shader drawing with a field page bound).
+  - Missing line breaks in the log ("OpenGL version", "New hash for textureId").
+  - The frame log (Ctrl+F11) notes where DEMASTER drew the characters and which round shadows it left out, and names
+    DEMASTER's own programs.
+
+Tests
+  - tests/chara_shader_test.cpp (new): every DEMASTER program compiles and links; with the room's light off the
+    character shader draws exactly what main_char.frag draws; the reflection pictures come out the right way round.
+  - tests/field_chars_test.cpp (new), tests/field_pbr_test.cpp and tests/pbr_shader_test.cpp updated.
+
+v14
+---
+  - FIELD_FRAME_LOG: Ctrl+F11 writes down everything the game draws in one frame (draws, shaders, state, vertices,
+    buffers, textures) into DEMASTER_EXP\frame_log\.
+
+v13 (demaster.conf 1.5.0a)
+--------------------------
+  - FIELD_PBR: PBR field backgrounds (albedo x lightmap, flicker, added lights with normals, roughness, metallic, AO).
+  - fieldprep.exe: makes the PBR files from your Marigold/CHORD maps.
+
+Earlier
+-------
+  - FIELD_LAYERS (field backgrounds from Field-Map-Editor's layers), FIELD_SMOOTH, FIELD_BG_RESOLUTION, live reload, and
+    the world vehicles module: see README_field_layers.md and README.md.

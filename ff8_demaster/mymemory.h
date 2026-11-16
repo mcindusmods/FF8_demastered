@@ -17,7 +17,11 @@ enum ADDRESS_NAME
    _BHPBACKADD1, _BHPBACKADD2, _BHPBACKADD3, NEWGLTEX_CHARA, BCPBACKADD1, BCPBACKADD2, BCPBACKADD3, CLTBACKADD1, CLTBACKADD2, UPLOADVRAM, IOFUNC1,
    IOFUNC2, IOFUNC3, IOFUNC4, IOFUNC5, IOFUNC6, FILTERPATCH1, FILTERPATCH2, FILTERPATCH3, FILTERPATCH4, WINDOWTITLE, NULLSUB_DEBUG,
 BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, SUB_116059B0, LOAD_BATTLE_EXT, SKIP_SLASHSCREEN,
-	/*SUB_BATTLESWIRL_SLEEP*/MORE_DEBUG_LOG, SET_RESOLUTION
+	/*SUB_BATTLESWIRL_SLEEP*/MORE_DEBUG_LOG, SET_RESOLUTION, FILTERPATCH2_VALUE, WMSET014_PATH_PUSH,
+	GUEST_STACK_BASE, GUEST_PAGE_TABLE, GUEST_LOADIMAGE, WMSET_GUEST, WM_CHARA_READ_CALL, WM_READ_FILE, FIELD_READ_FILE,
+	PSX_VRAM, READ_VRAM_PALETTE, WRITE_PALETTE,
+	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
+	ADDRESS_NAME_COUNT //keep last
 };
 
 enum ADDRESS_NAME_STEAM
@@ -25,22 +29,37 @@ enum ADDRESS_NAME_STEAM
 	Magic_GetIDLoad_107FDF20,
 };
 
+// Which game DLL we were loaded into. Detected at runtime in DllMain (FFVIII_EFIGS.dll or FFVIII_JP.dll),
+// so one ff8_demaster.dll serves both languages. Defining JAPANESE_PATCH=1 at compile time only changes the
+// preferred module that is probed first; it no longer selects a different address table at compile time.
+enum class GameLanguage
+{
+	Unknown,
+	EFIGS,
+	Japanese
+};
+inline GameLanguage g_gameLanguage = GameLanguage::Unknown;
+inline bool IsJapanese() { return g_gameLanguage == GameLanguage::Japanese; }
+
 void InitTable(unsigned int baseAddress);
 //Forcing _stdcall for assembler PUSH based CALLS for EAX as return value and stack cleaned by function
+//Returns 0 (and logs once) when the address is not known for the running game language/version.
+//Callers that patch code must check HasAddress() first for anything that is not in both tables.
 unsigned int _stdcall GetAddress(const ADDRESS_NAME name);
 unsigned int _stdcall GetAddressBase(const ADDRESS_NAME name);
 unsigned int _stdcall GetAddressFromSteam(const ADDRESS_NAME_STEAM name);
+bool HasAddress(ADDRESS_NAME name);
+const char* GetAddressName(ADDRESS_NAME name);
 
 #define FORCEGAME 3
-//#define JAPANESE_PATCH 1 - see VS compiler settings
 
 //doing enum and address hardcoding at once? any ideas? also no double declaration, hmm...
 //Use Excel for auto-generating such lines- no one is going to type this by hand lol
 
-const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS =
+// FFVIII_EFIGS.dll (English, French, German, Italian, Spanish)
+const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 {
-#ifndef JAPANESE_PATCH
-   //KEY-ENUM		//VANILLA, 1010, 1020, ??? - all are for english- for japanese this list should be eventually swapped to other map
+   //KEY-ENUM		//VANILLA, 1010, 1020, 1030 (FORCEGAME = 3)
 	{ _ASM_FIELDBGRETADDR2 , std::vector<unsigned int>{ 0x0       , 0x1606540 , 0x1606e20 ,0x1606A20,} },
 	{ _ASM_FIELDBGRETADDR3 , std::vector<unsigned int>{ 0x0       , 0x1591B75 , 0x1592185 ,0x1591EA5,} },
 	{ _BHPBACKADD1         , std::vector<unsigned int>{ 0x0       , 0x157DA5D , 0x157decd ,0x157DFBD,} },
@@ -75,7 +94,47 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS =
 	{ FIELDCHARENT1        , std::vector<unsigned int>{ 0x0       , 0x160C43A , 0x160cd1c ,0x160C8DA,} },
 	{ FIELDCHARENT2        , std::vector<unsigned int>{ 0x0       , 0x160C467 , 0x160cd47 ,0x160C907,} },
 	{ FILTERPATCH1         , std::vector<unsigned int>{ 0x0       , 0x15693EF , 0x156987f ,0x156985F,} },
+	//FILTERPATCH2 points at "push GL_TEXTURE_MIN_FILTER" (the parameter name), not at the GL_LINEAR value 5 bytes
+	//earlier, so LINEAR_PATCH turns that call into an invalid glTexParameteri. Kept as is so the look does not
+	//change; FILTERPATCH2_VALUE is the value push, used when LINEAR_PATCH_MIN_FILTER=1 (checked on 1.0.3.0).
 	{ FILTERPATCH2         , std::vector<unsigned int>{ 0x0       , 0x1569409 , 0x1569899 ,0x1569879,} },
+	{ FILTERPATCH2_VALUE   , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1569874,} },
+	//push "FIELD.FS\field_hd_new\wmset_014_0" in Remastered's HD loader (type 18 case), see REMASTER_WMSET014
+	{ WMSET014_PATH_PUSH   , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1606AD4,} },
+	//World map textures by name (WORLD_VEHICLES). Remastered runs the 2000 PC game code as a static recompilation: every
+	//original function exists as a host function taking the emulated CPU state, and a table at RVA 0x16EED10 maps the
+	//original (US 2000) addresses to them. Guest data is reached through GUEST_PAGE_TABLE (DWORD per 4 KB page), the
+	//guest stack through the flat base stored at GUEST_STACK_BASE.
+	//  GUEST_LOADIMAGE:    host function of 0x45BD30, LoadImage(RECT*, data): every copy of texels into VRAM (hooked at entry)
+	//  WMSET_GUEST:        guest address (not an RVA) where the world map keeps wmsetXX.obj (0x542DA0 reads its 48 sections there)
+	//  WM_CHARA_READ_CALL: E8 call in 0x653410 (world chara.one loader) -> WM_READ_FILE = 0x52D380 (read)
+	{ GUEST_STACK_BASE     , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x16CB5E0,} },
+	{ GUEST_PAGE_TABLE     , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x188EDD0,} },
+	{ GUEST_LOADIMAGE      , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x021B5C0,} },
+	{ WMSET_GUEST          , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1E9DC3C,} },
+	{ WM_CHARA_READ_CALL   , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0D7CFB1,} },
+	{ WM_READ_FILE         , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x086F1B0,} },
+	//Field backgrounds from layers (FIELD_LAYERS): host function of 0x52D400, sm_pc_read(filename, buffer), every file the
+	//game reads; read_field_data (0x471010, the caller of Remastered's hook_get_field_ext) calls it 16 times, the .map among them
+	{ FIELD_READ_FILE      , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x086F400,} },
+	//FIELD_LAYERS: guest address (not an RVA) of the game's PlayStation VRAM, 1024x512 16-bit (psxvram_buffer; read_vram_palette
+	//0x467370 reads a CLUT at PSX_VRAM + y * 2048 + x * 2)
+	{ PSX_VRAM             , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1B47818,} },
+	//FIELD_LAYERS: which CLUT the game loads into each palette slot of a texture. Hosts of read_vram_palette(clut, bgra, size)
+	//0x467370 and write_palette_to_driver(src_offset, size, rgba, dest_offset, texture_set) 0x467310 (FFNx's names), both
+	//called only from write_palette_texture_set 0x466190
+	{ READ_VRAM_PALETTE    , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x024B5E0,} },
+	{ WRITE_PALETTE        , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x024B450,} },
+	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
+	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
+	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
+	{ FIELD_CULL_QUAD      , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x088A4F6,} },
+	//guest addresses (not RVAs): the pointer to the field's script entities (612 bytes each: position s32 x 3 >> 12 at 0x190,
+	//model 0x218, facing 0x241, shade 0x259-0x261) and their count (byte); the background light groups (BGANIME/BGSHADE
+	//state per group: R, G, B (128 = as painted), the frame shown)
+	{ FIELD_ENTITIES       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1D9CF88,} },
+	{ FIELD_ENTITY_COUNT   , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1D9D019,} },
+	{ FIELD_BG_GROUPS      , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1A77238,} },
 	{ FILTERPATCH3         , std::vector<unsigned int>{ 0x0       , 0x156A348 , 0x156a7d8 ,0x156A7B8,} },
 	{ FILTERPATCH4         , std::vector<unsigned int>{ 0x0       , 0x156A359 , 0x156a7e9 ,0x156A7C9,} },
 	{ IOFUNC1              , std::vector<unsigned int>{ 0x15D41EB , 0x364CC   , 0x364cc ,0x364CC,} },
@@ -114,7 +173,18 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS =
 	{ MORE_DEBUG_LOG      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x351D0,} },
 	{ SET_RESOLUTION, std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x2190D0,} },
 	//{ SUB_BATTLESWIRL_SLEEP      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x1581790,} },
-#else
+};
+
+// FFVIII_JP.dll. Checked against FFVIII_JP.dll 1.0.3.0 (sha256 36201046...d057) with tools/verify_addresses.py and
+// tools/port_addresses.py (EFIGS -> JP port reproduces 55 of these entries exactly). Changes from Maki's table:
+//   FIELDCHARENT1 0x163E2CC -> 0x163E2CA (old value is a "push esi"; patching it corrupted code)
+//   SUB_116059B0  0x1638422 -> 0x1637310 (function start; the JP offsets 0x130F/0x1320 now hit the 0x300 operands)
+//   added SET_RESOLUTION, SKIP_SLASHSCREEN, BHP_ATLAS, MORE_DEBUG_LOG, FILTERPATCH2_VALUE, WMSET014_PATH_PUSH
+//   world textures: the JP DLL recompiles the JP 2000 exe (other guest addresses: LoadImage 0x45BD30 -> 0x45C760,
+//   0x52D380 -> 0x531240, wmset kept at 0x23A1D1C by 0x546E80), found through the same renderer calls
+// An address missing for a language makes GetAddress() return 0 and the feature is skipped.
+const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
+{
 {NULLSUB_DEBUG        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x33E50   , 0x33E50   }},
 {IOFUNC1              , std::vector<unsigned int>{ 0x0 , 0x0 , 0x3649C   , 0x3649C   }},
 {IOFUNC6              , std::vector<unsigned int>{ 0x0 , 0x0 , 0x3653A   , 0x3653A   }},
@@ -164,7 +234,7 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS =
 {DISABLETPAGELIMIT    , std::vector<unsigned int>{ 0x0 , 0x0 , 0x16388B7 , 0x16382F7 }},
 {BCPBACKADD1          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x16389DF , 0x163841F }},
 {NEWGLTEX_CHARA       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x163DAC0 , 0x163D500 }},
-{FIELDCHARENT1        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x163E88C , 0x163E2CC }},
+{FIELDCHARENT1        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x163E88C , 0x163E2CA }},
 {FIELDCHARENT2        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x163E8B7 , 0x163E2F7 }},
 {FCPBACKADD2          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x163E8FD , 0x163E33D }},
 {BHP                  , std::vector<unsigned int>{ 0x0 , 0x0 , 0x167A558 , 0x1679F98 }},
@@ -181,19 +251,42 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS =
 { CHANGEMODE      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x16327C0,} }, //+1FC for JP and EFIGS
 { STEAMADDR      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x16FED48,} }, //+1FC for JP and EFIGS
 { FIELD_CHAR_BLINK      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x1637192,} }, 
-{ SUB_116059B0      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x1638422,} }, //todo 
-{ LOAD_BATTLE_EXT      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x1635F20,} }, //todo
-#endif
+{ SUB_116059B0      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x1637310,} },
+{ LOAD_BATTLE_EXT      , std::vector<unsigned int>{ 0x0       , 0x0 , 0x0 ,0x1635F20,} },
+{ SET_RESOLUTION       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x219D70 }},
+{ SKIP_SLASHSCREEN     , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x1793B97 }},
+{ BHP_ATLAS            , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x1631180 }},
+{ MORE_DEBUG_LOG       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x35260 }},
+{ FILTERPATCH2_VALUE   , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x159FE74 }},
+{ WMSET014_PATH_PUSH   , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x1638356 }},
+{ GUEST_STACK_BASE     , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x16DB880 }},
+{ GUEST_PAGE_TABLE     , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x18A09A0 }},
+{ GUEST_LOADIMAGE      , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x021C260 }},
+{ WMSET_GUEST          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x23A1D1C }},
+{ WM_CHARA_READ_CALL   , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x0E01B61 }},
+{ WM_READ_FILE         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x08A97B0 }},
+//sm_pc_read is 0x5312C0 in the JP game (read_field_data 0x474200, the caller of hook_get_field_ext_jp, calls it 17 times)
+{ FIELD_READ_FILE      , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x08A9A00 }},
+//guest address, same use (the JP read_vram_palette is host 0x24C240)
+{ PSX_VRAM             , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x204D7B0 }},
+//guests 0x467DA0 and 0x467D40, called only from 0x466BC0
+{ READ_VRAM_PALETTE    , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x024C240 }},
+{ WRITE_PALETTE        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x024C0B0 }},
+//the same cull jumps and entity table in the JP game (the light group table is not known there: lights cannot follow groups)
+{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x08C4482 }},
+{ FIELD_CULL_QUAD      , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x08C4AA6 }},
+{ FIELD_ENTITIES       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x22A1068 }},
+{ FIELD_ENTITY_COUNT   , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x22A10F9 }},
 };
 
 
 
 
-const std::map<ADDRESS_NAME_STEAM, unsigned int> PATCHADDRESSSTEAM =
+const std::map<ADDRESS_NAME_STEAM, unsigned int> PATCHADDRESSSTEAM_EFIGS =
 {
-#ifndef JAPANESE_PATCH
 	{ Magic_GetIDLoad_107FDF20 , 0x8580 },
-#else
+};
+const std::map<ADDRESS_NAME_STEAM, unsigned int> PATCHADDRESSSTEAM_JP =
+{
 	{ Magic_GetIDLoad_107FDF20 , 0xFFFFFFFF },
-#endif
-	};
+};

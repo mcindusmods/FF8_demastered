@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- fieldprep.exe: gets field backgrounds ready for DEMASTER's PBR lighting. Built next to ff8_demaster.dll by
+     build_demaster.bat, as a 64-bit program (8x fields need more memory than 32 bits allow). It shares DEMASTER's field code (field_layers, field_pbr) but is not part of the DLL. -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <ProjectGuid>{3F1C2B7A-5D84-4E21-9B6A-0C7E5A1D2F90}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>fieldprep</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <!-- the configuration is called Debug to match the DLL's, but fieldprep is built optimized: it crunches big images -->
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(SolutionDir).build\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir).build\obj\fieldprep\</IntDir>
+    <TargetName>fieldprep</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnabled>false</VcpkgEnabled>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;NOMINMAX;WIN32;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <OptimizeReferences>true</OptimizeReferences>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="prep.cpp" />
+    <ClCompile Include="image_io.cpp" />
+    <ClCompile Include="archive.cpp" />
+    <ClCompile Include="third_party\lodepng.cpp" />
+    <ClCompile Include="third_party\bc7enc.cpp" />
+    <ClCompile Include="third_party\bc7decomp.cpp" />
+    <ClCompile Include="..\ff8_demaster\field_layers.cpp" />
+    <ClCompile Include="..\ff8_demaster\field_pbr.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="prep.h" />
+    <ClInclude Include="image_io.h" />
+    <ClInclude Include="archive.h" />
+    <ClInclude Include="third_party\lodepng.h" />
+    <ClInclude Include="third_party\bc7enc.h" />
+    <ClInclude Include="third_party\bc7decomp.h" />
+    <ClInclude Include="..\ff8_demaster\field_layers.h" />
+    <ClInclude Include="..\ff8_demaster\field_pbr.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

@@ -85,9 +85,10 @@ void RenderUncompressedTexture(const bimg::ImageContainer* img, const TextureFor
 		width = bx::uint32_max(1, width);
 		height = bx::uint32_max(1, height);
 
+		//every level at its own size (each used to go up at the full size, so the smaller levels never arrived)
 		if (bimg::ImageMip mip{}; imageGetRawData(*img, 0, lod + startLod, img->m_data, img->m_size, mip))
 			glTexImage2D(GL_TEXTURE_2D, lod, static_cast<GLint>(texInfo.m_internalFmt)
-				, static_cast<GLsizei>(img->m_width), static_cast<GLsizei>(img->m_height), 0
+				, static_cast<GLsizei>(mip.m_width), static_cast<GLsizei>(mip.m_height), 0
 				, texInfo.m_fmt, texInfo.m_type, mip.m_data);
 	}
 }
@@ -108,9 +109,10 @@ void RenderCompressedTexture(const bimg::ImageContainer* img, const TextureForma
 		width = bx::uint32_max(1, width);
 		height = bx::uint32_max(1, height);
 
+		//every level at its own size (each used to go up at the full size with the small level's bytes: GL refused them)
 		if (bimg::ImageMip mip{}; bimg::imageGetRawData(*img, 0, lod + startLod, img->m_data, img->m_size, mip))
-			glCompressedTexImage2D(GL_TEXTURE_2D, lod, texInfo.m_internalFmt, static_cast<GLsizei>(img->m_width)
-			                       , static_cast<GLsizei>(img->m_height), 0, static_cast<GLsizei>(mip.m_size),
+			glCompressedTexImage2D(GL_TEXTURE_2D, lod, texInfo.m_internalFmt, static_cast<GLsizei>(mip.m_width)
+			                       , static_cast<GLsizei>(mip.m_height), 0, static_cast<GLsizei>(mip.m_size),
 			                       mip.m_data);
 	}
 }

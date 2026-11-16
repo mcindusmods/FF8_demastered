@@ -78,6 +78,11 @@ inline DWORD* tex_struct;
 inline DWORD* gl_textures;
 inline DWORD pixelsPtr;
 inline DWORD texturesPtr;
+//Width and height (EDI, ESI) of the page the game is about to upload in _bsp; pixels are BGRA8
+inline DWORD uploadWidth;
+inline DWORD uploadHeight;
+//[EBP-4] in the upload function: 2 = the game re-renders this world/battle page at 2x with a shader after upload
+inline DWORD gameUpscaleFactor;
 
 inline DWORD TEX_TYPE;
 
@@ -106,7 +111,55 @@ static enum Modes
 
 DWORD WtpCheck();
 void WtpGl();
+//World map vehicles (texturepatch_v2_worldVehicles.cpp)
+void ApplyWorldVehiclesPatch();
+//textureIndex: GetTextureIndex() (the page has a wmset_XXX / wmset0_XXX file under it when it equals tPage)
+bool WorldVehiclesBuildPage(DWORD tPage, int textureType, int textureIndex, int palette);
+void WorldDumpPage(int textureType, DWORD tPage, int palette);
+bool WorldVehiclesUploadPending();
 void FbgGl();
+//Field backgrounds from Field-Map-Editor's layers (texturepatch_v2_fieldLayers.cpp)
+void ApplyFieldLayersPatch();
+bool ApplyFieldBgResolution(); //false: FIELD_BG_RESOLUTION is 4 (or not 6/8) or unexpected code (DEMASTER's 4x stays)
+bool FieldLayersBuildPage(DWORD tPage, int textureType, const DWORD* texHeader); //the upload's tex_header
+bool FieldLayersUploadPending();
+void FieldLayersBeforeDraw(int count, unsigned int type, const void* indices); //the draw's
+void FieldLayersAfterDraw();
+//Field characters and models with PBR backgrounds (texturepatch_v2_fieldChars.cpp): true when DEMASTER takes the draw (it
+//draws the characters itself, before the next thing the game draws)
+bool FieldCharsDraw(unsigned int mode, int count, unsigned int type, const void* indices);
+void FieldCharsSwap(); //SwapBuffers
+void FieldCharsMapRead(bool pbrField); //game thread, a field's .map was read (with PBR files or not)
+//Field model textures (texturepatch_v2_fieldModelMaps.cpp)
+bool FieldModelTexImage(unsigned int texture, int width, int height, const void* data); //glTexImage2D of the game, after it
+void FieldModelTexSubImage(unsigned int texture, int x, int y, int width, int height); //glTexSubImage2D of the game, after it
+int FieldModelFilter(unsigned int texture, unsigned int name, int param); //glTexParameteri: the value to use
+bool FieldModelMaps(unsigned int texture, unsigned int& normal, unsigned int& orme); //the atlas's _N and _ORME (0: none)
+//FIELD_FRAME_LOG (frame_log.cpp)
+void FrameLogDraw(unsigned int mode, int count, unsigned int type, const void* indices);
+void FrameLogSwap();
+void FrameLogCreateHooks();
+void FrameLogTextureFilled(unsigned int texture);
+void FrameLogNote(const char* format, ...); //a line about what DEMASTER did, in the frame being logged
+//How long DEMASTER's field steps take: CPU time every frame (QueryPerformanceCounter; the frame log writes the average of
+//the frames before the logged one), GPU time in the logged frame (timestamps between the steps)
+enum FieldTimeSlot
+{
+	TIME_CHARS_READ,     //reading the game's character draws (the glDrawElements hook)
+	TIME_CHARS_PREP,     //back into the room, smooth normals, which triangles are whose
+	TIME_CHARS_PICTURES, //the pictures reflections use, the face pictures
+	TIME_CHARS_SHADOWS,  //shadow maps
+	TIME_CHARS_SCREEN,   //the characters on the game's screen
+	TIME_CHARS_DEPTH,    //their depth copied for the background
+	TIME_PBR_SETUP,      //setting up DEMASTER's field program around each PBR background draw
+	TIME_LAYERS_HOOK,    //the field layers' glDrawElements hook (smoothing, the PBR setup inside it)
+	TIME_SLOTS
+};
+long long FieldTimeNow();
+void FieldTimeAdd(int slot, long long since); //the time from since (FieldTimeNow) to now goes to slot
+void FrameLogMark(const char* label); //a GPU timestamp in the logged frame
+void FieldLayersForgetTexture(unsigned int texture);
+bool FieldLayersHasFiles(const char* fieldBgName);
 
 void HookSetResolution();
 inline DWORD oSetResolution;

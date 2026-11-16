@@ -176,13 +176,15 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
       <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <CallingConvention>Cdecl</CallingConvention>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
-      <AdditionalDependencies>StackWalker.lib;glew32s.lib;opengl32.lib;psapi.lib;bxDebug.lib;bimgDebug.lib;bimg_decodeDebug.lib;bimg_encodeDebug.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>StackWalker.lib;glew32s.lib;glfw3.lib;opengl32.lib;psapi.lib;bxDebug.lib;bimgDebug.lib;bimg_decodeDebug.lib;bimg_encodeDebug.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>MSVCRT;MSVCRTD;LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ForceFileOutput>MultiplyDefinedSymbolOnly</ForceFileOutput>
       <AdditionalOptions>/IGNORE:4075,4099 %(AdditionalOptions)</AdditionalOptions>
@@ -252,8 +254,83 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClCompile Include="texturepatch_v2_battleScenery.cpp" />
     <ClCompile Include="texturepatch_v2_fieldBackground.cpp" />
     <ClCompile Include="texturepatch_v2_fieldChara.cpp" />
+    <ClCompile Include="texturepatch_v2_fieldLayers.cpp">
+      <!-- Only Debug configurations exist; it runs around every draw of a field, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="field_layers.cpp">
+      <!-- Only Debug configurations exist; field pages are put together on field loads, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_fieldPbr.cpp">
+      <!-- Only Debug configurations exist; it runs around every background draw, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_fieldChars.cpp">
+      <!-- Only Debug configurations exist; it reads and draws the field characters every frame, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_fieldModelMaps.cpp">
+      <!-- Only Debug configurations exist; model textures are put together while fields load, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="field_chars.cpp">
+      <!-- Only Debug configurations exist; the characters' normals are worked out every frame, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="day_night.cpp" />
+    <ClCompile Include="frame_log.cpp" />
+    <ClCompile Include="gl_state.cpp">
+      <!-- Only Debug configurations exist; its hooks run on every GL call that sets state, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <ClCompile Include="field_pbr.cpp">
+      <!-- Only Debug configurations exist; lights are worked out every frame, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
     <ClCompile Include="texturepatch_v2_world.cpp" />
+    <ClCompile Include="texturepatch_v2_worldVehicles.cpp" />
     <ClCompile Include="uvpatch.cpp" />
+    <ClCompile Include="world_vehicles.cpp">
+      <!-- Only Debug configurations exist; pages with vehicles are built on world map loads, so build this file optimized -->
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
     <ClCompile Include="zzz.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -289,6 +366,13 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClInclude Include="texture.h" />
     <ClInclude Include="texturepatch_battle_data.h" />
     <ClInclude Include="zzz.h" />
+    <ClInclude Include="world_vehicles.h" />
+    <ClInclude Include="field_layers.h" />
+    <ClInclude Include="field_pbr.h" />
+    <ClInclude Include="field_pbr_runtime.h" />
+    <ClInclude Include="field_chars.h" />
+    <ClInclude Include="gl_state.h" />
+    <ClInclude Include="day_night.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="minhook\dll_resources\MinHook.def" />
@@ -303,6 +387,9 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <VcpkgUseStatic>true</VcpkgUseStatic>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug_JP|Win32'">
     <VcpkgUseStatic>true</VcpkgUseStatic>
   </PropertyGroup>
 </Project>

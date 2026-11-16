@@ -1,9 +1,11 @@
 #include "coreHeader.h"
 
-unsigned int uvPatchAddresses[] =
+//Filled in ApplyUVPatch: a global initializer would run before the game language is detected in DllMain
+//and always pick the EFIGS addresses
+static constexpr ADDRESS_NAME uvPatchNames[] =
 {
-	GetAddress(UVPATCH0),GetAddress(UVPATCH1),GetAddress(UVPATCH2),GetAddress(UVPATCH3),GetAddress(UVPATCH4),GetAddress(UVPATCH5),
-	GetAddress(UVPATCH6),GetAddress(UVPATCH7),GetAddress(UVPATCH8),GetAddress(UVPATCH9),GetAddress(UVPATCH10),GetAddress(UVPATCH11),
+	UVPATCH0,UVPATCH1,UVPATCH2,UVPATCH3,UVPATCH4,UVPATCH5,
+	UVPATCH6,UVPATCH7,UVPATCH8,UVPATCH9,UVPATCH10,UVPATCH11,
 };
 
 BOOL uvPatchModMnemonic(DWORD address)
@@ -16,6 +18,8 @@ BOOL uvPatchModMnemonic(DWORD address)
 
 void ApplyUVPatch()
 {
+	if (!HasAddress(UVFUNCPNTR))
+		return;
 	BYTE* firstMnemonic = (BYTE*)(IMAGE_BASE + GetAddress(UVFUNCPNTR));
 	DWORD addMnemonic = *(DWORD*)firstMnemonic & 0xFFFFFF; //get mnemonic without parameter
 	if (addMnemonic != 0x084680)
@@ -23,7 +27,7 @@ void ApplyUVPatch()
 		OutputDebug("DEMASTER::ApplyUvPatch::The addresses are wrong! We found no ADD byte ptr[esi+8] at given rel call\n");
 		return;
 	}
-	for (int i = 0; i < 12; i++)
-		if (!uvPatchModMnemonic(IMAGE_BASE + uvPatchAddresses[i]))
+	for (const ADDRESS_NAME name : uvPatchNames)
+		if (!HasAddress(name) || !uvPatchModMnemonic(IMAGE_BASE + GetAddress(name)))
 			return;
 }
