@@ -29,6 +29,12 @@ namespace fieldprep
 		return !path.empty() && std::filesystem::is_regular_file(path, error);
 	}
 
+	std::string MasterImage(const std::string& stem)
+	{
+		const std::string png = stem + ".png", dds = stem + ".dds";
+		return FileExists(png) ? png : FileExists(dds) ? dds : std::string();
+	}
+
 	std::string NewestImage(const std::string& stem)
 	{
 		const std::string png = stem + ".png", dds = stem + ".dds";
@@ -250,7 +256,7 @@ namespace fieldprep
 		return true;
 	}
 
-	std::vector<uint8_t> EncodeBc7(const Image& image, const bool perceptual, int threads)
+	std::vector<uint8_t> EncodeBc7(const Image& image, const bool perceptual, int threads, const int quality)
 	{
 		static std::once_flag once;
 		std::call_once(once, [] { bc7enc_compress_block_init(); });
@@ -260,8 +266,8 @@ namespace fieldprep
 		bc7enc_compress_block_params_init(&params);
 		if (!perceptual)
 			bc7enc_compress_block_params_init_linear_weights(&params);
-		params.m_uber_level = 1;
-		threads = std::max(1, threads);
+		params.m_uber_level = static_cast<uint32_t>(std::clamp(quality, 0, static_cast<int>(BC7ENC_MAX_UBER_LEVEL)));
+		threads = std::clamp(threads, 1, std::max(1, bh));
 		const auto work = [&](const int first, const int step)
 		{
 			uint8_t block[64];
@@ -309,6 +315,64 @@ namespace fieldprep
 					}
 			}
 		return out;
+	}
+
+	bool SaveDdsLevels(const std::string& path, const std::vector<Bc7Level>& levels, const bool srgb, std::string& error)
+	{
+		if (levels.empty())
+		{
+			error = "no levels";
+			return false;
+		}
+		std::vector<uint8_t> out;
+		out.insert(out.end(), { 'D', 'D', 'S', ' ' });
+		const int width = levels[0].width, height = levels[0].height;
+		const int bw = (width + 3) / 4, bh = (height + 3) / 4;
+		Put32(out, 124);
+		Put32(out, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000); //caps, height, width, pixel format, mip count, linear size
+		Put32(out, static_cast<uint32_t>(height));
+		Put32(out, static_cast<uint32_t>(width));
+		Put32(out, static_cast<uint32_t>(bw * bh * 16));
+		Put32(out, 0); //depth
+		Put32(out, static_cast<uint32_t>(levels.size())); //mips
+		for (int i = 0; i < 11; i++)
+			Put32(out, 0);
+		Put32(out, 32); //DDS_PIXELFORMAT
+		Put32(out, 0x4); //fourCC
+		out.insert(out.end(), { 'D', 'X', '1', '0' });
+		for (int i = 0; i < 5; i++)
+			Put32(out, 0);
+		Put32(out, 0x1000 | (levels.size() > 1 ? 0x8 | 0x400000 : 0)); //texture (complex, mipmap)
+		for (int i = 0; i < 4; i++)
+			Put32(out, 0);
+		Put32(out, srgb ? 99 : 98); //DXGI_FORMAT_BC7_UNORM_SRGB, DXGI_FORMAT_BC7_UNORM
+		Put32(out, 3); //2D texture
+		Put32(out, 0);
+		Put32(out, 1); //array size
+		Put32(out, 0);
+		for (const Bc7Level& level : levels)
+		{
+			const size_t expected = static_cast<size_t>((level.width + 3) / 4) * ((level.height + 3) / 4) * 16;
+			if (level.blocks.size() != expected)
+			{
+				error = "a level's size doesn't match its blocks";
+				return false;
+			}
+			out.insert(out.end(), level.blocks.begin(), level.blocks.end());
+		}
+		std::ofstream file(path, std::ios::binary | std::ios::trunc);
+		if (!file)
+		{
+			error = "can't write " + path;
+			return false;
+		}
+		file.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+		if (!file)
+		{
+			error = "can't write " + path;
+			return false;
+		}
+		return true;
 	}
 
 	bool SaveDds(const std::string& path, const int width, const int height, const std::vector<uint8_t>& bc7, std::string& error)

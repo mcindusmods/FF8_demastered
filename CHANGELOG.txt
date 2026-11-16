@@ -1,5 +1,22 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.9 - fieldprep makes the DDS files: the field models' textures and every layer image
+---------------------------------------------------------------------------------------
+fieldprep
+  - fieldprep model <image or folder>: for the field models' textures (DEMASTER_EXP\textures\field.fs\field_hd_new). One
+    image (d001_0.png, or any of its maps) or the whole folder (every image with maps). From the PNGs next to the image:
+    d001_0.dds (albedo: d001_0_A.png, else d001_0.png; BC7 sRGB), d001_0_N.dds (from d001_0_N.png), d001_0_ORME.dds (from
+    d001_0_O/_R/_M/_E.png or a packed d001_0_ORME.png; missing ones plain). BC7 with every mip level: the albedo's in
+    linear light, see-through pixels not bleeding, cut-outs keeping their coverage (the game's 44% test); normals unit
+    length at every level; ORME's channels each on its own. Maps at another size are resized to the image. A DDS newer
+    than its PNGs is left alone (--force). Options: --flip-green, --quality 0-4 (default 2), --coverage. The folder's log
+    goes to fieldprep_model.txt.
+  - prep (and all) also writes every layer image as a BC7 DDS (<field>_<pupu>.dds: opaque, animated, glow and fog
+    layers), so the game's folder can hold DDS files only; a DDS newer than its PNG is left alone. --no-dds skips it.
+    fieldprep itself reads a layer's PNG when both are there (the DDS is BC7, a little off), else the DDS.
+Tests
+  - fieldprep_model_test (new); the DDS files also read back through bimg, DEMASTER's reader.
+
 v15.8 - layer images from PuPu (its names and sizes); day and night on PBR fields
 ---------------------------------------------------------------------------------
 Day and night (new: DAY_NIGHT in demaster.conf, on by default)

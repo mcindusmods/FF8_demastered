@@ -75,6 +75,7 @@ Plus:
 - `<field>_PROBES.dds`: the room's light in 3D, for the characters (a small 3D texture, about 0.5 MB). For points in front of the camera it stores how much light arrives from each direction (your painting's light, from its depth), and how much of it flickers.
 - `<field>_O.png` (baked AO, made only once so your edits survive), `<field>_pbr.txt` (canvas, camera, depth model, lightmap scales, depth measurements; rewritten every run, your three keys kept), `<field>_lights.txt` (written once, then yours) and `<field>_fieldprep_check.png`.
 
+- **Your layer images as DDS too (v15.9).** `prep` (and `all`) also writes every layer image as `<field>_<pupu>.dds` (BC7): the opaque layers, every animation state, and the glow and fog layers. A DDS newer than its PNG is left alone. Then the game's folder can hold DDS files only. DEMASTER still needs **every layer image** there, as a PNG or a DDS: it finds each layer, and where its tiles go, by its layer image, and only then looks for that layer's `_A`. A layer without its image is drawn with the game's own pixels and gets no PBR (the log says "layer image(s) not found"). fieldprep reads the PNG when both are there (the DDS is BC7, a little off), so keep the PNGs somewhere if you'll run fieldprep again; with only the DDS it works from that.
 - **BC7 DDS without texconv.** fieldprep writes BC7_UNORM DDS itself (bc7enc), always after the PNG. DEMASTER takes the newer of the two, as with layers: the DDS normally, the PNG while you edit it.
 - **The pair multiplies back to the painting.** The albedo is rounded to 8 bits first and the lightmap worked out from that. For the DDS pair, the lightmap is worked out from the albedo *after* BC7, so the albedo's compression error is cancelled. Measured on bvtr_1: PNG pair within 0.7 levels of the paintings, DDS pair within the same error as compressing the painting itself to BC7.
 - **Which layers get their own `_LF`.** A layer whose visible pixels are all what the whole field shows uses the field's `_LF`. Animation states and parts hidden behind other layers get their own, using the field's light at that spot (light belongs to the place, not the layer). Their albedo becomes painting ÷ that light. In bvtr_1 that's all of them, because of the 16 states of the scenery outside.
@@ -230,6 +231,28 @@ Next to the image, laid out exactly like it:
 - PNG works too (its levels are made from it). Missing maps: flat (smooth normals only) and plain (AO 1, roughness 0.7, not metal, no glow).
 - Debug view 15 colours the character normals: a bump should come out, not in, on both halves of a mirrored part.
 
+### Making them with fieldprep (v15.9)
+
+`fieldprep model` makes the DDS files from your PNGs, for one image or the whole folder:
+
+```
+fieldprep model "<game>\DEMASTER_EXP\textures\field.fs\field_hd_new\d001_0.png"    (one image; any of its maps works too)
+fieldprep model "<game>\DEMASTER_EXP\textures\field.fs\field_hd_new"                (every image there that has maps)
+```
+
+| You put next to `d001_0.png` | fieldprep writes |
+|---|---|
+| `d001_0_A.png` (or `_AM`): the albedo | `d001_0.dds`: BC7 sRGB. Without `_A`, made from `d001_0.png` itself |
+| `d001_0_N.png`: normal, green up | `d001_0_N.dds`: BC7, alpha left white so every bit goes to the normal |
+| `d001_0_O.png`, `_R.png`, `_M.png`, `_E.png` (grey; `_RC`/`_RM`, `_MC`/`_MM` work too), or one packed `d001_0_ORME.png` | `d001_0_ORME.dds`: BC7, packed AO / roughness / metallic / emissive. Missing ones are plain (AO 1, roughness 0.7, not metal, no glow); a coloured emissive map counts its brightest channel |
+
+- **Every mip level, made for what each map is:** the albedo in linear light, with see-through pixels kept out of their neighbours' colour, and cut-outs keeping how much of them passes the game's 44% test (hair and fringes don't thin out when the model is small; `--coverage 0` turns it off). The normal map's levels are made unit length again. The ORME map's four channels are averaged each on its own (emissive 0 doesn't wipe the others).
+- **Sizes:** a map at another size than `d001_0.png` is resized to it (the game places the image by its PNG), and the log says so. Any size works, not only multiples of 4.
+- **Only what changed:** a DDS newer than every PNG it's made from is left alone, so running the whole folder again only redoes what you've changed. `--force` makes them all again.
+- **Keep `d001_0.png`**: the game reads it. DEMASTER takes the DDS because it's newer. If you save the PNG again after, run fieldprep again.
+- **Options:** `--flip-green` (your normal maps are green down, DirectX), `--quality 0-4` (BC7 effort, default 2), `--threads`. A folder runs one image per thread. The log is also saved as `fieldprep_model.txt` in the folder.
+- **Time:** about 4 s for a 1024×1024 image with all three maps on 2 threads here; `--quality 0` takes about a third of that and measured within 0.1 level of 2 and 4.
+
 ## Frame log (for reflections, shadows and character lighting)
 
 `FIELD_FRAME_LOG=1` (on in this release's `demaster.conf`; it costs nothing until you use it). In a field, press **Ctrl+F11** once. DEMASTER writes down everything the game draws in the next frame into `DEMASTER_EXP\frame_log\<field>_<date>_<time>\`:
@@ -273,6 +296,7 @@ Cost: three more textures per page (1 MB each in BC7 at 4x), the room's `_ND` on
   - Pages put together from PuPu's pictures are identical to pages from FME's.
   - fieldprep on a bdifrit1 set with PuPu's names and sizes: canvas 336×240, nothing resized, `_ORME` 1344×960. With FME's: unchanged from v15.7. With your maps made for FME's canvas: moved into place, and the results equal the FME run's, cropped.
   - `pbr_shader_test` draws the PuPu-framed field identically to the FME-framed one.
+- **fieldprep model (v15.9):** `tests/fieldprep_model_test.cpp` (5,535 checks): names, level sizes (odd ones too), the albedo's levels in linear light without see-through colour bleeding, cut-out coverage kept (within 0.07 where plain averaging lost 0.20), unit-length normals at every level, ORME's channels and defaults, resizing, the DDS files read back level by level (BC7 within about 2 levels in the big levels), only what changed made again, `--force`, `--flip-green`. The DDS files were also read with bimg (the image library DEMASTER reads them with): every level found at its size, the pixels within 1 level of fieldprep's own decode (the two decoders round differently).
 - **Day and night (v15.8):**
   - `tests/field_pbr_test.cpp`: the clock (day, night and the fades centred on the changes, smooth; battles 3 times slower; swap, the jump before a fade, wrapping, the file), which lights are on when (each time of day's 2 + 6, the cross-fade weights, the night's lamps, 16 in a fade: the 8 brightest), `[night]` and `time` read and written.
   - `tests/pbr_shader_test.cpp`: at night with no lamps the shader gives the painting × level × tint (within 1 level, mean 0.39); with a night lamp, at the lamp the painting keeps `lamps` of its light (within 1) while far from it it's level × tint; by day (night 0) the paintings come back as before.

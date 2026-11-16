@@ -30,12 +30,22 @@ namespace fieldprep
 	bool SavePng(const std::string& path, const Image& image, std::string& error);
 	bool SaveGrayPng(const std::string& path, const Gray& image, bool sixteen, std::string& error);
 
-	//BC7 (4x4 blocks; width and height multiples of 4). perceptual: colour (weights for the eye), else data (every channel the same)
-	std::vector<uint8_t> EncodeBc7(const Image& image, bool perceptual, int threads);
+	//BC7 (4x4 blocks; other sizes are padded). perceptual: colour (weights for the eye), else data (every channel the same).
+	//quality: bc7enc's uber level, 0 (fast) to 4 (best)
+	std::vector<uint8_t> EncodeBc7(const Image& image, bool perceptual, int threads, int quality = 1);
 	Image DecodeBc7(const std::vector<uint8_t>& blocks, int width, int height);
 	bool SaveDds(const std::string& path, int width, int height, const std::vector<uint8_t>& bc7, std::string& error);
+	//a BC7 DDS with mip levels (level 0 first, each half the last, down to 1x1). srgb: BC7_UNORM_SRGB (colour), else BC7_UNORM
+	struct Bc7Level
+	{
+		int width = 0, height = 0;
+		std::vector<uint8_t> blocks;
+	};
+	bool SaveDdsLevels(const std::string& path, const std::vector<Bc7Level>& levels, bool srgb, std::string& error);
 
 	//<stem>.png or <stem>.dds, the newer one (as DEMASTER does); "" when neither
 	std::string NewestImage(const std::string& stem);
+	//<stem>.png if there is one (the master: a DDS of it is BC7, which loses a little), else <stem>.dds
+	std::string MasterImage(const std::string& stem);
 	bool FileExists(const std::string& path);
 }

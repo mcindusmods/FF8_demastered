@@ -7,6 +7,7 @@
 
 #include "archive.h"
 #include "image_io.h"
+#include "models.h"
 #include "prep.h"
 
 #include "../ff8_demaster/field_layers.h"
@@ -43,6 +44,7 @@ namespace
 		LightSearch lights;
 		float emissiveShare = 0.35f; //orme: the residual's part of the painting where a glow starts
 		int threads = 4;
+		fieldprep::ModelOptions model; //model: the field models' textures
 	};
 
 	//--- log: the console and <field>_fieldprep.txt
@@ -367,16 +369,17 @@ namespace
 			auto it = loaded.find(pupu);
 			if (it == loaded.end())
 			{
+				//the PNG when there is one: fieldprep's own DDS of it (below) is BC7, a little off
 				std::string path, stem;
 				if (!f.language.empty())
 				{
 					stem = fieldpbr::LayerStem(folder, f.name, f.language, pupu);
-					path = NewestImage(stem);
+					path = MasterImage(stem);
 				}
 				if (path.empty())
 				{
 					stem = fieldpbr::LayerStem(folder, f.name, "", pupu);
-					path = NewestImage(stem);
+					path = MasterImage(stem);
 				}
 				Image image;
 				std::string error;
@@ -1085,6 +1088,48 @@ namespace
 		return !Languages(folder.string() + "/", name).empty();
 	}
 
+	//every layer image (opaque, animated, glows, fog) as a BC7 DDS next to its PNG, so the game's folder can hold only DDS
+	//files: DEMASTER takes the newer of the two. Your maps (_AM, _N, _DEPTH, ...) aren't layer images and stay as they are
+	void LayerImagesToDds(const FieldInput& f, const Options& o)
+	{
+		if (!o.dds)
+			return;
+		size_t written = 0, upToDate = 0;
+		for (const auto& [pupu, path] : f.layerPath)
+		{
+			if (path.size() < 4 || Lower(path.substr(path.size() - 4)) != ".png")
+				continue; //only a DDS (you moved the PNG away): nothing to make it from
+			const std::string dds = path.substr(0, path.size() - 4) + ".dds";
+			std::error_code error;
+			if (fs::exists(dds, error) && fs::last_write_time(dds, error) > fs::last_write_time(path, error))
+			{
+				upToDate++;
+				continue;
+			}
+			Image image;
+			std::string why;
+			if (!LoadRgba(path, image, why))
+			{
+				Say("  ERROR reading %s: %s\n", Name(path).c_str(), why.c_str());
+				continue;
+			}
+			if (image.width % 4 || image.height % 4)
+			{
+				Say("  %s: %dx%d is not a multiple of 4, no DDS\n", Name(path).c_str(), image.width, image.height);
+				continue;
+			}
+			if (!SaveDds(dds, image.width, image.height, EncodeBc7(image, true, o.threads), why))
+			{
+				Say("  ERROR writing %s: %s\n", Name(dds).c_str(), why.c_str());
+				continue;
+			}
+			written++;
+		}
+		if (written + upToDate > 0)
+			Say("  layer images: %zu written as DDS (BC7)%s; DEMASTER reads the DDS. Keep the PNGs if you'll run fieldprep again (it reads them first)\n",
+				written, upToDate ? (", " + std::to_string(upToDate) + " up to date").c_str() : "");
+	}
+
 	void Field(const std::string& folderPath, const Options& o)
 	{
 		std::string folder = folderPath;
@@ -1109,7 +1154,10 @@ namespace
 			{
 				LoadComposite(f, o, o.command == "compose");
 				if (o.command == "prep" || o.command == "all")
+				{
 					Prep(f, o);
+					LayerImagesToDds(f, o);
+				}
 				if (o.command == "orme" || o.command == "all")
 					Orme(f, o);
 			}
@@ -1124,18 +1172,29 @@ namespace
 			"fieldprep: gets field backgrounds ready for DEMASTER's PBR lighting (FIELD_PBR)\n"
 			"\n"
 			"  fieldprep [command] <folder> [options]\n"
+			"  fieldprep model <image or folder> [options]\n"
 			"\n"
 			"<folder>: a field's folder (DEMASTER_EXP\\textures\\field_bg\\bv\\bvtr_1), or a folder of them (field_bg, field_bg\\bv):\n"
 			"          every field in it.\n"
 			"\n"
+			"model: the field models' textures (DEMASTER_EXP\\textures\\field.fs\\field_hd_new). Give one image (d001_0.png, or any\n"
+			"       of its maps) or the folder (every image in it that has maps). From the PNGs next to d001_0.png it writes BC7\n"
+			"       DDS files with every mip level: d001_0.dds (the albedo: d001_0_A.png, else d001_0.png), d001_0_N.dds (from\n"
+			"       d001_0_N.png, green up) and d001_0_ORME.dds (from d001_0_O, _R, _M, _E.png, or a packed d001_0_ORME.png;\n"
+			"       missing ones plain). Keep d001_0.png: the game reads it. A DDS newer than its PNGs is left alone (--force).\n"
+			"       --quality <0-4>  BC7 effort (default 2)    --flip-green  the normal maps are green down (DirectX)\n"
+			"       --coverage <0-1> the game's cut-out test, kept in the albedo's small levels (default 0.44; 0: off)\n"
+			"\n"
 			"Commands:\n"
 			"  prep     (the default) from your maps: <field>_<pupu>_A for every opaque layer, <field>_LF, <field>_ND,\n"
-			"           <field>_O (AO, baked from depth and normals), <field>_lights.txt and <field>_pbr.txt\n"
+			"           <field>_O (AO, baked from depth and normals), <field>_lights.txt and <field>_pbr.txt; and every layer\n"
+			"           image as a BC7 DDS (<field>_<pupu>.dds), so the game's folder can hold DDS files only\n"
 			"  orme     packs <field>_O, _R, _M and the emissive map into <field>_ORME (do it after prep, once you're happy with _O).\n"
 			"           The emissive map is your <field>_E.png (white: glows), else made from _RESM: where the non-diffuse\n"
 			"           residual is most of the painting (a lamp's bulb, a lit screen). (ormh: the same, its old name)\n"
 			"  all      prep, then orme\n"
 			"  compose  only writes <field>.png: the opaque layers put together (what to run Marigold/CHORD on)\n"
+			"  model    the field models' textures, not a field: see model above\n"
 			"\n"
 			"Your maps, in the field's folder, all PNG, at the canvas size (layer images from PuPu or FME: the canvas is FME's\n"
 			"when all of them are FME's, else the box around the opaque layers' pictures; maps made for the other one are moved\n"
@@ -1153,11 +1212,11 @@ namespace
 			"\n"
 			"Options:\n"
 			"  --data <where>       a folder with field.fl/fi/fs, or the game's main.zzz (default: DEMASTER_EXP\\data, else main.zzz)\n"
-			"  --no-dds             PNG only (default: PNG and BC7 DDS)\n"
+			"  --no-dds             PNG only (default: PNG and BC7 DDS, and prep also writes every layer image as a DDS)\n"
 			"  --relight            find the lights again and rewrite <field>_lights.txt (it's kept otherwise; the old one is kept\n"
 			"                       as <field>_lights_old.txt). A <field>_LIGHTS.png newer than _lights.txt does the same.\n"
 			"  --rebake             bake <field>_O again (it's kept otherwise)\n"
-			"  --force              compose: write <field>.png even if there is one\n"
+			"  --force              compose: write <field>.png even if there is one; model: make every DDS again\n"
 			"  --tint <0-1>         how much of the light's colour moves from the albedo into the lightmap (default 0.5)\n"
 			"  --ao-radius <px>     AO reach, native pixels (default 10)    --ao-strength <x>  (default 1)\n"
 			"  --light-intensity <x>  light each found light adds on top (default 0.2; 0 keeps the painting as it is)\n"
@@ -1217,6 +1276,12 @@ int main(int argc, char** argv)
 			o.lights.maxLights = std::clamp(static_cast<int>(v), 0, fieldpbr::MAX_FOUND_LIGHTS);
 		else if (a == "--threads" && value(v))
 			o.threads = std::clamp(static_cast<int>(v), 1, 64);
+		else if (a == "--quality" && value(v))
+			o.model.quality = std::clamp(static_cast<int>(v), 0, 4);
+		else if (a == "--coverage" && value(v))
+			o.model.coverage = static_cast<float>(std::clamp(v, 0.0, 1.0));
+		else if (a == "--flip-green")
+			o.model.flipGreen = true;
 		else if (!a.empty() && a[0] == '-')
 		{
 			fprintf(stderr, "unknown option %s (fieldprep --help)\n", a.c_str());
@@ -1224,6 +1289,12 @@ int main(int argc, char** argv)
 		}
 		else
 			plain.push_back(a);
+	}
+	if (plain.size() == 2 && plain[0] == "model")
+	{
+		o.model.threads = o.threads;
+		o.model.force = o.force;
+		return fieldprep::Models(plain[1], o.model) == 0 ? 0 : 1;
 	}
 	if (!plain.empty() && (plain[0] == "prep" || plain[0] == "orme" || plain[0] == "ormh" || plain[0] == "all" || plain[0] == "compose"))
 	{

@@ -64,6 +64,7 @@
     <ClCompile Include="prep.cpp" />
     <ClCompile Include="image_io.cpp" />
     <ClCompile Include="archive.cpp" />
+    <ClCompile Include="models.cpp" />
     <ClCompile Include="third_party\lodepng.cpp" />
     <ClCompile Include="third_party\bc7enc.cpp" />
     <ClCompile Include="third_party\bc7decomp.cpp" />
@@ -74,6 +75,7 @@
     <ClInclude Include="prep.h" />
     <ClInclude Include="image_io.h" />
     <ClInclude Include="archive.h" />
+    <ClInclude Include="models.h" />
     <ClInclude Include="third_party\lodepng.h" />
     <ClInclude Include="third_party\bc7enc.h" />
     <ClInclude Include="third_party\bc7decomp.h" />
