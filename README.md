@@ -1,34 +1,5 @@
-# ff8_demastered_2 
-FF8_Demastered_2 was forked from the original Demastered by MakiPL. 
-This is an unofficial patch for the game Final Fantasy VIII Remastered by SquareEnix. It works as DLL-dependency and has a custom launcher with many brand new functions. 
-Patches make it possible to load new textures, use non-fixed-resolution textures, and modify many other back-end GPU functions.
-
-This fork was vibe-coded by MCINDUS in order to implement the following:
-- World Vehicles, effects, maps, and other World elements prior versions of DEMASTER wer unable to replace
-- Live No-Swizzle Field Background implementation (no need for swizzled replacements, just use the actual background layers!)
-- Fixes to the Japanese version of DEMASTER to include the updated texture modules
-- New Lighting Module with Day/Night system, Real Shadows, PBR, and Custom Lighting 
-
-NEW FEATURES (with Low/Medium/High settings):
-
-Implemented BRAND NEW Lighting Module with:
-- Day/Night cycle with Sun and Character Follow Lighting
-- Manual Light Generation for custom lights
-- NEW Shadows for 3D Models
-- Normal Smoothing on 3D Models for Lighting Application
-- PBR texture capabilities (Normals, Depth, Ambient Occlusion, Roughness, Metallic, and Emissive)
-
-PBR Modules Available:
-- Pre-Rendered Field Backgrounds
-- Field Models (Characters, Platforms, Enemies, GFs, etc.)
-In-Progress PBR:
-- Battlefield Textures
-- Battlefield Models (Characters, Enemies/Bosses, GFs, etc.)
-- World Textures (Environment, Vehicles, Effects)
-
-Future Modules:
-- Magic/Particle FX direct replacements (No more dependence on semi-broken Hashed Replacements)
-- Triple Triad complete overhaul module with potential Online Play/Matching and Leaderboard. 
+# ff8_demaster
+FF8_Demaster is unofficial patch for Final Fantasy VIII Remastered game by SquareEnix. It works as DLL-dependency and has custom launcher with brand new functions. Patch makes it possible to load new textures, use non-fixed-resolution textures and will aim in tweaking issues
 
 ## Usage:
 1. Just drop to your folder of Final Fantasy VIII Remastered installation.
@@ -38,7 +9,6 @@ _D:\SteamLibrary\steamapps\common\FINAL FANTASY VIII Remastered_<br/>
 
 ## SteamDeck / Proton:
 [https://www.protondb.com/app/1026680#nyIcYa992E](https://www.protondb.com/app/1026680#nyIcYa992E)
-(This needs testing with the new v15 builds)
 
 Basically run this with:
 `export WINEDLLOVERRIDES="dinput8=n,b"; %command%`
