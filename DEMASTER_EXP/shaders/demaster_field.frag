@@ -273,7 +273,6 @@ vec4 demasterReflectionAt(vec3 p, vec3 r, float roughness)
 	return best;
 }
 
-// false: not a PBR cell (drawn as it is)
 // DAY_NIGHT: how much of the painted light is left here. Away from the lamps on at night it goes down to [night] level x
 // tint; within a lamp's range it keeps [night] lamps of it, most at the lamp and fading out towards the edge of its range
 vec3 demasterNightLeft(vec3 position)
@@ -296,6 +295,17 @@ vec3 demasterNightLeft(vec3 position)
 	return mix(vec3(1.0), mix(dark, vec3(1.0), keep * demasterNight.z), demasterNight.x);
 }
 
+// Light added on top of the painting (the lights, reflections), rolled off towards white instead of cut off at it: the
+// first of it counts in full, and the more there is the less each bit adds, so strong lights keep their shape and colour.
+// With nothing added the painting comes back exactly.
+vec3 demasterRollOff(vec3 painted, vec3 extra)
+{
+	vec3 base = max(painted + min(extra, 0.0), 0.0);
+	vec3 room = max(1.0 - base, 0.0001);
+	return base + room * (1.0 - exp(-max(extra, 0.0) / room));
+}
+
+// false: not a PBR cell (drawn as it is)
 bool demasterPbrShade(vec2 uv, out vec4 result)
 {
 	result = vec4(0.0);
@@ -359,13 +369,13 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 	float roughness = clamp(orme.g, 0.045, 1.0);
 	float metallic = clamp(orme.b, 0.0, 1.0);
 
-	// the glow: the painting's own colour there (turned by the lights file's hue), times the emissive map (only worked out
-	// when it shows: at night, or in FIELD_PBR_VIEW 16)
+	// the glow: the painting's own colour there (turned by the lights file's hue, tinted, times its strength). Only worked
+	// out when it shows: at night, or in FIELD_PBR_VIEW 16
 	vec3 glow = vec3(0.0);
 	if (emissive > 0.0 && (demasterEmissive.w > 0.0 || demasterPbr.y > 15.5))
 	{
 		vec3 colour = demasterToLinear(demasterHueTurn(demasterToSrgb(base * baked), demasterEmissive.x));
-		glow = colour * demasterEmissiveTint.rgb * (emissive * demasterEmissive.y);
+		glow = colour * demasterEmissiveTint.rgb * demasterEmissive.y;
 	}
 
 	// the characters' shadows, per light
@@ -407,6 +417,9 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 	}
 	float contact = effects && demasterFeatures.z > 0.5 ? demasterContactAt(position, normal) : 0.0;
 	vec3 painted = base * baked * max(1.0 + mask * change, 0.0) * paintedShadow * (1.0 - contact) * demasterNightLeft(position);
+	// at night a glowing pixel keeps its own light: the glow takes the dimmed painting's place there (it isn't added on top:
+	// the painting has the glow in it already, and adding it again burnt lamps out to white)
+	painted = mix(painted, glow, clamp(emissive * demasterEmissive.w, 0.0, 1.0));
 
 	// added light: Lambert + GGX (Smith-Schlick, Schlick Fresnel), kept out of crevices by AO
 	vec3 diffuseColour = base * (1.0 - metallic);
@@ -470,7 +483,7 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		}
 	}
 
-	vec3 rgb = demasterToSrgb(max(painted + added + reflected + glow * demasterEmissive.w, 0.0));
+	vec3 rgb = demasterToSrgb(demasterRollOff(painted, added + reflected));
 	int viewMode = int(demasterPbr.y + 0.5);
 	if (viewMode == 1)
 		rgb = albedo.rgb;
@@ -504,7 +517,7 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		rgb = sky ? vec3(0.2, 0.4, 1.0) : cellMore.z > 0.0 ? vec3(clamp(behind - 1.0, 0.0, 1.0)) : vec3(1.0, 0.5, 0.0);
 	}
 	else if (viewMode == 16)
-		rgb = demasterToSrgb(glow); // the glows as they'll show at night (black: none)
+		rgb = demasterToSrgb(glow * emissive); // the glows as they'll show at night (black: none)
 	else if (viewMode == 17)
 		rgb = vec3(emissive); // the emissive map
 	result = vec4(rgb, albedo.a);

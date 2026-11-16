@@ -1,6 +1,7 @@
 //Runs DEMASTER_EXP/shaders/demaster_field.frag on a field's PBR maps the way DEMASTER binds them, with Mesa's software OpenGL
 //(Linux, EGL, no window), and draws the field's opaque tiles through it. Checks that with the lights at rest the shader gives
-//back the paintings, and saves what it draws (lit, at rest, every FIELD_PBR_VIEW) as PNG.
+//back the paintings, that added light rolls off towards white on the curve it should, that the night dims the painting and
+//keeps lamps' light and glows as it should, and saves what it draws (lit, at rest, every FIELD_PBR_VIEW) as PNG.
 //
 //	pbr_shader_test <field folder> <demaster_field.frag> <output folder>
 //
@@ -361,9 +362,9 @@ int main(int argc, char** argv)
 		glUniform4f(at("demasterSpace"), static_cast<float>(space.zoom), static_cast<float>(space.originX), static_cast<float>(space.originY),
 			space.model == fieldpbr::DepthModel::Inverse ? 1.0f : 0.0f);
 		glUniform4f(at("demasterDepth"), static_cast<float>(space.a), static_cast<float>(space.b), static_cast<float>(space.nearest), 0.0f);
-		glUniform4f(at("demasterAmbient"), lit ? lights.ambient[0] : 0, lit ? lights.ambient[1] : 0, lit ? lights.ambient[2] : 0, 0);
-		glUniform4f(at("demasterEmissive"), lights.emissive.hue / 360.0f, lights.emissive.strength, 0.0f, static_cast<float>(night));
-		glUniform4f(at("demasterEmissiveTint"), lights.emissive.tint[0], lights.emissive.tint[1], lights.emissive.tint[2], 0.0f);
+		glUniform4f(at("demasterAmbient"), lit ? use->ambient[0] : 0, lit ? use->ambient[1] : 0, lit ? use->ambient[2] : 0, 0);
+		glUniform4f(at("demasterEmissive"), use->emissive.hue / 360.0f, use->emissive.strength, 0.0f, static_cast<float>(night));
+		glUniform4f(at("demasterEmissiveTint"), use->emissive.tint[0], use->emissive.tint[1], use->emissive.tint[2], 0.0f);
 		const float texel = 1.0f / (256 * scale);
 		glUniform4f(at("demasterTileClamp"), smooth ? 16.0f / 256 : 0.0f, smooth ? 16.0f / 256 : 0.0f, texel, texel);
 		for (const size_t i : order)
@@ -460,6 +461,78 @@ int main(int argc, char** argv)
 			printf("flicker: %s from %.2f to %.2f\n", lights.lights[i].name.c_str(), low, high);
 			break;
 		}
+	//--- added light rolls off towards white instead of being cut off at it (demasterRollOff): with u the light added to a
+	//painting P, the shader draws P + (1 - P)(1 - exp(-u / (1 - P))). So from the picture at rest (P) and the picture with a
+	//light on (B), the picture with that light 4 times as strong is known: 1 - (1 - P)((1 - B) / (1 - P))^4
+	{
+		Image nd;
+		std::string ndError;
+		if (fieldprep::LoadRgba(folder + name + "_ND.png", nd, ndError) && nd.width == width && nd.height == height)
+		{
+			const int cx = width / 2, cy = height / 2;
+			fieldpbr::Lights one;
+			one.night = lights.night;
+			fieldpbr::Light lamp;
+			lamp.name = "test light";
+			lamp.baked = false;
+			lamp.specular = 0.0f; //highlights depend on nothing but the light's strength too, but are too sharp for 8-bit steps
+			lamp.x = cx / static_cast<double>(scale);
+			lamp.y = cy / static_cast<double>(scale);
+			//in front of the surface in the middle of the canvas
+			const double surface = nd.rgba[(static_cast<size_t>(cy) * width + cx) * 4 + 3] / 255.0;
+			const double up = std::min(1.0, surface + 0.08), down = std::max(0.0, surface - 0.08);
+			lamp.depth = space.ViewPosition(lamp.x, lamp.y, up).z < space.ViewPosition(lamp.x, lamp.y, down).z ? up : down;
+			lamp.range = 120.0f;
+			lamp.intensity = 1.5f;
+			one.lights.push_back(lamp);
+			use = &one;
+			const Image rest = draw(0, false, 0.0, false, "");
+			const Image low = draw(0, true, 0.0, false, "rolloff_light.png");
+			one.lights[0].intensity *= 4.0f;
+			const Image high = draw(0, true, 0.0, false, "rolloff_light_x4.png");
+			use = &lights;
+			const auto lin = [](const uint8_t v) { return static_cast<double>(fieldpbr::SrgbToLinear(v / 255.0f)); };
+			size_t n = 0, over = 0, darker = 0, wouldClip = 0, clipped = 0;
+			double sum = 0;
+			int worst = 0;
+			for (size_t i = 0; i < rest.rgba.size(); i += 4)
+			{
+				if (rest.rgba[i + 3] == 0)
+					continue;
+				for (int c = 0; c < 3; c++)
+				{
+					const int a = rest.rgba[i + c], b = low.rgba[i + c], h = high.rgba[i + c];
+					darker += b < a - 1 || h < b - 1;
+					//enough light to measure, and both pictures off white (at 255 the amount of light can't be read back)
+					if (b - a < 6 || b > 250 || a > 235)
+						continue;
+					const double p = lin(static_cast<uint8_t>(a)), room = 1.0 - p;
+					const double left = (1.0 - lin(static_cast<uint8_t>(b))) / room;
+					const double added = -room * std::log(left); //the light the first picture added
+					const double want = 1.0 - room * left * left * left * left;
+					const int e = static_cast<int>(std::lround(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(want))));
+					const int d = std::abs(h - e);
+					worst = std::max(worst, d);
+					sum += d;
+					over += d > 6;
+					n++;
+					//4 times that light on top of the painting passes white: cut off it would be 255
+					if (p + 4.0 * added > 1.0)
+					{
+						wouldClip++;
+						clipped += h >= 255;
+					}
+				}
+			}
+			printf("roll-off: %zu values, the light x4 against what the curve gives: max %d, mean %.3f, %.3f%% off by more than 6; "
+				"%zu darker than without the light; %zu past white if cut off, %zu of them drawn white\n",
+				n, worst, n ? sum / n : 0.0, n ? 100.0 * over / n : 0.0, darker, wouldClip, clipped);
+			if (n < 1000 || sum / n > 1.5 || 100.0 * over / n > 1.0 || darker > 0 || wouldClip < 100 || clipped * 2 > wouldClip)
+				failures++;
+		}
+		else
+			printf("roll-off: no %s_ND.png at the canvas size, check skipped\n", name.c_str());
+	}
 	//--- the night (DAY_NIGHT)
 	{
 		//no lamps on at night: the painting times [night] level x tint, everywhere
@@ -471,6 +544,10 @@ int main(int argc, char** argv)
 		dark.night.tint[2] = 1.0f;
 		dark.night.lamps = 0.9f;
 		use = &dark;
+		//the emissive map as the shader reads it (FIELD_PBR_VIEW 17): glowing pixels keep their own light at night, so the
+		//checks of the dimmed painting leave them out; they have their own check below
+		const Image glowMap = draw(17, false, 0.0, false, "");
+		const auto glows = [&](const int x, const int y) { return glowMap.rgba[(static_cast<size_t>(y) * width + x) * 4] > 0; };
 		night = 1.0;
 		const auto expected = [&](const uint8_t painted, const int c, const double left)
 		{
@@ -486,7 +563,7 @@ int main(int argc, char** argv)
 				for (int x = 0; x < width; x++)
 				{
 					const size_t i = (static_cast<size_t>(y) * width + x) * 4;
-					if (composite.rgba.empty() || composite.rgba[i + 3] == 0 || !counts(x, y))
+					if (composite.rgba.empty() || composite.rgba[i + 3] == 0 || !counts(x, y) || glows(x, y))
 						continue;
 					int d = 0;
 					for (int c = 0; c < 3; c++)
@@ -533,7 +610,7 @@ int main(int argc, char** argv)
 				for (int x = cx - 1; x <= cx + 1; x++)
 				{
 					const size_t i = (static_cast<size_t>(y) * width + x) * 4;
-					if (composite.rgba.empty() || composite.rgba[i + 3] == 0)
+					if (composite.rgba.empty() || composite.rgba[i + 3] == 0 || glows(x, y))
 						continue;
 					for (int c = 0; c < 3; c++)
 					{
@@ -546,7 +623,7 @@ int main(int argc, char** argv)
 					nearCount++;
 				}
 			printf("night, at the lamp: %zu pixels, max %d off mix(level x tint, painting, lamps)\n", nearCount, nearWorst);
-			if (nearCount == 0 || nearWorst > 3)
+			if (nearWorst > 3)
 				failures++;
 			if (!compare(lampLit, "far from the lamp", [&](int, int, int) { return dark.night.level; },
 				[&](int x, int y) { return std::hypot(x - cx, y - cy) > reach; }))
@@ -557,15 +634,66 @@ int main(int argc, char** argv)
 				for (int x = cx - 8; x <= cx + 8; x++)
 				{
 					const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+					if (glows(x, y))
+						continue;
 					withLamp += lampLit.rgba[i] + lampLit.rgba[i + 1] + lampLit.rgba[i + 2];
 					without += allDark.rgba[i] + allDark.rgba[i + 1] + allDark.rgba[i + 2];
 				}
 			printf("night, around the lamp: %.2f x as bright as without it\n", without > 0 ? withLamp / without : 0.0);
-			if (!(withLamp > without * 1.5))
+			if (without > 0 && !(withLamp > without * 1.5))
 				failures++;
 		}
 		else
 			printf("night: no %s_ND.png at the canvas size, lamp check skipped\n", name.c_str());
+		//the glows at night: where the emissive map says, the glow (the painting's colour x [emissive] tint x strength) takes
+		//the dimmed painting's place, e of it: mix(painting x level x tint, glow, e). As painted (tint 1, strength 1) a
+		//fully glowing pixel is the painting's own colour, never brighter
+		{
+			dark.lights.clear();
+			dark.emissive.hue = 0.0f;
+			use = &dark;
+			const Image& map = glowMap;
+			size_t glowing = 0;
+			for (size_t i = 0; i < map.rgba.size(); i += 4)
+				glowing += map.rgba[i + 3] != 0 && map.rgba[i] > 0;
+			if (glowing == 0)
+				printf("night glows: the field has no emissive map (_ORME), check skipped\n");
+			for (int pass = 0; pass < 2 && glowing; pass++)
+			{
+				const float tint[3] = { 1.0f, pass ? 0.5f : 1.0f, pass ? 0.25f : 1.0f };
+				dark.emissive.strength = pass ? 0.5f : 1.0f;
+				for (int c = 0; c < 3; c++)
+					dark.emissive.tint[c] = tint[c];
+				const Image got = draw(0, false, 0.0, false, pass ? "night_glows_tinted.png" : "night_glows.png");
+				int worst = 0;
+				double sum = 0;
+				size_t n = 0, over = 0, brighter = 0;
+				for (size_t i = 0; i < got.rgba.size(); i += 4)
+				{
+					if (composite.rgba.empty() || composite.rgba[i + 3] == 0 || map.rgba[i] == 0)
+						continue;
+					const double e = map.rgba[i] / 255.0;
+					int d = 0;
+					for (int c = 0; c < 3; c++)
+					{
+						const double p = fieldpbr::SrgbToLinear(composite.rgba[i + c] / 255.0f);
+						const double t = c == 0 ? dark.night.tint[0] : c == 1 ? dark.night.tint[1] : dark.night.tint[2];
+						const double v = p * dark.night.level * t * (1.0 - e) + p * tint[c] * dark.emissive.strength * e;
+						d = std::max(d, std::abs(got.rgba[i + c] - static_cast<int>(std::lround(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(v))))));
+						brighter += got.rgba[i + c] > composite.rgba[i + c] + 2;
+					}
+					worst = std::max(worst, d);
+					sum += d;
+					over += d > 3;
+					n++;
+				}
+				printf("night glows%s: %zu glowing pixels, max %d, mean %.3f, %.4f%% off by more than 3; %zu values brighter than painted\n",
+					pass ? " (tint 1 0.5 0.25, strength 0.5)" : " (as painted)", n, worst, n ? sum / n : 0.0, n ? 100.0 * over / n : 0.0, brighter);
+				if (n == 0 || sum / n > 1.0 || 100.0 * over / n > 0.5 || brighter > 0)
+					failures++;
+			}
+			dark.emissive = lights.emissive;
+		}
 		//the field's own lights and [night]: night and the middle of dusk, for looking at
 		use = &lights;
 		night = 1.0;

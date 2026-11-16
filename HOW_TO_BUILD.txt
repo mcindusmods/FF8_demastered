@@ -10,10 +10,12 @@ HOW TO BUILD (this folder is the complete project)
      your old C:\demaster into this folder before running it.
    - It builds two things: ff8_demaster.dll and fieldprep.exe (64-bit; the "Desktop development with C++"
      workload includes the 64-bit compiler).
+   - It then builds the DLL again as a Release build (.build\Release\ff8_demaster.dll: the same code built for
+     speed; new in v15.10). If that one fails the Debug DLL is still good: send build_log_release.txt.
    - If it fails, send build_log.txt (it's written next to build_demaster.bat).
 
 3. Copy into the game folder (FINAL FANTASY VIII Remastered):
-   - .build\Debug\ff8_demaster.dll
+   - .build\Debug\ff8_demaster.dll (or, once it has shown it runs the same, .build\Release\ff8_demaster.dll)
    - demaster.conf (or copy the FIELD_* lines from it into yours; FIELD_PBR_DEPTH, FIELD_PBR_SHADOWS,
      FIELD_PBR_REFLECTIONS, FIELD_PBR_CHARACTERS and FIELD_AVATARS are new in v15; FIELD_PBR_QUALITY and
      FIELD_GL_TRACK in v15.3)

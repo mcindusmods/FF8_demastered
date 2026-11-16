@@ -4,7 +4,8 @@
 
 void OutputDebug(const char* fmt, ...)
 {
-#if _DEBUG
+//the log: in Debug builds, and in the Release build (which defines DEMASTER_LOG)
+#if defined(_DEBUG) || defined(DEMASTER_LOG)
     int invalid_dd = reinterpret_cast<int>(fmt);
     if(invalid_dd == 0x11C8EDD0
         || invalid_dd == 0x19e8cc)

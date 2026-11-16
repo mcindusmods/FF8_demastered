@@ -53,6 +53,17 @@ if errorlevel 1 goto failed
 if not exist "%~dp0.build\Debug\ff8_demaster.dll" goto failed
 if not exist "%~dp0.build\Debug\fieldprep.exe" goto failed
 
+rem --- 5. The Release build of the DLL: the same code built for speed (COMPILING.md, "Debug and Release") ---
+rem     If it fails, the Debug DLL above is still good.
+echo.
+echo  Compiling the Release build of the DLL...
+echo.
+set "RELEASE=ok"
+if exist "%~dp0.build\Release\ff8_demaster.dll" del "%~dp0.build\Release\ff8_demaster.dll"
+msbuild ff8_demaster\ff8_demaster.vcxproj /m /nologo /verbosity:minimal /p:Configuration=Release /p:Platform=Win32 %TOOLSET% "/flp:logfile=%~dp0build_log_release.txt;verbosity=normal"
+if errorlevel 1 set "RELEASE=failed"
+if not exist "%~dp0.build\Release\ff8_demaster.dll" set "RELEASE=failed"
+
 echo.
 echo  ==========================================================================
 echo   BUILD SUCCEEDED
@@ -61,8 +72,19 @@ echo   Copy it into your FINAL FANTASY VIII Remastered folder (see COMPILING.md)
 echo.
 echo   %~dp0.build\Debug\fieldprep.exe
 echo   The PBR preparation tool (not part of the game). See README_field_pbr.md
+echo.
+if not "%RELEASE%"=="ok" goto release_failed
+echo   %~dp0.build\Release\ff8_demaster.dll
+echo   The same DLL built for speed. Use it in place of the Debug one once it has
+echo   shown it runs the same; keep the Debug one to go back to.
+goto built
+:release_failed
+echo   The Release build of the DLL FAILED. The Debug DLL above is not affected.
+echo   Its log is in %~dp0build_log_release.txt
+echo   Search it for "error" and send those lines, or the whole file.
+:built
 echo  ==========================================================================
-start "" explorer "%~dp0.build\Debug"
+start "" explorer "%~dp0.build"
 pause
 exit /b 0
 

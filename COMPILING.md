@@ -32,6 +32,17 @@ Already have Visual Studio 2022 or 2026 (Community or Build Tools) with "Desktop
 3. **When it works,** the window says **BUILD SUCCEEDED** and opens the folder with the new `ff8_demaster.dll`. That is `C:\demaster\.build\Debug\ff8_demaster.dll`.
 4. **When it fails,** the window says **BUILD FAILED**. Send me `C:\demaster\build_log.txt`; the lines with "error" in them are what I need. This code has not been through Microsoft's compiler before, so a small fix on the first try would not be a surprise.
 
+### Debug and Release
+
+The script builds the DLL twice:
+
+- `C:\demaster\.build\Debug\ff8_demaster.dll`: the Debug build, as always. Unoptimised (apart from the files that run every frame) and on the debug C++ runtime, which checks a lot as it goes and is slow at it.
+- `C:\demaster\.build\Release\ff8_demaster.dll`: the same code built for speed (optimised, release runtime). It writes `demasterlog.txt` the same way. New in v15.10: try it once the Debug one works, and keep the Debug one to go back to. If the game behaves differently with it, that's a bug worth a log.
+
+If the Release build fails, the window says so under BUILD SUCCEEDED and the Debug DLL is still good. Its log is `C:\demaster\build_log_release.txt`.
+
+Why Release needs `ff8_demaster\vendor\src`: the bx and bimg libraries in `vendor\lib\bgfx` are Debug builds, and a Debug library can't be linked into a release build. Release compiles the same revisions from source instead. The files with the game's assembly hooks stay unoptimised in Release (the project file says which, and why).
+
 One DLL works for both the English/European and the Japanese version. There is no separate Japanese build to make.
 
 ## 5. Install it in the game

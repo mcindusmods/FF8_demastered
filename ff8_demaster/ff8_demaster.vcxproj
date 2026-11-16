@@ -17,6 +17,10 @@
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
@@ -50,6 +54,12 @@
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -65,6 +75,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug_JP|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -97,9 +110,60 @@
     <IncludePath>vendor\include\;vendor\include\compat\msvc;$(IncludePath)</IncludePath>
     <LibraryPath>vendor\lib\;vendor\lib\bgfx;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <!-- Release: the same DLL built for speed (optimised, the release C++ runtime). vendor\lib\bgfx only has Debug builds of
+         bx and bimg, which can't be linked into a release build, so Release compiles them from vendor\src instead (the same
+         revisions as the headers in vendor\include). See COMPILING.md -->
+    <LinkIncremental>false</LinkIncremental>
+    <IncludePath>vendor\include\;vendor\include\compat\msvc;$(IncludePath)</IncludePath>
+    <LibraryPath>vendor\lib\;$(LibraryPath)</LibraryPath>
+    <OutDir>$(ProjectDir)..\.build\Release\</OutDir>
+    <IntDir>$(ProjectDir)..\.build\obj\Release\</IntDir>
+    <TargetName>ff8_demaster</TargetName>
+  </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
   </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <OmitFramePointers>false</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <SDLCheck>true</SDLCheck>
+      <!-- DEMASTER_LOG: demasterlog.txt is written as in Debug (debug.cpp) -->
+      <PreprocessorDefinitions>NOMINMAX;GLEW_STATIC;WIN32;_WIN32;NDEBUG;DEMASTER_LOG;FF8DEMASTER_EXPORTS;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;USE_SERVER=0;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>Default</ConformanceMode>
+      <PrecompiledHeaderFile>
+      </PrecompiledHeaderFile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <CallingConvention>Cdecl</CallingConvention>
+      <EnableEnhancedInstructionSet>
+      </EnableEnhancedInstructionSet>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <SupportJustMyCode>false</SupportJustMyCode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <RandomizedBaseAddress>false</RandomizedBaseAddress>
+      <AdditionalDependencies>StackWalker.lib;glew32s.lib;glfw3.lib;opengl32.lib;psapi.lib;version.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- StackWalker.lib and glew32s.lib ask for other C runtimes than the release one this is built with -->
+      <IgnoreSpecificDefaultLibraries>MSVCRT;MSVCRTD;LIBCMTD;LIBCPMTD;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ForceFileOutput>Enabled</ForceFileOutput>
+      <AdditionalOptions>/IGNORE:4075,4099 %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+    <PostBuildEvent>
+<Command>if exist "$(OutDir)$(TargetName).exp" (del "$(OutDir)$(TargetName).exp") &amp;&amp; if exist "$(OutDir)$(TargetName).lib" (del "$(OutDir)$(TargetName).lib")</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -226,7 +290,13 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
   <ItemGroup>
     <ClCompile Include="config.cpp" />
     <ClCompile Include="debug.cpp" />
-    <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="dllmain.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
     <ClCompile Include="file.cpp" />
     <ClCompile Include="hext.cpp" />
     <ClCompile Include="image.cpp" />
@@ -237,7 +307,13 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_tables.cpp" />
     <ClCompile Include="imgui\imgui_widgets.cpp" />
-    <ClCompile Include="iopatch.cpp" />
+    <ClCompile Include="iopatch.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
     <ClCompile Include="minhook\src\buffer.c" />
     <ClCompile Include="minhook\src\hde\hde32.c" />
     <ClCompile Include="minhook\src\hde\hde64.c" />
@@ -247,13 +323,49 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClCompile Include="opengl.cpp" />
     <ClCompile Include="patch.cpp" />
     <ClCompile Include="server.cpp" />
-    <ClCompile Include="texture.cpp" />
-    <ClCompile Include="texturepatch_v2_battleCharacter.cpp" />
-    <ClCompile Include="texturepatch_v2_battleHooks.cpp" />
+    <ClCompile Include="texture.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_battleCharacter.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_battleHooks.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
     <ClCompile Include="texturepatch_v2_battleMonster.cpp" />
-    <ClCompile Include="texturepatch_v2_battleScenery.cpp" />
-    <ClCompile Include="texturepatch_v2_fieldBackground.cpp" />
-    <ClCompile Include="texturepatch_v2_fieldChara.cpp" />
+    <ClCompile Include="texturepatch_v2_battleScenery.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_fieldBackground.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
+    <ClCompile Include="texturepatch_v2_fieldChara.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
     <ClCompile Include="texturepatch_v2_fieldLayers.cpp">
       <!-- Only Debug configurations exist; it runs around every draw of a field, so build this file optimized -->
       <Optimization>MaxSpeed</Optimization>
@@ -321,7 +433,13 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
       <SupportJustMyCode>false</SupportJustMyCode>
     </ClCompile>
     <ClCompile Include="texturepatch_v2_world.cpp" />
-    <ClCompile Include="texturepatch_v2_worldVehicles.cpp" />
+    <ClCompile Include="texturepatch_v2_worldVehicles.cpp">
+      <!-- Release: left unoptimised. Its hooks (naked functions) mix assembly with C++ and count on the compiler not using
+           the game's registers, which only holds for unoptimised code -->
+      <Optimization Condition="'$(Configuration)'=='Release'">Disabled</Optimization>
+      <InlineFunctionExpansion Condition="'$(Configuration)'=='Release'">Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions Condition="'$(Configuration)'=='Release'">false</IntrinsicFunctions>
+    </ClCompile>
     <ClCompile Include="uvpatch.cpp" />
     <ClCompile Include="world_vehicles.cpp">
       <!-- Only Debug configurations exist; pages with vehicles are built on world map loads, so build this file optimized -->
@@ -332,6 +450,132 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
       <SupportJustMyCode>false</SupportJustMyCode>
     </ClCompile>
     <ClCompile Include="zzz.cpp" />
+  </ItemGroup>
+  <!-- Release only: bx and bimg (the image readers) built from source: bx 0455026 (2020-05-13), bimg 5ee42f6 (2020-04-19),
+       the revisions the headers in vendor\include are from. bimg's image.cpp gets its own object name (the DLL has an
+       image.cpp too). See vendor\src\README.txt -->
+  <ItemGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile Include="vendor\src\bx\src\amalgamated.cpp">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\src\image.cpp">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)bimg_image.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\src\image_gnf.cpp">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\src\image_decode.cpp">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\astc_file.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\codec.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\endpoint_codec.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\footprint.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\integer_sequence_codec.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\intermediate_astc_block.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\logical_astc_block.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\partition.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\physical_astc_block.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\quantization.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="vendor\src\bimg\3rdparty\astc-codec\src\decoder\weight_infill.cc">
+      <AdditionalIncludeDirectories>vendor\src\bx\3rdparty;vendor\src\bimg\3rdparty;vendor\src\bimg\3rdparty\astc-codec;vendor\src\bimg\3rdparty\astc-codec\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>__STDC_LIMIT_MACROS;__STDC_FORMAT_MACROS;__STDC_CONSTANT_MACROS;_CRT_SECURE_NO_WARNINGS;_CRT_SECURE_NO_DEPRECATE;_SCL_SECURE_NO_WARNINGS;NDEBUG;WIN32;_WIN32;_WIN32_WINNT=0x0601;NOMINMAX</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="config.h" />
@@ -390,6 +634,9 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <VcpkgUseStatic>true</VcpkgUseStatic>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug_JP|Win32'">
+    <VcpkgUseStatic>true</VcpkgUseStatic>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <VcpkgUseStatic>true</VcpkgUseStatic>
   </PropertyGroup>
 </Project>

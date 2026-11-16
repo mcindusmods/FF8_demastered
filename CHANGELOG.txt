@@ -1,5 +1,32 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.10 (in the source; not packaged yet) - night glows fixed, added light rolls off, a Release build
+-----------------------------------------------------------------------------------------------------
+Shaders
+  - Night glows: the glow now takes the dimmed painting's place where the emissive map says (mix(dimmed painting, glow,
+    emissive x night)). It was added on top of the dimmed painting, which already has the glow in it, so lamps came out
+    1.1 to 1.9 times as bright as painted and burnt to white. As painted ([emissive] strength 1, tint 1 1 1, hue 0) a
+    fully glowing pixel is now exactly the painting; strength and tint still change it.
+  - Added light (the lights, the reflections) rolls off towards white instead of being cut off at it: painted P, added u,
+    drawn P + (1 - P)(1 - exp(-u / (1 - P))) per channel. With nothing added the painting is exact, as before; a little
+    added light looks as before; a light's intensity can go well above 1 without a flat white hole. Characters: the same
+    over the room's light, for the added lights and the model's own glow.
+Build
+  - A Release build of ff8_demaster.dll (the solution's Release configuration; build_demaster.bat now makes it too, in
+    .build\Release, after the Debug one and without touching it). Optimised, the release C++ runtime (no debug heap, no
+    checked iterators), the log still written (DEMASTER_LOG). Until now only Debug builds existed.
+  - vendor\lib\bgfx only has Debug builds of bx and bimg, which can't be linked into a release build, so Release compiles
+    them from source: ff8_demaster\vendor\src (bx 0455026, bimg 5ee42f6: the revisions the headers in vendor\include are
+    from, unchanged; README.txt there). The Debug build links the libraries as before.
+  - The nine files with the game's hooks written in assembly (dllmain, iopatch, texture, the battle hooks, fieldBackground,
+    fieldChara, worldVehicles) stay unoptimised in Release: some of their naked functions mix assembly with C++ and count
+    on the compiler leaving the game's registers alone, which optimised code doesn't.
+  - Not yet through Microsoft's compiler: the first Release build may need a fix (build_log_release.txt). Checked here:
+    the bx/bimg sources compile and link for 32-bit Windows with MinGW and read our DDS and PNG files.
+Tests
+  - pbr_shader_test: the roll-off curve and the night glows (both fail on the v15.9 shader); the night checks leave
+    glowing pixels to the glow check.
+
 v15.9 - fieldprep makes the DDS files: the field models' textures and every layer image
 ---------------------------------------------------------------------------------------
 fieldprep

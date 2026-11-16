@@ -130,6 +130,15 @@ vec3 demasterProbeLight(vec3 p, vec3 n, out float share)
 	return max(b0.rgb + bx.rgb * n.x + by.rgb * n.y + bz.rgb * n.z, vec3(0.0)) * demasterProbeInfo.y;
 }
 
+// Light added on top of the room's (the lights, the model's own glow), rolled off towards white instead of cut off at it,
+// the same way as the backgrounds' (demaster_field.frag). With nothing added the room's light comes back exactly.
+vec3 demasterRollOff(vec3 lit, vec3 extra)
+{
+	vec3 base = max(lit + min(extra, 0.0), 0.0);
+	vec3 room = max(1.0 - base, 0.0001);
+	return base + room * (1.0 - exp(-max(extra, 0.0) / room));
+}
+
 void main()
 {
 	// instanced: outside this copy's tile is another copy's
@@ -217,6 +226,7 @@ void main()
 	// the added lights, kept out by the room (walk behind a pillar: into its shadow)
 	float alpha2 = roughness * roughness * roughness * roughness;
 	float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+	vec3 added = vec3(0.0);
 	for (int i = 0; i < 8; i++)
 	{
 		if (i >= demasterLightCount)
@@ -247,11 +257,11 @@ void main()
 		float geometry = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
 		vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
 		vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
-		lit += colour * falloff * nl * clear * (diffuseColour + specular * PI * demasterLightColor[i].a);
+		added += colour * falloff * nl * clear * (diffuseColour + specular * PI * demasterLightColor[i].a);
 	}
-	lit += base * emissive;
+	added += base * emissive;
 
-	vec3 rgb = demasterToSrgb(lit) + demasterShade.rgb;
+	vec3 rgb = demasterToSrgb(demasterRollOff(lit, added)) + demasterShade.rgb;
 	if (viewMode == 15)
 		rgb = vec3(n.x, -n.y, -n.z) * 0.5 + 0.5;
 	color.rgb = clamp(rgb, vec3(0.0), vec3(1.0));
