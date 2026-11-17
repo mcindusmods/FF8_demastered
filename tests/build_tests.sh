@@ -15,10 +15,11 @@ compile() { # source, object name
 	$CXX $FLAGS -Iff8_demaster -c "$1" -o "$OUT/obj/$2.o"
 }
 pids=()
-for f in field_pbr field_moving_lights field_layers field_chars world_vehicles; do compile ff8_demaster/$f.cpp $f & pids+=($!); done
+for f in field_pbr field_moving_lights field_layers field_chars world_vehicles field_tween field_mirror analog_move; do compile ff8_demaster/$f.cpp $f & pids+=($!); done
 for f in prep image_io archive models main; do compile fieldprep/$f.cpp $f & pids+=($!); done
 for f in lodepng bc7enc bc7decomp; do compile fieldprep/third_party/$f.cpp $f & pids+=($!); done
-for f in field_pbr_test field_layers_test field_chars_test fieldprep_model_test world_vehicles_test pbr_shader_test chara_shader_test field_depth_test; do
+for f in field_pbr_test field_layers_test field_chars_test fieldprep_model_test world_vehicles_test pbr_shader_test chara_shader_test field_depth_test \
+	field_tween_test mirror_test; do
 	compile tests/$f.cpp $f & pids+=($!)
 done
 for p in "${pids[@]}"; do wait "$p"; done
@@ -34,4 +35,6 @@ link world_vehicles_test $O/world_vehicles_test.o $O/world_vehicles.o
 link pbr_shader_test $O/pbr_shader_test.o $O/field_layers.o $O/field_pbr.o $O/field_moving_lights.o $O/image_io.o $THIRD -lEGL -lGL
 link chara_shader_test $O/chara_shader_test.o -lEGL -lGL
 link field_depth_test $O/field_depth_test.o -lEGL -lGL
+link field_tween_test $O/field_tween_test.o $O/field_tween.o $O/analog_move.o
+link mirror_test $O/mirror_test.o $O/field_mirror.o -lEGL -lGL
 echo "built into $OUT"

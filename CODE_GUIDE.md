@@ -47,7 +47,7 @@ Maki's modules (not changed in structure): `dllmain.cpp` (start-up, patches), `m
 2. **The game uploads a background page** (renderer thread). `FieldLayersBuildPage` puts the layers' images into the page instead (`fieldrt::BuildPage`); for a page with PBR layers, `fieldrt::PbrPageBuilt` makes the matching lightmap, normal+depth, ORME and cell-table textures.
 3. **The game draws the characters** first in every frame. `FieldCharsDraw` (called from the `glDrawElements` hook in `opengl.cpp`) keeps those draws. Right before the first thing that isn't a character it draws them itself (`Flush` in `texturepatch_v2_fieldChars.cpp`): works out who is who (`Group` in `field_chars.cpp`), tells the moving lights module who was drawn (`MovingLightsCharacters`), draws shadow maps, reflection pictures, the characters lit by the room, and hands the result to the PBR module (`PbrSetCharacters`).
 4. **The game draws the background**, page by page. `FieldLayersBeforeDraw` → `fieldrt::PbrBeforeDraw`: binds the page's maps, swaps in DEMASTER's field program, sends the uniforms (`SetUniforms`). The draw itself is the game's. `FieldLayersAfterDraw` → `PbrAfterDraw` puts everything back.
-5. **SwapBuffers** (`HookSwapBuffers` in `opengl.cpp`): `FieldCharsSwap` (which calls `PbrEndFrame`, which calls `MovingLightsEndFrame`), `FrameLogSwap`, `DayNightSwap` (the clock moves on).
+5. **SwapBuffers** (`HookSwapBuffers` in `opengl.cpp`): `TweenEndOfDraws`, `FieldCharsSwap` (which calls `PbrEndFrame`, which calls `MovingLightsEndFrame`), `FrameLogSwap`, `DayNightSwap` (the clock moves on).
 
 Everything from step 2 on is one thread, the renderer's. The game thread only does step 1; what crosses over is made once and read-only afterwards (`PbrField`) or atomic (the field's time).
 
@@ -94,6 +94,30 @@ If you change the relight formula, change it in three places that must agree: th
 | Checked | `TestMovingLights` in `field_pbr_test.cpp`; "the moving lights" block in `pbr_shader_test.cpp` |
 
 **To add another moving light** (a spell, a vehicle's headlight): write a function in `field_moving_lights.cpp` that returns a `fieldpbr::MovingLight` from whatever positions it, test it there, raise `MAX_MOVING_LIGHTS` in `field_pbr_runtime.h` if more than two can be on at once, and add it to `MovingLightsWanted` and `MovingLightsNow`. No shader change is needed: the sun itself is only a point light four field-widths away with a very long range.
+
+## Smooth scroll and in-between pictures (FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION)
+
+| File | What is in it |
+|---|---|
+| `field_tween.h/.cpp` | The rules, no game: `Axis` (the filter that turns a layer's whole-pixel places into a line), `LayerTrack` / `Advance` / `ShiftNow` / `ShiftBetween`, `PlaceOfDraw` (which layer a draw's tiles are, and where the game put it), `KeepCovering`, `TweenCharacters`, `Pacer`. Tested by `tests/field_tween_test.cpp`. |
+| `field_mirror.h/.cpp` | The second picture's framebuffers. Knows nothing about fields: it is told what the game has bound (`Host`) and is called after each draw, clear, blit and copy of the game's, and does the same to its copies. Tested by `tests/mirror_test.cpp` on a frame built like the game's. |
+| `texturepatch_v2_fieldTween.cpp` | The game side: the hooks on `glClear`, `glBlitFramebuffer`, `glCopyTex(Sub)Image2D`; what a draw is (`Classify`); the draw itself, moved and mirrored (`DrawNow`); draws kept back for the characters (`Hold`, `ReplayHeld`); the end of the frame (`TweenShowBetween`, `TweenShowFrame`, `TweenFrameEnd`). |
+| `texturepatch_v2_fieldChars.cpp` | `MoveOfFrame`: the kept characters' shift and their in-between places; `drawModels(true)` / `drawAll(true)` draw them a second time into the copy. |
+
+How a draw goes through `HookGlDrawElements` now: `TweenBeforeDraw` (what is it; hold it?) → `FieldCharsDraw` (keep it, or draw what was kept) → `TweenDraw` (`FieldLayersBeforeDraw`, the draw with the layer's shift in the projection matrix, the same draw into the copies with the in-between shift, `FieldLayersAfterDraw`). With both settings at 0 the hook takes its old three steps.
+
+Things that are easy to get wrong:
+
+- **Layers are known only on pages built from layer images.** `TweenPageBuilt` (called from `PbrPageBuilt`, for every page, PBR or not) keeps each cell's layer and canvas place. A draw whose tiles are of two layers, or don't agree on where the canvas is, is left alone.
+- **The main layer's shift is fixed once per frame** (`FixMain`), the first time anything needs it: the characters, the round shadows and the main layer's own draws must all use the same one. If the characters have to be drawn before the main layer was seen and the draw in between can't be kept back, it is fixed at zero for that frame and the characters aren't tweened either.
+- **A new framebuffer copy starts as what the game's holds, and that has to be read before the game draws into it** this frame (`fieldmirror::BeforeDraw`, `TweenFramebufferCopy` before the character pass). Otherwise the copy has this frame's draw in it twice, at two places.
+- **The character module's depth copy gets its in-between twin by itself**: `CopyCharacterDepth` calls `glCopyTexSubImage2D`, the hook repeats it from the copy of the scene into a copy of that texture, and the mirrored background draws read the twin (unit 8 is inside `fieldmirror::UNITS`). So the mirrored character pass has to stay before it.
+- **DEMASTER's own binds inside the mirror go past its texture hook** (`HostBindTexture`) and are put back before anything looks; framebuffer binds go through the tracker and are put back the same way.
+- **What only a log from the game can tell:** the rate the game shows fields at (the log says it once per field), whether the wait inside SwapBuffers is taken out of the game's own frame limiter's idle time (if not, the "slowed down" line appears), and whether any framebuffer of the game is written by a call that isn't hooked (the in-between picture would flicker).
+
+## Walking at any angle (ANALOG_MOVEMENT)
+
+`analog_move.h/.cpp` is the arithmetic (stick to the game's 0-255 per axis), `texturepatch_v2_analogMove.cpp` the three call sites it replaces in the field's movement function and the XInput reading (loaded at run time, no library). The addresses are `ANALOG_GET_VALUE`, `ANALOG_FIELD_TEST`, `ANALOG_FIELD_X`, `ANALOG_FIELD_Y` in `mymemory.h`, for both game DLLs. The game's own function is always called first: it also puts the game's emulated stack back.
 
 ## How to...
 

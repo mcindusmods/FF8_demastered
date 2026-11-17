@@ -1313,6 +1313,7 @@ void main()
 void fieldrt::PbrPageBuilt(const GLuint target, const PageJob& job, const PageSize& size)
 {
 	PbrForget(target);
+	TweenPageBuilt(target, job, size); //FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION: which layer each cell of the page is
 	if (!FIELD_PBR || shaderMissing || job.pbr == nullptr || job.kind >= 0)
 		return;
 	try
@@ -1368,6 +1369,7 @@ bool FieldPbrHasPage(const unsigned int texture)
 
 void fieldrt::PbrForget(const GLuint target)
 {
+	TweenPageForget(target);
 	const auto it = pbrPages.find(target);
 	if (it == pbrPages.end())
 		return;
@@ -1377,6 +1379,7 @@ void fieldrt::PbrForget(const GLuint target)
 
 void fieldrt::PbrForgetAll()
 {
+	TweenForgetAll();
 	for (auto& [target, page] : pbrPages)
 		DeletePage(page);
 	pbrPages.clear();

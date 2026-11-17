@@ -32,6 +32,23 @@ DEMASTER and fieldprep read layer images from PuPu as well as from FME, in the s
   - fieldprep writes it into `_pbr.txt` (`canvas = left top width height`) and DEMASTER reads it from there.
   - See `README_field_pbr.md`.
 
+## Smooth scroll and in-between pictures (v15.11, not yet run in the game)
+
+Two things that only fields drawn from layer images can have, because the layer images' cells tell DEMASTER which layer every tile the game draws belongs to. Both are on by default in `demaster.conf` and each has its own switch.
+
+**`FIELD_SMOOTH_SCROLL`.** The game scrolls a field in whole PlayStation pixels (8 screen pixels at 4x on a 1440p screen), and works out each layer's place from the scroll with whole-number arithmetic. So a slow scroll steps, and layers that move at another speed than the main one (parallax: a sky, a far wall) step at other moments than it does, which reads as shimmer between them. DEMASTER reads each layer's place off the tiles as the game draws them, turns the staircase of places back into the line it was rounded from, and draws the layer there. The characters get the main layer's difference, so they stay on the floor. Nothing is ever drawn more than 3/4 of a PlayStation pixel from where the game has it, and when the screen stands still the picture is exactly the game's.
+
+**`FIELD_INTERPOLATION`.** The game makes 30 pictures a second in fields. With this on, DEMASTER shows a picture of its own before each of them: every layer halfway along its scroll, every character halfway between its last pose and this one. The game keeps running at its own speed (nothing in its logic is sped up, unlike a 60 FPS patch), and what you see is 60 pictures a second. The price: everything in a field is drawn twice (about double the graphics card's work there, and more video memory), and the picture is half a frame later than without. `FIELD_INTERPOLATION=0` turns it off; DEMASTER also turns it off by itself for a field where the game runs slower with it than without, and says so in the log.
+
+What to look at first in the game, and what the log (`FIELD_DEBUG` not needed) says:
+
+- `FIELD_INTERPOLATION: in-between pictures here (the game shows 30.0 pictures a second, with vertical sync)` once per field: it is running. If it says another rate instead ("the game shows 60.0 pictures a second here, not about 30"), Remastered shows fields differently from what this was written for, and nothing is interpolated.
+- `...the game slowed down here...`: the half-frame wait is not coming out of the game's own idle time on this machine. Send the log.
+- Flicker at 30 times a second anywhere in the picture: something the game draws is missing from the in-between picture. A frame log (`FIELD_FRAME_LOG=1`, Ctrl+F11) of that field shows what.
+- Known not to be in-between: the round shadows under characters (and FIELD_PBR's shadows and reflections), and effects that are neither background tiles nor characters. They are the frame's own in both pictures, so against a moving character they are half a step ahead every other picture.
+
+**`ANALOG_MOVEMENT`** is not about layers but arrived with these: in any field, the left stick of an XInput pad walks at any angle (`ANALOG_DEADZONE` sets how far it moves before it counts). The d-pad and keyboard are untouched. Not on the world map yet.
+
 ## What changed in v12
 
 - **The game says which palette went into each slot.** In bvtr_1, two of page 0's slots (the animated scenery's palettes 1 and 5) matched neither the `.mim` nor live VRAM: the game builds those textures from palette colours it read earlier, and the field has changed them since. DEMASTER now watches the game hand each palette to the driver (`read_vram_palette` and `write_palette_to_driver`, the same two functions FFNx uses on the PC version, found in both the EFIGS and JP DLLs) and records which CLUT went into which slot of which texture. When the pixels match nothing, that record decides. When the pixels match, the log says whether the game agrees.

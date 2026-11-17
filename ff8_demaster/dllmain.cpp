@@ -381,6 +381,7 @@ BOOL WINAPI DllMain(
 		InjectJMP(GetAddressBase(NULLSUB_DEBUG), reinterpret_cast<DWORD>(OutputDebug));
 	if (LINEAR_PATCH)
 		ApplyFilteringPatch();
+	ApplyAnalogMovementPatch(); //ANALOG_MOVEMENT
 
     hextPatcher.ApplyAll(std::string());
 

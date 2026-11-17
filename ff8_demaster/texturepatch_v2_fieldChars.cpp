@@ -847,6 +847,70 @@ namespace
 		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 	}
 
+	//FIELD_INTERPOLATION: the models' places in the in-between picture instead of this frame's (null: this frame's again).
+	//x, y, z, rhw per vertex, in the order of `vertices`; the other arrays stay as PointArrays left them.
+	void PointPositions(const float* between)
+	{
+		if (between != nullptr)
+		{
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+			glVertexPointer(4, GL_FLOAT, 4 * sizeof(float), between);
+		}
+		else
+		{
+			glBindBuffer(GL_ARRAY_BUFFER, gpu.on ? gpu.vertices : 0);
+			glVertexPointer(4, GL_FLOAT, sizeof(Vertex), gpu.on ? nullptr : static_cast<const void*>(vertices.data()));
+		}
+	}
+
+	//FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION (texturepatch_v2_fieldTween.cpp): what the kept models need to move with the
+	//main layer and to be drawn a second time for the in-between picture
+	struct Moved
+	{
+		double shift[2] = { 0, 0 }; //how far the main layer is drawn from the game's place this frame, in whole pixels
+		const float* between = nullptr; //the models' places in the in-between picture (null: this frame has none)
+		GLuint copy = 0; //the copy of the framebuffer the models go to
+		GLint framebuffer = 0; //that framebuffer
+	};
+	Moved MoveOfFrame()
+	{
+		Moved m;
+		if (draws.empty() || !TweenOn())
+			return m;
+		const bool tween = TweenCharacterShift(m.shift);
+		const CharDraw& first = draws[0];
+		TweenSnap(m.shift, first.projection, first.state.viewport[2], first.state.viewport[3]);
+		static std::vector<float> shown; //kept between frames
+		static std::vector<fieldtween::CharDrawRef> refs;
+		shown.resize(vertices.size() * 4);
+		for (size_t i = 0; i < vertices.size(); i++)
+		{
+			shown[i * 4] = static_cast<float>(vertices[i].pos[0] + m.shift[0]);
+			shown[i * 4 + 1] = static_cast<float>(vertices[i].pos[1] + m.shift[1]);
+			shown[i * 4 + 2] = vertices[i].pos[2];
+			shown[i * 4 + 3] = vertices[i].pos[3];
+		}
+		refs.clear();
+		for (const CharDraw& d : draws)
+		{
+			fieldtween::CharDrawRef r;
+			r.texture = d.texture;
+			r.first = d.first;
+			r.count = d.count;
+			refs.push_back(r);
+		}
+		m.between = TweenCharacterPositions(shown, refs, tween);
+		if (m.between != nullptr)
+		{
+			//before anything of this frame is drawn into the game's framebuffer (a new copy starts as what that holds)
+			m.framebuffer = first.state.drawFramebuffer;
+			m.copy = TweenFramebufferCopy(static_cast<GLuint>(m.framebuffer));
+			if (m.copy == 0)
+				m.between = nullptr;
+		}
+		return m;
+	}
+
 	//count indices of indexData from first; instances > 1: that many copies in one draw (instancing)
 	void DrawIndices(const uint32_t first, const uint32_t count, const int instances = 1)
 	{
@@ -1250,25 +1314,43 @@ namespace
 		glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 		glClientActiveTexture(GL_TEXTURE0);
 		glDisableClientState(GL_NORMAL_ARRAY);
-		for (const CharDraw& d : draws)
+		const Moved moved = MoveOfFrame();
+		//intoCopy: the second time, for the in-between picture (their places there, the copy of the game's framebuffer)
+		const auto drawAll = [&moved](const bool intoCopy)
 		{
-			const GameProgram& game = GameProgramOf(d.program);
-			glUseProgram(static_cast<GLuint>(d.program));
-			if (game.ambient >= 0)
-				glUniform3fv(game.ambient, 1, d.ambient);
-			if (game.blendMode >= 0)
-				glUniform1i(game.blendMode, d.blendMode);
-			Apply(d.state);
-			if (cullPatched)
+			for (const CharDraw& d : draws)
 			{
-				glEnable(GL_CULL_FACE);
-				glCullFace(GL_BACK);
-				glFrontFace(GL_CCW);
+				if (intoCopy && d.state.drawFramebuffer != moved.framebuffer)
+					continue;
+				const GameProgram& game = GameProgramOf(d.program);
+				glUseProgram(static_cast<GLuint>(d.program));
+				if (game.ambient >= 0)
+					glUniform3fv(game.ambient, 1, d.ambient);
+				if (game.blendMode >= 0)
+					glUniform1i(game.blendMode, d.blendMode);
+				RenderState state = d.state;
+				if (intoCopy)
+					state.drawFramebuffer = static_cast<GLint>(moved.copy);
+				Apply(state);
+				if (cullPatched)
+				{
+					glEnable(GL_CULL_FACE);
+					glCullFace(GL_BACK);
+					glFrontFace(GL_CCW);
+				}
+				float screen[16];
+				fieldtween::ShiftProjection(d.projection, intoCopy ? 0.0 : moved.shift[0], intoCopy ? 0.0 : moved.shift[1], screen);
+				glMatrixMode(GL_PROJECTION);
+				glLoadMatrixf(screen);
+				glBindTexture(GL_TEXTURE_2D, d.texture);
+				DrawRange(d.first, d.count);
 			}
-			glMatrixMode(GL_PROJECTION);
-			glLoadMatrixf(d.projection);
-			glBindTexture(GL_TEXTURE_2D, d.texture);
-			DrawRange(d.first, d.count);
+		};
+		drawAll(false);
+		if (moved.between != nullptr)
+		{
+			PointPositions(moved.between);
+			drawAll(true);
 		}
 		RestoreClient(client);
 		glMatrixMode(GL_PROJECTION);
@@ -1450,6 +1532,7 @@ namespace
 		glActiveTexture(GL_TEXTURE0);
 		UploadFrame(&f);
 		PointArrays();
+		const Moved moved = MoveOfFrame(); //FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION
 		size_t captures = 0;
 		bool failed = false;
 		FieldTimeAdd(TIME_CHARS_PREP, started);
@@ -1483,36 +1566,56 @@ namespace
 			glUniform4f(p.charMode, 0.0f, 0.0f, 0.0f, 0.0f);
 			glUniform4f(p.viewer, 0.0f, 0.0f, 0.0f, 1.0f);
 			size_t passes = 0;
-			for (int opaquePass = 1; opaquePass >= 0; opaquePass--)
+			//intoCopy: the second time, for the in-between picture (their places there, the copy of the game's framebuffer)
+			const auto drawModels = [&](const bool intoCopy)
 			{
-				const CharDraw* last = nullptr;
-				for (size_t i = 0; i < draws.size(); i++)
+				for (int opaquePass = 1; opaquePass >= 0; opaquePass--)
 				{
-					const CharDraw& d = draws[i];
-					if (d.opaque != (opaquePass == 1))
-						continue;
-					//the same state as the draw before it: one draw for both
-					size_t end = i + 1;
-					while (end < draws.size() && draws[end].opaque == d.opaque && draws[end].texture == d.texture
-						&& draws[end].first == draws[end - 1].first + draws[end - 1].count
-						&& memcmp(&draws[end].state, &d.state, sizeof(RenderState)) == 0 && memcmp(draws[end].ambient, d.ambient, sizeof(d.ambient)) == 0
-						&& draws[end].blendMode == d.blendMode && memcmp(draws[end].projection, d.projection, sizeof(d.projection)) == 0)
-						end++;
-					if (last == nullptr || memcmp(&last->state, &d.state, sizeof(RenderState)) != 0)
-						Apply(d.state);
-					if (cullPatched)
+					const CharDraw* last = nullptr;
+					for (size_t i = 0; i < draws.size(); i++)
 					{
-						glEnable(GL_CULL_FACE);
-						glCullFace(GL_BACK);
-						glFrontFace(GL_CCW); //the game's front faces turn counter-clockwise on the GL screen
+						const CharDraw& d = draws[i];
+						if (d.opaque != (opaquePass == 1) || (intoCopy && d.state.drawFramebuffer != moved.framebuffer))
+							continue;
+						//the same state as the draw before it: one draw for both
+						size_t end = i + 1;
+						while (end < draws.size() && draws[end].opaque == d.opaque && draws[end].texture == d.texture
+							&& draws[end].first == draws[end - 1].first + draws[end - 1].count
+							&& memcmp(&draws[end].state, &d.state, sizeof(RenderState)) == 0 && memcmp(draws[end].ambient, d.ambient, sizeof(d.ambient)) == 0
+							&& draws[end].blendMode == d.blendMode && memcmp(draws[end].projection, d.projection, sizeof(d.projection)) == 0)
+							end++;
+						if (last == nullptr || memcmp(&last->state, &d.state, sizeof(RenderState)) != 0)
+						{
+							RenderState state = d.state;
+							if (intoCopy)
+								state.drawFramebuffer = static_cast<GLint>(moved.copy);
+							Apply(state);
+						}
+						if (cullPatched)
+						{
+							glEnable(GL_CULL_FACE);
+							glCullFace(GL_BACK);
+							glFrontFace(GL_CCW); //the game's front faces turn counter-clockwise on the GL screen
+						}
+						//FIELD_SMOOTH_SCROLL: with the main layer's shift (the in-between places have theirs in them)
+						float screen[16];
+						fieldtween::ShiftProjection(d.projection, intoCopy ? 0.0 : moved.shift[0], intoCopy ? 0.0 : moved.shift[1], screen);
+						glUniformMatrix4fv(p.screenMatrix, 1, GL_FALSE, screen);
+						SetDrawUniforms(p, d, v, entry, now);
+						DrawRange(d.first, draws[end - 1].first + draws[end - 1].count - d.first);
+						if (!intoCopy)
+							passes++;
+						last = &draws[end - 1];
+						i = end - 1;
 					}
-					glUniformMatrix4fv(p.screenMatrix, 1, GL_FALSE, d.projection);
-					SetDrawUniforms(p, d, v, entry, now);
-					DrawRange(d.first, draws[end - 1].first + draws[end - 1].count - d.first);
-					passes++;
-					last = &draws[end - 1];
-					i = end - 1;
 				}
+			};
+			drawModels(false);
+			if (moved.between != nullptr)
+			{
+				PointPositions(moved.between);
+				drawModels(true);
+				PointPositions(nullptr);
 			}
 			FieldTimeAdd(TIME_CHARS_SCREEN, t);
 			FrameLogMark("characters: on the game's screen");
@@ -1629,11 +1732,14 @@ void FieldCharsMapRead(const bool pbrField)
 //glDrawElements hook (before anything else of DEMASTER's). true: DEMASTER takes the draw.
 bool FieldCharsDraw(const unsigned int mode, const int count, const unsigned int type, const void* indices)
 {
-	if (!Wanted())
+	//FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION: on a field drawn from layer images the characters are kept without PBR too
+	//(they wait for the main layer's place, and are drawn as the game draws them: ReplayAsGame)
+	const bool tweenKeeps = TweenKeepsCharacters();
+	if (!Wanted() && !tweenKeeps && !pending)
 		return false;
 	const FieldView& v = PbrView();
-	const bool field = v.active && v.settings != nullptr;
-	if (!field && !pending && !cullPatched)
+	const bool field = Wanted() && v.active && v.settings != nullptr;
+	if (!field && !tweenKeeps && !pending && !cullPatched)
 		return false; //not on a PBR field: nothing to do (no GL calls)
 	//FIELD_FRAME_LOG's timing: this hook's time, without the drawing (Flush times itself)
 	struct ReadTime
@@ -1652,7 +1758,7 @@ bool FieldCharsDraw(const unsigned int mode, const int count, const unsigned int
 		const GLint program = glstate::Program();
 		static const GameProgram none;
 		const GameProgram& game = program != 0 ? GameProgramOf(program) : none;
-		if (game.kind == ProgramKind::Character && field && !charsBroken && MakePrograms())
+		if (game.kind == ProgramKind::Character && ((field && !charsBroken && MakePrograms()) || (tweenKeeps && !charsBroken)))
 		{
 			glstate::CheckPoint(); //FIELD_GL_TRACK: now and then the remembered state is compared with the driver's here
 			const GLint vertexType = game.vertexType >= 0 ? glstate::UniformInt(program, game.vertexType) : 3;
@@ -1739,6 +1845,21 @@ bool FieldCharsDraw(const unsigned int mode, const int count, const unsigned int
 		Log("FIELD_PBR: reading the field characters failed: the game draws them itself for the rest of this session\n");
 	}
 	return false;
+}
+
+//texturepatch_v2_fieldTween.cpp: are characters waiting (and for which framebuffer); draw them now
+bool fieldrt::CharsPending(GLint& framebuffer)
+{
+	if (!pending || draws.empty())
+		return false;
+	framebuffer = draws[0].state.drawFramebuffer;
+	return true;
+}
+
+void fieldrt::CharsFlush()
+{
+	if (pending)
+		Flush();
 }
 
 //SwapBuffers: characters still waiting are drawn; the background's measures become the next frame's; Ctrl+F10

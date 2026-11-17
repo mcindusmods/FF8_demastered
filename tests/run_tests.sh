@@ -1,8 +1,8 @@
 #!/bin/bash
 # Runs the tests tests/build_tests.sh built (default folder: tests/out).
 #   tests/run_tests.sh [folder they were built into]
-# Always: the shared code (field_pbr_test, field_layers_test, field_chars_test) and fieldprep's model textures
-# (fieldprep_model_test). The shader tests draw with the real shaders through Mesa and need things that aren't in the
+# Always: the shared code (field_pbr_test, field_layers_test, field_chars_test, field_tween_test), fieldprep's model
+# textures (fieldprep_model_test) and the in-between picture's framebuffer copies on the GPU (mirror_test: Mesa is enough). The shader tests draw with the real shaders through Mesa and need things that aren't in the
 # repository, so they run only when you say where those are:
 #   FIELD=<a field's folder, prepared by fieldprep, PNG maps>   pbr_shader_test (the look, the moving lights, night, glows)
 #   GAME_SHADERS=<folder with the game's main.vert, main_char.frag>   chara_shader_test
@@ -14,6 +14,8 @@ run() { echo "--- $*"; "$@" 2>&1 | tail -${LINES_SHOWN:-3}; [ "${PIPESTATUS[0]}"
 run "$OUT/field_pbr_test"
 run "$OUT/field_layers_test"
 run "$OUT/field_chars_test"
+run "$OUT/field_tween_test"
+run "$OUT/mirror_test"
 scratch=$(mktemp -d)
 run "$OUT/fieldprep_model_test" "$scratch"
 rm -rf "$scratch"

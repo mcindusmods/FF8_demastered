@@ -1,6 +1,6 @@
 # ff8_demastered_2
 
-> **This branch (`mcindus`) is MCINDUS's continuation of DEMASTER** for the Lunatic Pandora mods, on top of Maki's code: world map textures by name, field backgrounds from PuPu/FME layer images, PBR lighting for fields (backgrounds, characters, models), `fieldprep`, a day/night clock, the look dials and moving lights.
+> **This branch (`mcindus`) is MCINDUS's continuation of DEMASTER** for the Lunatic Pandora mods, on top of Maki's code: world map textures by name, field backgrounds from PuPu/FME layer images (with smooth scrolling and in-between pictures for 60 pictures a second), walking at any angle with the stick, PBR lighting for fields (backgrounds, characters, models), `fieldprep`, a day/night clock, the look dials and moving lights.
 > - What each feature does and how to prepare images: [README_field_layers.md](README_field_layers.md), [README_field_pbr.md](README_field_pbr.md)
 > - Every setting: [demaster.conf](demaster.conf). What changed in each version: [CHANGELOG.txt](CHANGELOG.txt)
 > - Building: [COMPILING.md](COMPILING.md) (double-click `build_demaster.bat`)

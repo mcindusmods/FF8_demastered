@@ -832,7 +832,7 @@ void glstate::Install()
 {
 	if (installed || broken)
 		return;
-	if (!FIELD_LAYERS || !FIELD_PBR)
+	if (!FIELD_LAYERS || !(FIELD_PBR || FIELD_SMOOTH_SCROLL || FIELD_INTERPOLATION))
 	{
 		broken = true; //nothing would use it
 		return;
@@ -954,6 +954,24 @@ void glstate::Capture(RenderState& s)
 		s = c.draw;
 	else
 		QueryDraw(s);
+}
+
+GLuint glstate::DrawFramebuffer()
+{
+	if (Ready())
+		return static_cast<GLuint>(c.draw.drawFramebuffer);
+	GLint bound = 0;
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &bound);
+	return static_cast<GLuint>(bound);
+}
+
+GLuint glstate::ReadFramebuffer()
+{
+	if (Ready())
+		return static_cast<GLuint>(c.draw.readFramebuffer);
+	GLint bound = 0;
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &bound);
+	return static_cast<GLuint>(bound);
 }
 
 void glstate::SaveClient(ClientState& s)

@@ -53,6 +53,8 @@ namespace glstate
 	GLuint Texture(GLenum target, int unit); //GL_TEXTURE_2D or GL_TEXTURE_3D on that unit
 	GLuint BoundTexture2D(); //on the active unit
 	void Capture(RenderState& s);
+	GLuint DrawFramebuffer(); //bound for drawing, for reading
+	GLuint ReadFramebuffer();
 	void SaveClient(ClientState& c);
 	bool BlendOn();
 	GLint BlendEquationRgb();

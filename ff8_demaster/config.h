@@ -74,6 +74,11 @@ inline int FIELD_MOVING_LIGHTS;       //the moving lights module: the sun and th
 inline double FIELD_SUN;              //the sun's strength (fields with sky = 1, or [sun] on = 1 in their _lights.txt); 0: off
 inline int FIELD_PARTY_LIGHT;         //the light the party leader carries: 0 off, 1 at night, 2 always
 inline double FIELD_PARTY_LIGHT_STRENGTH;
+//Movement and motion (texturepatch_v2_analogMove.cpp, texturepatch_v2_fieldTween.cpp)
+inline int ANALOG_MOVEMENT;           //fields: the pad's left stick walks at any angle (the game's own analogue code, answered for it)
+inline double ANALOG_DEADZONE;        //how far the stick moves before it counts (0.05-0.9 of its throw)
+inline int FIELD_SMOOTH_SCROLL;       //field layers and characters at the scroll's unrounded place (no more whole-pixel steps)
+inline int FIELD_INTERPOLATION;       //an in-between frame after every field frame (60 pictures a second from the game's 30); 0: off
 inline int FIELD_GL_TRACK;            //1: remember the GL state as it is set instead of asking the driver around every draw (gl_state.h)
 
 void ReadConfigFile();

@@ -6,6 +6,7 @@
 #include "field_layers.h"
 #include "field_pbr.h"
 #include "field_moving_lights.h"
+#include "field_tween.h"
 
 #include <GL/glew.h>
 
@@ -218,6 +219,41 @@ namespace fieldrt
 		GLint vertexType = -1, blendMode = -1, ambient = -1; //uniform locations
 	};
 	const GameProgram& GameProgramOf(GLint program);
+
+	//--- smooth scroll and the in-between picture (texturepatch_v2_fieldTween.cpp; the rules: field_tween.h, the second
+	//picture: field_mirror.h)
+	//
+	//FIELD_SMOOTH_SCROLL draws every layer of a field from layer images at the unrounded place of its scroll, and the
+	//characters with the main layer's difference. FIELD_INTERPOLATION shows an in-between picture before each of the game's
+	//frames. Both work on fields drawn from layer images (FIELD_LAYERS pages: those say which layer a tile belongs to).
+	bool TweenOn(); //either is on (and its hooks were made)
+	void TweenCreateHooks(); //opengl.cpp, with the other OpenGL hooks
+	void TweenPageBuilt(GLuint target, const PageJob& job, const PageSize& size); //the page's cells: which layer, where on its canvas
+	void TweenPageForget(GLuint target);
+	void TweenForgetAll(); //another field
+	//glDrawElements hook, before the character module sees the draw. true: the draw is kept back and drawn later (a layer
+	//the game draws before the main one, while characters wait for the main layer's place)
+	bool TweenBeforeDraw(unsigned int mode, int count, unsigned int type, const void* indices);
+	//the draw goes to the driver, moved when it is a layer's (and a second time for the in-between picture)
+	void TweenDraw(unsigned int mode, int count, unsigned int type, const void* indices);
+	//a draw of the game by another call (glDrawArrays): draw is called once or twice (the second time into the copies)
+	void TweenOtherDraw(void (*draw)(void* context), void* context);
+	void TweenBeginDraw(); //a glBegin of the game: its frame gets no in-between picture (those draws can't be made twice)
+	//the character module keeps the game's character draws on this field even without PBR (they wait for the main layer)
+	bool TweenKeepsCharacters();
+	//The character module is about to draw what it kept. shift: how far the main layer is drawn from the game's place this
+	//frame (screen units; the main layer keeps to it from here on). The return says whether the characters may be tweened.
+	bool TweenCharacterShift(double shift[2]);
+	//a shift in whole pixels of the framebuffer a draw with that projection and viewport size goes to
+	void TweenSnap(double shift[2], const float projection[16], int viewportWidth, int viewportHeight);
+	//The kept characters as they are shown this frame (x, y, z, rhw per vertex, the shift added) and the game's draws they
+	//came in. Returns their places in the in-between picture (same layout; valid until the next call), or null when this
+	//frame has none. tween false: they stand where they are shown.
+	const float* TweenCharacterPositions(const std::vector<float>& shown, const std::vector<fieldtween::CharDrawRef>& draws, bool tween);
+	GLuint TweenFramebufferCopy(GLuint gameFramebuffer); //for the second picture (0: none this frame)
+	//the character module, for the kept-back draws: characters are waiting (and the framebuffer they go to); draw them now
+	bool CharsPending(GLint& framebuffer);
+	void CharsFlush();
 
 	//--- memory (texturepatch_v2_fieldLayers.cpp)
 	bool SafeRead(void* destination, const void* source, size_t length); //false: not readable

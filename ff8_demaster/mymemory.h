@@ -21,6 +21,7 @@ BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, 
 	GUEST_STACK_BASE, GUEST_PAGE_TABLE, GUEST_LOADIMAGE, WMSET_GUEST, WM_CHARA_READ_CALL, WM_READ_FILE, FIELD_READ_FILE,
 	PSX_VRAM, READ_VRAM_PALETTE, WRITE_PALETTE,
 	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
+	ANALOG_GET_VALUE, ANALOG_FIELD_TEST, ANALOG_FIELD_X, ANALOG_FIELD_Y,
 	ADDRESS_NAME_COUNT //keep last
 };
 
@@ -125,6 +126,13 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 	//called only from write_palette_texture_set 0x466190
 	{ READ_VRAM_PALETTE    , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x024B5E0,} },
 	{ WRITE_PALETTE        , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x024B450,} },
+	//ANALOG_MOVEMENT: the host of 0x49F0A0 (the pad's analogue value: port, which stick axis, port; -1 when the pad record is
+	//not an analogue pad's, which is always so in Remastered) and the three E8 calls to it in the host of 0x4789A0 (the
+	//field's movement from the pad, FFNx's sub_4789A0): "is there a stick" (-1: walk by the d-pad bits), left X, left Y
+	{ ANALOG_GET_VALUE     , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x031EB50,} },
+	{ ANALOG_FIELD_TEST    , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0291659,} },
+	{ ANALOG_FIELD_X       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x02918CB,} },
+	{ ANALOG_FIELD_Y       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0291927,} },
 	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
 	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
 	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
@@ -277,6 +285,12 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
 { FIELD_CULL_QUAD      , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x08C4AA6 }},
 { FIELD_ENTITIES       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x22A1068 }},
 { FIELD_ENTITY_COUNT   , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x22A10F9 }},
+//the same function and its three calls in the JP game (found by tools/port_addresses.py and by listing every call to it:
+//both DLLs have the same 31, in the same order)
+{ ANALOG_GET_VALUE     , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x0333550 }},
+{ ANALOG_FIELD_TEST    , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x029D1B0 }},
+{ ANALOG_FIELD_X       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x029D43F }},
+{ ANALOG_FIELD_Y       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x029D49B }},
 };
 
 

@@ -12,6 +12,7 @@
 #include "debug.h"
 #include "opengl.h"
 #include "texture.h"
+#include "field_pbr_runtime.h"
 #include "minhook/include/MinHook.h"
 
 #include <algorithm>
@@ -1033,13 +1034,25 @@ static void __stdcall HookGlDrawArrays(const GLenum mode, const GLint first, con
 {
 	if (capturing)
 		Draw("glDrawArrays", mode, count, 0, nullptr, false, first);
-	reinterpret_cast<void(__stdcall*)(GLenum, GLint, GLsizei)>(drawArraysOriginal)(mode, first, count);
+	//FIELD_INTERPOLATION: the draw goes to the driver, and into the second picture when this frame has one
+	struct Arrays
+	{
+		GLenum mode;
+		GLint first;
+		GLsizei count;
+	} arrays{ mode, first, count };
+	fieldrt::TweenOtherDraw([](void* context)
+	{
+		const Arrays& a = *static_cast<const Arrays*>(context);
+		reinterpret_cast<void(__stdcall*)(GLenum, GLint, GLsizei)>(drawArraysOriginal)(a.mode, a.first, a.count);
+	}, &arrays);
 }
 
 static void __stdcall HookGlBegin(const GLenum mode)
 {
 	if (capturing)
 		Draw("glBegin", mode, 0, 0, nullptr, false, 0);
+	fieldrt::TweenBeginDraw(); //FIELD_INTERPOLATION: this frame gets no in-between picture
 	reinterpret_cast<void(__stdcall*)(GLenum)>(beginOriginal)(mode);
 }
 

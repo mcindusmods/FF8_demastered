@@ -1,5 +1,49 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.11 (in the source; not packaged yet) - walking at any angle, smooth scroll, in-between pictures (60 a second)
+-----------------------------------------------------------------------------------------------------------------------
+None of this has run in the game yet: it was written against the game's code and a frame log, the rules and the
+framebuffer copying are tested on Linux, and the Windows-only files are type-checked. Each part has its own switch.
+Walking at any angle (new: ANALOG_MOVEMENT, on by default; ANALOG_DEADZONE 0.25)
+  - Fields: the pad's left stick walks in its own direction, not the d-pad's eight. The 2000 game still has the
+    PlayStation's analogue walking; it asks a function "is there a stick" three times a frame and Remastered always answers
+    no. Those three calls now go through DEMASTER, which answers with an XInput pad's left stick while it is outside its
+    dead zone (FFNx does the same for the 2000 game). Stick at rest, no pad, keyboard: exactly as before.
+  - EFIGS and JP addresses (ANALOG_GET_VALUE and the three call sites in mymemory.h; both DLLs have the same 31 calls to
+    that function, in the same order). Not on the world map: that also needs the d-pad bits taken out of the game's key
+    state, and that address is not known.
+Smooth scroll (new: FIELD_SMOOTH_SCROLL, on by default; fields drawn from layer images)
+  - Every layer is drawn at the unrounded place of its scroll. The game places layers by whole-number arithmetic, so they
+    move in steps of a PlayStation pixel, and layers at other speeds than the main one step at other moments. DEMASTER
+    reads each layer's place from the tiles the game draws, runs the places through a filter (an alpha-beta filter,
+    critically damped: fieldtween::Axis) and moves the draw by the difference through the projection matrix, in whole
+    framebuffer pixels. On steady scrolls the steps come out 6 to 8 times more even than the game's.
+  - The characters move with the main layer's difference, so they stay on the floor. They are drawn before the
+    background, so they wait for the main layer's first draw; opaque layers the game draws before the main one are kept
+    back and drawn right after the characters, in the game's order. Without PBR the characters are kept and drawn as the
+    game draws them.
+  - Never further than 3/4 of a PlayStation pixel from the game's place; exactly the game's place at rest; a move of more
+    than 12 pixels in a frame is a cut and is taken as it is; a layer that reaches an edge of the picture is never moved
+    off it.
+In-between pictures (new: FIELD_INTERPOLATION, on by default; 0 turns it off; fields drawn from layer images)
+  - Before each of the game's frames an in-between picture is shown: every layer halfway along its scroll, every
+    character's vertices halfway between the last frame's and this one's (same texture and vertex count: vertex by vertex;
+    otherwise the model moves as a whole). The game keeps its own 30 frames a second; nothing in its logic is touched.
+  - How: everything the game draws in a field frame is drawn a second time into DEMASTER's copies of the game's
+    framebuffers (field_mirror.cpp), with only the layers' and characters' places changed, and so are its clears, blits
+    and copies; the game's own anti-aliasing and final draw run on the copies too. At SwapBuffers the in-between picture
+    is shown, half a frame later the game's own.
+  - It measures the game's rate per field and only runs at about 30 pictures a second. If the game runs slower with it
+    than without (more than 12% for two seconds), it turns itself off for that field and says so in the log; after three
+    such fields, for the session. FIELD_GL_TRACK now also runs without FIELD_PBR when either of these is on.
+  - Not in-between yet: FIELD_PBR's character shadows and reflections (the frame's own in both pictures), the game's
+    round shadows, effects that are neither tiles nor characters. About double the GPU work in fields, and a second copy
+    of the game's framebuffers in video memory.
+For working on the code
+  - tests/field_tween_test.cpp (the filter, the layer a draw belongs to, the character tween, the pacing, the stick) and
+    tests/mirror_test.cpp (the framebuffer copies on a frame built like the game's, pixel for pixel, under Mesa). Both run
+    in tests/run_tests.sh. CODE_GUIDE.md has a section on all three features.
+
 v15.10 (in the source; not packaged yet) - the look, moving lights, night glows fixed, light rolls off, a Release build
 -----------------------------------------------------------------------------------------------------------------------
 The look (new: FIELD_PBR_LOOK in demaster.conf, 0 = off by default)

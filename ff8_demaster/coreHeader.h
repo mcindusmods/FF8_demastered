@@ -111,6 +111,8 @@ static enum Modes
 
 DWORD WtpCheck();
 void WtpGl();
+//Fields: the left stick walks at any angle (texturepatch_v2_analogMove.cpp)
+void ApplyAnalogMovementPatch();
 //World map vehicles (texturepatch_v2_worldVehicles.cpp)
 void ApplyWorldVehiclesPatch();
 //textureIndex: GetTextureIndex() (the page has a wmset_XXX / wmset0_XXX file under it when it equals tPage)
@@ -129,6 +131,13 @@ void FieldLayersAfterDraw();
 //draws the characters itself, before the next thing the game draws)
 bool FieldCharsDraw(unsigned int mode, int count, unsigned int type, const void* indices);
 void FieldCharsSwap(); //SwapBuffers
+//FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION (texturepatch_v2_fieldTween.cpp), in SwapBuffers, in this order: nothing stays
+//kept back; when the in-between picture is ready it goes on the screen (true: show it, then TweenShowFrame waits half a
+//frame and puts the game's own back); after the game's picture was shown the frame is over (hdc: the window's)
+void TweenEndOfDraws();
+bool TweenShowBetween();
+void TweenShowFrame();
+void TweenFrameEnd(void* hdc);
 void FieldCharsMapRead(bool pbrField); //game thread, a field's .map was read (with PBR files or not)
 //Field model textures (texturepatch_v2_fieldModelMaps.cpp)
 bool FieldModelTexImage(unsigned int texture, int width, int height, const void* data); //glTexImage2D of the game, after it

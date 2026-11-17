@@ -87,4 +87,8 @@ void ReadConfigFile()
     DAY_NIGHT_KEYS = conf.GetInteger("", "DAY_NIGHT_KEYS", 1);
     DAY_NIGHT_BAR = conf.GetInteger("", "DAY_NIGHT_BAR", 1);
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);
+    ANALOG_MOVEMENT = conf.GetInteger("", "ANALOG_MOVEMENT", 1);
+    ANALOG_DEADZONE = conf.GetReal("", "ANALOG_DEADZONE", 0.25);
+    FIELD_SMOOTH_SCROLL = conf.GetInteger("", "FIELD_SMOOTH_SCROLL", 1);
+    FIELD_INTERPOLATION = conf.GetInteger("", "FIELD_INTERPOLATION", 1);
 }

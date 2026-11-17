@@ -9,6 +9,7 @@
 #include "config.h"
 #include "debug.h"
 #include "texture.h"
+#include "field_pbr_runtime.h"
 #include "gl_state.h"
 #include "minhook/include/MinHook.h"
 #include "day_night.h"
@@ -114,8 +115,18 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
     }
 #endif
     FrameLogDraw(mode, count, type, indices); //FIELD_FRAME_LOG, the game's own state, before DEMASTER changes any
+    //FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION: which layer the draw is; true: kept back until the characters are drawn
+    const bool tween = fieldrt::TweenOn();
+    if (tween && fieldrt::TweenBeforeDraw(mode, count, type, indices))
+        return;
     if (FieldCharsDraw(mode, count, type, indices))
         return; //FIELD_PBR_*: a field character DEMASTER draws itself (before the next thing the game draws), or a round shadow
+    if (tween)
+    {
+        //the same three steps as below, with the layer's shift, and a second time for the in-between picture
+        fieldrt::TweenDraw(mode, count, type, indices);
+        return;
+    }
     FieldLayersBeforeDraw(count, static_cast<unsigned int>(type), indices); //FIELD_SMOOTH, FIELD_PBR
     static_cast<void (__stdcall*)(GLenum, GLsizei, GLenum, const void*)>(ogl_draw_elements)
     (mode,count, type, indices);
@@ -481,6 +492,7 @@ void CheckCreateImGuiTextureDumpDirectory(std::string& directoryPath)
  */
 BOOL __stdcall HookSwapBuffers(const HDC hdc)
 {
+    TweenEndOfDraws(); //FIELD_SMOOTH_SCROLL: layers kept back for the characters are drawn
     FieldCharsSwap(); //FIELD_PBR_*: characters still waiting are drawn; what this frame measured is used by the next
     FrameLogSwap(); //FIELD_FRAME_LOG: the logged frame ends here; Ctrl+F11 asks for one
     DayNightSwap(); //DAY_NIGHT: the clock moves on; its test keys and bar
@@ -551,7 +563,15 @@ BOOL __stdcall HookSwapBuffers(const HDC hdc)
         }
     }
     
-    return swapBuffersTrampoline(hdc); //static_cast<BOOL (__stdcall*)(HDC)>(swapBuffersTrampoline)(hdc);
+    //FIELD_INTERPOLATION: the in-between picture first, the game's own half a frame later
+    if (TweenShowBetween())
+    {
+        swapBuffersTrampoline(hdc);
+        TweenShowFrame();
+    }
+    const BOOL shown = swapBuffersTrampoline(hdc); //static_cast<BOOL (__stdcall*)(HDC)>(swapBuffersTrampoline)(hdc);
+    TweenFrameEnd(hdc); //the next frame starts (with a second picture or not)
+    return shown;
 }
 
 
@@ -579,6 +599,7 @@ void ViewportBackdoorInject(bool& backdoorUsed)
         MH_CreateHookApi(L"OPENGL32", "glTexCoordPointer", HookGlTexCoordPointer, &ogl_tex_coord_pointer);
         MH_CreateHookApi(L"OPENGL32", "glScissor", HookGlScissors, &ogl_scissors);
         FrameLogCreateHooks(); //FIELD_FRAME_LOG: glDrawArrays, glBegin
+        fieldrt::TweenCreateHooks(); //FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION: glClear, the framebuffer copies
         glstate::Install(); //FIELD_GL_TRACK: the GL state remembered as it is set (the field code asks the driver far less)
     }
     MH_CreateHook(&SwapBuffers, &HookSwapBuffers, reinterpret_cast<LPVOID*>(&swapBuffersTrampoline));
