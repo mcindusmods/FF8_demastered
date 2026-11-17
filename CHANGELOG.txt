@@ -39,6 +39,18 @@ In-between pictures (new: FIELD_INTERPOLATION, on by default; 0 turns it off; fi
   - Not in-between yet: FIELD_PBR's character shadows and reflections (the frame's own in both pictures), the game's
     round shadows, effects that are neither tiles nor characters. About double the GPU work in fields, and a second copy
     of the game's framebuffers in video memory.
+Fixed (found in the first log from the game)
+  - The field shader did not compile on NVIDIA cards since v15.8: one line used clamp() on whole numbers, which GLSL 1.20
+    doesn't have ("demaster_field.frag does not compile: 0(380) : error C7011" in the log). Mesa, which the tests draw
+    with, lets it through. With that shader file in the game folder PBR was off: the field drawn from its paintings, the
+    game's own characters and round shadows. So day and night in the shader (v15.8), the glow fix and roll-off and the
+    look and moving lights (v15.10) have not run on an NVIDIA card before this. tests/run_tests.sh now also reads every
+    shader with glslangValidator, which stops at the same line.
+  - FIELD_GL_TRACK turned itself off at the logo in every session ("2D texture binding: remembered 0, the driver has 3").
+    The game calls some OpenGL functions under two names: glActiveTexture and glActiveTextureARB, glBlendEquation and
+    glBlendEquationEXT / glBlendEquationSeparateEXT, and framebuffers only as glBindFramebufferEXT. The tracker watched one
+    name of each. It now watches both where the driver has them as separate entries (the log says which), and when it
+    still finds a difference it lists every kind of difference, not only the first.
 For working on the code
   - tests/field_tween_test.cpp (the filter, the layer a draw belongs to, the character tween, the pacing, the stick) and
     tests/mirror_test.cpp (the framebuffer copies on a frame built like the game's, pixel for pixel, under Mesa). Both run

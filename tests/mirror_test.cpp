@@ -263,9 +263,20 @@ static void Frame(const float layerX, const Vertex* character, const int trailSt
 	//the scene copied into a loose texture, which the post pass reads (next to the scene's own texture on unit 1)
 	glBindTexture(GL_TEXTURE_2D, looseTexture);
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFb);
-	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, SCENE_W, SCENE_H);
-	if (mirrored)
-		fieldmirror::CopyTexSubImage(GL_TEXTURE_2D, 0, 0, 0, 0, 0, SCENE_W, SCENE_H);
+	if (trailStep % 2 == 1)
+	{
+		//the call the game itself uses (it imports glCopyTexImage2D, not the Sub one): the texture is made anew each time
+		glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 0, 0, SCENE_W, SCENE_H, 0);
+		if (mirrored)
+			fieldmirror::CopyTexImage(GL_TEXTURE_2D, 0, GL_RGBA8, 0, 0, SCENE_W, SCENE_H, 0);
+	}
+	else
+	{
+		//DEMASTER's own (the characters' depth copy)
+		glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, SCENE_W, SCENE_H);
+		if (mirrored)
+			fieldmirror::CopyTexSubImage(GL_TEXTURE_2D, 0, 0, 0, 0, 0, SCENE_W, SCENE_H);
+	}
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glBindFramebuffer(GL_FRAMEBUFFER, postFb);
 	GameClear(GL_COLOR_BUFFER_BIT);

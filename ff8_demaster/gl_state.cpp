@@ -86,6 +86,10 @@ namespace
 
 	Enable_t o_glEnable, o_glDisable, o_glEnableClientState, o_glDisableClientState, o_glDepthFunc, o_glCullFace, o_glFrontFace,
 		o_glMatrixMode, o_glActiveTexture, o_glClientActiveTexture, o_glBlendEquation;
+	//The same calls under their older names. The game uses both glActiveTexture and glActiveTextureARB, only
+	//glBindFramebufferEXT (never glBindFramebuffer), and glBlendEquationEXT / glBlendEquationSeparateEXT next to
+	//glBlendEquation. A driver may give each name its own entry point, and a hook on one then never sees the other.
+	Enable_t o_glActiveTextureARB, o_glBlendEquationEXT;
 	BlendFunc_t o_glBlendFunc;
 	DepthMask_t o_glDepthMask;
 	AlphaFunc_t o_glAlphaFunc;
@@ -105,9 +109,9 @@ namespace
 	MakeCurrent_t o_wglMakeCurrent;
 	UseProgram_t o_glUseProgram;
 	BindBuffer_t o_glBindBuffer;
-	BindFramebuffer_t o_glBindFramebuffer;
+	BindFramebuffer_t o_glBindFramebuffer, o_glBindFramebufferEXT;
 	BlendFuncSeparate_t o_glBlendFuncSeparate;
-	BlendEquationSeparate_t o_glBlendEquationSeparate;
+	BlendEquationSeparate_t o_glBlendEquationSeparate, o_glBlendEquationSeparateEXT;
 	Uniform1i_t o_glUniform1i;
 	Uniform1iv_t o_glUniform1iv;
 	Uniform3f_t o_glUniform3f;
@@ -363,6 +367,12 @@ namespace
 			c.draw.blendEqRgb = c.draw.blendEqAlpha = static_cast<GLint>(m);
 		o_glBlendEquation(m);
 	}
+	void APIENTRY MyBlendEquationEXT(const GLenum m)
+	{
+		if (K())
+			c.draw.blendEqRgb = c.draw.blendEqAlpha = static_cast<GLint>(m);
+		o_glBlendEquationEXT(m);
+	}
 	void APIENTRY MyBlendEquationSeparate(const GLenum r, const GLenum a)
 	{
 		if (K())
@@ -371,6 +381,15 @@ namespace
 			c.draw.blendEqAlpha = static_cast<GLint>(a);
 		}
 		o_glBlendEquationSeparate(r, a);
+	}
+	void APIENTRY MyBlendEquationSeparateEXT(const GLenum r, const GLenum a)
+	{
+		if (K())
+		{
+			c.draw.blendEqRgb = static_cast<GLint>(r);
+			c.draw.blendEqAlpha = static_cast<GLint>(a);
+		}
+		o_glBlendEquationSeparateEXT(r, a);
 	}
 	void APIENTRY MyDepthFunc(const GLenum f) { if (K()) c.draw.depthFunc = static_cast<GLint>(f); o_glDepthFunc(f); }
 	void APIENTRY MyDepthMask(const GLboolean m) { if (K()) c.draw.depthMask = m; o_glDepthMask(m); }
@@ -622,6 +641,7 @@ namespace
 		o_glUseProgram(program);
 	}
 	void APIENTRY MyActiveTexture(const GLenum unit) { if (K()) c.activeUnit = static_cast<GLint>(unit) - GL_TEXTURE0; o_glActiveTexture(unit); }
+	void APIENTRY MyActiveTextureARB(const GLenum unit) { if (K()) c.activeUnit = static_cast<GLint>(unit) - GL_TEXTURE0; o_glActiveTextureARB(unit); }
 	void APIENTRY MyClientActiveTexture(const GLenum unit)
 	{
 		if (K())
@@ -649,6 +669,17 @@ namespace
 				c.draw.readFramebuffer = static_cast<GLint>(framebuffer);
 		}
 		o_glBindFramebuffer(target, framebuffer);
+	}
+	void APIENTRY MyBindFramebufferEXT(const GLenum target, const GLuint framebuffer)
+	{
+		if (K())
+		{
+			if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER)
+				c.draw.drawFramebuffer = static_cast<GLint>(framebuffer);
+			if (target == GL_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER)
+				c.draw.readFramebuffer = static_cast<GLint>(framebuffer);
+		}
+		o_glBindFramebufferEXT(target, framebuffer);
 	}
 	void APIENTRY MyBindVertexArray(const GLuint vao) { if (K()) c.vao = static_cast<GLint>(vao); o_glBindVertexArray(vao); }
 	void APIENTRY MyUniform1i(const GLint location, const GLint v) { SetUniform(location, &v, nullptr); o_glUniform1i(location, v); }
@@ -715,16 +746,44 @@ namespace
 		return true;
 	}
 
-	//--- the self-check
-	char mismatch[200];
+	//The same call under another name (see the o_gl...ARB / ...EXT pointers). Not having the name, or the name being the
+	//entry that is hooked already, is fine; only a hook that can't be made isn't.
+	template <typename T>
+	bool HookOtherName(const char* name, T detour, T& original)
+	{
+		const PROC address = wglGetProcAddress(name);
+		const auto value = reinterpret_cast<intptr_t>(address);
+		if (address == nullptr || value == 1 || value == 2 || value == 3 || value == -1)
+			return true;
+		LPVOID trampoline = nullptr;
+		const MH_STATUS status = MH_CreateHook(reinterpret_cast<LPVOID>(address), reinterpret_cast<LPVOID>(detour), &trampoline);
+		if (status == MH_ERROR_ALREADY_CREATED)
+			return true; //one entry point for both names
+		if (status != MH_OK || trampoline == nullptr)
+		{
+			OutputDebug("FIELD_GL_TRACK: cannot hook %s (MinHook %d)\n", name, static_cast<int>(status));
+			return false;
+		}
+		original = reinterpret_cast<T>(trampoline);
+		OutputDebug("FIELD_GL_TRACK: %s is its own entry in this driver: watched too\n", name);
+		return true;
+	}
 
+	//--- the self-check
+	char mismatch[700];
+	bool different = false;
+
+	//Every difference is written down (each kind once), not only the first: one log then says everything that is missed.
+	//Always true, so the checks after a difference still run; Check looks at `different`.
 	bool Same(const char* what, const double copy, const double driver)
 	{
 		if (copy == driver)
 			return true;
-		if (mismatch[0] == 0)
-			snprintf(mismatch, sizeof(mismatch), "%s: remembered %g, the driver has %g", what, copy, driver);
-		return false;
+		different = true;
+		const size_t used = strlen(mismatch);
+		if (strstr(mismatch, what) == nullptr && used + 100 < sizeof(mismatch))
+			snprintf(mismatch + used, sizeof(mismatch) - used, "%s%s: remembered %g, the driver has %g", used ? "; " : "", what, copy, driver);
+		return true;
 	}
 
 	bool SameArray(const char* what, const ArrayState& a, const ArrayState& b)
@@ -747,6 +806,7 @@ namespace
 			return;
 		}
 		mismatch[0] = 0;
+		different = false;
 		bool ok = true;
 		GLint program = 0;
 		glGetIntegerv(GL_CURRENT_PROGRAM, &program);
@@ -817,7 +877,7 @@ namespace
 					ok = Same("a uniform of the game's", w.f[i], v[i]);
 			}
 		}
-		if (!ok)
+		if (different)
 		{
 			broken = true;
 			OutputDebug("FIELD_GL_TRACK: the GL state DEMASTER remembers differs from the driver's (%s, %s): DEMASTER asks the driver "
@@ -892,6 +952,10 @@ void glstate::Install()
 	ok &= HookDriver("glUniform3fv", &MyUniform3fv, o_glUniform3fv);
 	ok &= HookDriver("glBindVertexArray", &MyBindVertexArray, o_glBindVertexArray);
 	ok &= HookDriver("glLinkProgram", &MyLinkProgram, o_glLinkProgram);
+	ok &= HookOtherName("glActiveTextureARB", &MyActiveTextureARB, o_glActiveTextureARB);
+	ok &= HookOtherName("glBindFramebufferEXT", &MyBindFramebufferEXT, o_glBindFramebufferEXT);
+	ok &= HookOtherName("glBlendEquationEXT", &MyBlendEquationEXT, o_glBlendEquationEXT);
+	ok &= HookOtherName("glBlendEquationSeparateEXT", &MyBlendEquationSeparateEXT, o_glBlendEquationSeparateEXT);
 	if (!ok)
 	{
 		broken = true;

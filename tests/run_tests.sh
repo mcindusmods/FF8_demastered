@@ -7,6 +7,7 @@
 #   FIELD=<a field's folder, prepared by fieldprep, PNG maps>   pbr_shader_test (the look, the moving lights, night, glows)
 #   GAME_SHADERS=<folder with the game's main.vert, main_char.frag>   chara_shader_test
 #   BENCH=<frames> with FIELD: also times the field shader per setup
+# With glslangValidator installed (glslang-tools) every shader in DEMASTER_EXP/shaders is also checked strictly.
 cd "$(dirname "$0")/.."
 OUT="${1:-tests/out}"
 fail=0
@@ -23,6 +24,17 @@ if [ -n "$FIELD" ]; then
 	pictures=$(mktemp -d)
 	LINES_SHOWN=40 run "$OUT/pbr_shader_test" "$FIELD" DEMASTER_EXP/shaders/demaster_field.frag "$pictures"
 	echo "    its pictures: $pictures"
+fi
+# The shaders, read strictly as the GLSL version they declare. Mesa (which the shader tests draw with) lets things through
+# that NVIDIA's compiler stops at: v15.8 to v15.10 shipped a field shader that never compiled on NVIDIA because of one.
+if command -v glslangValidator >/dev/null; then
+	echo "--- glslangValidator DEMASTER_EXP/shaders/*"
+	for f in DEMASTER_EXP/shaders/*.frag DEMASTER_EXP/shaders/*.vert; do
+		errors=$(glslangValidator "$f" 2>&1 | grep "ERROR" | grep -v "compilation errors")
+		if [ -n "$errors" ]; then echo "$f"; echo "$errors" | head -5; fail=1; fi
+	done
+else
+	echo "--- shaders not checked strictly: glslangValidator is not installed (Debian/Ubuntu: glslang-tools)"
 fi
 if [ -n "$GAME_SHADERS" ]; then run "$OUT/chara_shader_test" DEMASTER_EXP/shaders "$GAME_SHADERS"; fi
 [ $fail -eq 0 ] && echo "all passed" || echo "FAILURES"
