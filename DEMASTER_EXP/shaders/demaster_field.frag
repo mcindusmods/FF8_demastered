@@ -377,7 +377,7 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		{
 			if (k >= demasterShadowCount)
 				break;
-			int li = clamp(int(demasterShadowInfo[k].x + 0.5), 0, 7);
+			int li = int(clamp(demasterShadowInfo[k].x + 0.5, 0.0, 7.0)); // (GLSL 1.20 has no clamp for whole numbers)
 			lightShadow[li] = min(lightShadow[li], demasterShadowAt(k, position + normal * position.z * 0.004));
 		}
 
