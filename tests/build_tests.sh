@@ -37,5 +37,5 @@ link chara_shader_test $O/chara_shader_test.o -lEGL -lGL
 link field_depth_test $O/field_depth_test.o -lEGL -lGL
 link field_tween_test $O/field_tween_test.o $O/field_tween.o $O/analog_move.o
 link mirror_test $O/mirror_test.o $O/field_mirror.o -lEGL -lGL
-link scene_shader_test $O/scene_shader_test.o $O/scene_light.o $O/field_pbr.o -lEGL -lGL
+link scene_shader_test $O/scene_shader_test.o $O/scene_light.o $O/field_pbr.o $O/field_moving_lights.o -lEGL -lGL
 echo "built into $OUT"

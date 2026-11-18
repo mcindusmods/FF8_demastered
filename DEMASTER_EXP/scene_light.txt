@@ -18,6 +18,16 @@ night_tint = 0.55 0.65 1
 night_level = 0.3
 ao = 0.5
 glow = 1
+; The sun and the moon cross the stage by the clock (the camera's place in the stage is read from the game):
+; sun         = how much a surface turned away from it darkens (0-1; 0: the stage as painted)
+; relief      = how strongly a stage page's normal map (<page>_N) shows in its light (0-4)
+; specular    = its highlight on pages with an ORM map (0-4)
+; sun_azimuth = where it rises, degrees around the stage (0: along the stage's +x); sun_height = how high it climbs
+sun = 0.35
+relief = 1
+specular = 0.5
+sun_azimuth = 30
+sun_height = 60
 
 [world]
 night = auto
@@ -32,6 +42,10 @@ night_level = 0.3
 ;                                      with stages is for battles only
 ;   moment = 3000-65535                the story's progress, the game's own counter (the log says what it is when a
 ;                                      battle or the world map starts, with SCENE_DEBUG=1); left out: always
+;   light  = x up z  r g b  range [night|day]
+;            a light of the stage's own, four per stage at most. x and z: its place on the stage's floor, in the
+;            stage's units (0 0 is the middle; the fighters stand a few thousand apart); up: how far above the
+;            floor; r g b: its colour (linear, may be above 1); range: how far it reaches; night or day: only then
 ; Later rules go over earlier ones.
 
 ; After the Lunar Cry (the counter is 3000 once the Ragnarok is yours): the night is red instead of blue.
@@ -47,6 +61,11 @@ night_tint = 1 0.5 0.45
 ;where = battle
 ;stage = 7, 20-22
 ;night = 0
+;[rule torches]
+;where = battle
+;stage = 12
+;light = -1500 600 800   3 1.6 0.6   4000 night
+;light = 1500 600 800    3 1.6 0.6   4000 night
 ;[rule always dusk]
 ;where = battle
 ;stage = 31

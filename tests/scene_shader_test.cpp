@@ -4,6 +4,9 @@
 //	2. the multiplier works in linear light (a battle stage by night: night_level x night_tint);
 //	3. an ORM map's AO darkens by the share asked for;
 //	4. a picture of the glows: coverage 1 takes the darkened picture's place, coverage 0 adds, shown by how night it is.
+//	5. a battle stage lit from its own space: a floor is drawn the way the game hands it to OpenGL (corners on the screen,
+//	   rhw = 1 / distance), with the camera a real battle had (the registers DEMASTER logged there); the shader has to find
+//	   the floor's place and direction again from that: the sun's part, one of the stage's own lights, a flat normal map.
 //Run: scene_shader_test <DEMASTER_EXP/shaders folder>
 #define GL_GLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -103,7 +106,9 @@ int main(int argc, char** argv)
 	}
 	const GLuint program = glCreateProgram();
 	//the game's vertex shader does more (its vertex types); what matters here: its colour arrives as BGRA
-	glAttachShader(program, Compile(GL_VERTEX_SHADER, "#version 120\nvoid main(){gl_Position=gl_Vertex;gl_TexCoord[0]=gl_MultiTexCoord0;"
+	//(as the game's main.vert treats corners that are already on the screen: w arrives as rhw)
+	glAttachShader(program, Compile(GL_VERTEX_SHADER, "#version 120\nuniform float onScreen;\nvoid main(){vec4 pos=gl_Vertex;"
+		"if(onScreen>0.5){pos.w=1.0/pos.w;pos.xyz*=pos.w;pos=gl_ProjectionMatrix*pos;}gl_Position=pos;gl_TexCoord[0]=gl_MultiTexCoord0;"
 		"gl_FrontColor=gl_Color;}\n"));
 	glAttachShader(program, Compile(GL_FRAGMENT_SHADER, ReadFile(folder + "main.frag")));
 	glLinkProgram(program);
@@ -226,6 +231,169 @@ int main(int argc, char** argv)
 	for (int c = 0; c < 3; c++)
 		want[c] = static_cast<int>(std::lround(painted[c]));
 	Check(near(got, want), "glow by day: nothing");
+
+	//5. the stage, lit from its own space
+	{
+		//the registers of the battle in frame log nofield_20261117_212324 (stage 101, the camera at rest)
+		int32_t reg[32]{};
+		const auto pack = [](const int a, const int b) { return static_cast<int32_t>((static_cast<uint32_t>(b & 0xFFFF) << 16) | static_cast<uint32_t>(a & 0xFFFF)); };
+		reg[0] = pack(-3921, 0); reg[1] = pack(1184, 129); reg[2] = pack(4071, 429); reg[3] = pack(-1177, 449); reg[4] = -3898;
+		reg[5] = -547; reg[6] = 469; reg[7] = 8796; reg[24] = 160 << 16; reg[25] = 108 << 16; reg[26] = 512;
+		scenelight::Camera camera;
+		Check(scenelight::CameraFromRegisters(reg, camera), "the logged registers are a camera");
+		const int W = 640, H = 480;
+		GLuint big = 0;
+		glGenTextures(1, &big);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, big);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, big, 0);
+		glViewport(0, 0, W, H);
+		glMatrixMode(GL_PROJECTION);
+		const float ortho[16] = { 0.003125f, 0, 0, 0, 0, -0.00416667f, 0, 0, 0, 0, 1, 0, -1, 1, 0, 1 }; //the game's
+		glLoadMatrixf(ortho);
+		glUniform1f(at("onScreen"), 1.0f);
+		//a floor in the stage: y = 300 (y runs down), where that battle's ground was
+		const double floorY = 300.0, corners[4][3] = { { 0, floorY, -1500 }, { 2500, floorY, -1500 }, { 2500, floorY, 1500 }, { 0, floorY, 1500 } };
+		float vertices[4][4];
+		for (int i = 0; i < 4; i++)
+		{
+			double v[3];
+			scenelight::PlaceToView(camera, corners[i], v);
+			Check(v[2] > 100.0, "the floor is in front of the camera");
+			vertices[i][0] = static_cast<float>(2.0 * (camera.centreX + camera.distance * v[0] / v[2]));
+			vertices[i][1] = static_cast<float>(2.0 * (camera.centreY + camera.distance * v[1] / v[2]));
+			vertices[i][2] = 0.5f;
+			vertices[i][3] = static_cast<float>(1.0 / v[2]);
+		}
+		const auto drawFloor = [&](uint8_t out[4], const int px, const int py)
+		{
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, albedo);
+			glClearColor(0, 0, 0, 0);
+			glClear(GL_COLOR_BUFFER_BIT);
+			glBegin(GL_QUADS);
+			glColor4ub(vertex[0], vertex[1], vertex[2], 255);
+			for (int i = 0; i < 4; i++)
+			{
+				glTexCoord2f(i == 1 || i == 2 ? 1.0f : 0.0f, i >= 2 ? 1.0f : 0.0f);
+				glVertex4fv(vertices[i]);
+			}
+			glEnd();
+			glReadPixels(px, H - 1 - py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out); //(py counts from the top, as the game does)
+		};
+		//a pixel in the middle of the floor, and where the floor is there (the ray through the pixel's middle)
+		double middle[3] = { 1250, floorY, 0 }, view[3];
+		scenelight::PlaceToView(camera, middle, view);
+		const int px = static_cast<int>(2.0 * (camera.centreX + camera.distance * view[0] / view[2])), py = static_cast<int>(2.0 * (camera.centreY + camera.distance * view[1] / view[2]));
+		Check(px > 4 && px < W - 4 && py > 4 && py < H - 4, "the floor's middle is on the screen");
+		const double sx = (px + 0.5) / 2.0, sy = (py + 0.5) / 2.0;
+		const double ray[3] = { (sx - camera.centreX) / camera.distance, (sy - camera.centreY) / camera.distance, 1.0 };
+		double upView[3];
+		const double up[3] = { 0, -1, 0 };
+		scenelight::DirectionToView(camera, up, upView);
+		//the floor's plane in view space: upView . (p - middleView) = 0, p = ray * z
+		const double zAt = (upView[0] * view[0] + upView[1] * view[1] + upView[2] * view[2]) / (upView[0] * ray[0] + upView[1] * ray[1] + upView[2] * ray[2]);
+		const double place[3] = { ray[0] * zAt, ray[1] * zAt, zAt };
+		double normal[3] = { upView[0], upView[1], upView[2] };
+		if (normal[0] * place[0] + normal[1] * place[1] + normal[2] * place[2] > 0)
+			for (double& c : normal)
+				c = -c;
+		const auto sendCamera = [&]()
+		{
+			glUniform4f(at("demasterSceneProj"), 320.0f / W, 240.0f / H, static_cast<float>(H), static_cast<float>(camera.distance));
+			glUniform4f(at("demasterSceneCentre"), static_cast<float>(camera.centreX), static_cast<float>(camera.centreY), 0.0f, 20000.0f);
+			float rot[9], trans[3];
+			for (int i = 0; i < 9; i++)
+				rot[i] = static_cast<float>(camera.r[i]);
+			for (int i = 0; i < 3; i++)
+				trans[i] = static_cast<float>(camera.t[i]);
+			glUniformMatrix3fv(at("demasterSceneRot"), 1, GL_FALSE, rot);
+			glUniform3fv(at("demasterSceneTrans"), 1, trans);
+		};
+		sendCamera();
+		glUniform4f(at("demasterScene"), 1, 1, 1, 1);
+		glUniform4f(at("demasterSceneMaps"), 0, 0, 0, 0);
+		glUniform4f(at("demasterSceneDraw"), 1, 0, 0, 0);
+		float none[16]{};
+		glUniform4fv(at("demasterSceneLightAt[0]"), 4, none);
+		glUniform4fv(at("demasterSceneLightColour[0]"), 4, none);
+		//the sun straight above: the floor as painted
+		const auto sun = [&](const double sx, const double sy, const double sz, const float darkens, const float relief)
+		{
+			const double l = std::sqrt(sx * sx + sy * sy + sz * sz), stage[3] = { sx / l, sy / l, sz / l };
+			double v[3];
+			scenelight::DirectionToView(camera, stage, v);
+			glUniform4f(at("demasterSceneSun"), static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]), darkens);
+			glUniform4f(at("demasterSceneSunLight"), 1, 1, 1, relief);
+			return normal[0] * v[0] + normal[1] * v[1] + normal[2] * v[2];
+		};
+		double towards = sun(0, -1, 0, 1.0f, 1.0f);
+		drawFloor(got, px, py);
+		for (int c = 0; c < 3; c++)
+			want[c] = static_cast<int>(std::lround(painted[c]));
+		Check(std::fabs(towards - 1.0) < 1e-3 && near(got, want), "the sun straight above the floor: as painted");
+		//low over the stage's +x: the floor darkens by half of what it is turned away
+		towards = sun(1, -0.2, 0.3, 0.8f, 1.0f);
+		drawFloor(got, px, py);
+		for (int c = 0; c < 3; c++)
+			want[c] = level(linear(painted[c]) * (1.0 - 0.8 * (0.5 - 0.5 * towards)));
+		Check(near(got, want), "the sun low over the stage: the floor darkens by how far it is turned away");
+		printf("stage, low sun: the floor is turned %.3f towards it; got %d %d %d, want %d %d %d\n", towards, got[0], got[1], got[2], want[0], want[1], want[2]);
+		//a flat normal map changes nothing
+		const GLuint flatMap = Texture1(128, 128, 255, 255);
+		glActiveTexture(GL_TEXTURE12);
+		glBindTexture(GL_TEXTURE_2D, flatMap);
+		glUniform1i(at("demasterSceneN"), 12);
+		glUniform4f(at("demasterSceneDraw"), 1, 1, 0, 0);
+		drawFloor(got, px, py);
+		Check(near(got, want), "a flat normal map: the same");
+		//one that leans all the way over is not the same
+		const GLuint leaning = Texture1(230, 128, 160, 255);
+		glActiveTexture(GL_TEXTURE12);
+		glBindTexture(GL_TEXTURE_2D, leaning);
+		uint8_t leaned[4];
+		drawFloor(leaned, px, py);
+		Check(std::abs(leaned[0] - got[0]) > 3, "a leaning normal map: brighter or darker");
+		glUniform4f(at("demasterSceneDraw"), 1, 0, 0, 0);
+		//one of the stage's own lights, 500 above the floor near the pixel, with the sun's part off
+		sun(0, -1, 0, 0.0f, 0.0f);
+		double stagePlace[3];
+		scenelight::PlaceToStage(camera, place, stagePlace);
+		Check(std::fabs(stagePlace[1] - floorY) < 1.0, "the pixel's place comes back onto the floor");
+		const double lightStage[3] = { stagePlace[0] + 400.0, floorY - 500.0, stagePlace[2] - 300.0 }, range = 3000.0, colour[3] = { 2.0, 1.0, 0.5 };
+		double lightView[3];
+		scenelight::PlaceToView(camera, lightStage, lightView);
+		float lightAt[16]{}, lightColour[16]{};
+		for (int c = 0; c < 3; c++)
+		{
+			lightAt[c] = static_cast<float>(lightView[c]);
+			lightColour[c] = static_cast<float>(colour[c]);
+		}
+		lightAt[3] = static_cast<float>(range);
+		glUniform4fv(at("demasterSceneLightAt[0]"), 4, lightAt);
+		glUniform4fv(at("demasterSceneLightColour[0]"), 4, lightColour);
+		drawFloor(got, px, py);
+		const double to[3] = { lightView[0] - place[0], lightView[1] - place[1], lightView[2] - place[2] };
+		const double away = std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+		const double reach = 1.0 - away / range, facing = std::max((normal[0] * to[0] + normal[1] * to[1] + normal[2] * to[2]) / away, 0.0);
+		for (int c = 0; c < 3; c++)
+			want[c] = level(linear(painted[c]) * (1.0 + colour[c] * reach * reach * (0.25 + 0.75 * facing)));
+		Check(std::abs(got[0] - want[0]) <= 2 && std::abs(got[1] - want[1]) <= 2 && std::abs(got[2] - want[2]) <= 2, "a light of the stage's own above the floor");
+		printf("stage, own light %.0f away: got %d %d %d, want %d %d %d\n", away, got[0], got[1], got[2], want[0], want[1], want[2]);
+		//a fighter (not the stage) gets the lights but not the sun's part
+		sun(1, -0.2, 0.3, 0.8f, 1.0f);
+		glUniform4f(at("demasterSceneDraw"), 0, 0, 0, 0);
+		uint8_t fighter[4];
+		drawFloor(fighter, px, py);
+		Check(std::abs(fighter[0] - got[0]) <= 1 && std::abs(fighter[1] - got[1]) <= 1, "a fighter: the lights, not the sun's darkening");
+		//beyond the sky's distance nothing is lit
+		glUniform4f(at("demasterSceneCentre"), static_cast<float>(camera.centreX), static_cast<float>(camera.centreY), 0.0f, 100.0f);
+		drawFloor(got, px, py);
+		for (int c = 0; c < 3; c++)
+			want[c] = static_cast<int>(std::lround(painted[c]));
+		Check(near(got, want), "beyond the sky's distance: as painted");
+	}
 
 	printf("%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;

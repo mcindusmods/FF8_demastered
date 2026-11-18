@@ -23,6 +23,23 @@ uniform vec4 demasterSceneMaps;    // x: 1 = a picture of the glows is on demast
                                    // used (0: no ORM map)
 uniform sampler2D demasterSceneEC; // the glows: colour (sRGB, times its coverage) and coverage (alpha), as in fields
 uniform sampler2D demasterSceneORM;
+// Battles, lit from the stage's own space. The game hands OpenGL corners that are already on the screen; with the numbers
+// its projection used (DEMASTER reads them from the game each frame) every pixel's place in front of the camera comes
+// back: z = 1 / rhw, and x, y from the screen. The surface's direction is what that place does between neighbouring
+// pixels; a normal map is bent onto it the way the texture lies there (a cotangent frame, as on field models).
+uniform vec4 demasterSceneProj;    // x, y: PlayStation pixels per framebuffer pixel; z: the viewport's height in pixels;
+                                   // w: the projection's distance (0: no camera, nothing below is used)
+uniform vec4 demasterSceneCentre;  // xy: the projection's screen centre (PlayStation pixels); z: specular; w: how far from
+                                   // the stage's middle its sky stands (from there on nothing is lit)
+uniform mat3 demasterSceneRot;     // into the stage's space: stage = demasterSceneRot * (view - demasterSceneTrans)
+uniform vec3 demasterSceneTrans;
+uniform vec4 demasterSceneSun;     // xyz: towards the sun or moon, view space; w: how much turning away from it darkens
+uniform vec4 demasterSceneSunLight; // rgb: its light (colour x strength); w: relief (how strongly a normal map shows)
+uniform vec4 demasterSceneDraw;    // this draw: x 1 = the stage (the sun's part; fighters only get the lights), y 1 = a
+                                   // normal map on demasterSceneN, z 1 = an ORM map on demasterSceneORM
+uniform vec4 demasterSceneLightAt[4];     // the stage's own lights: xyz view space, w range (0: none)
+uniform vec4 demasterSceneLightColour[4]; // rgb, linear
+uniform sampler2D demasterSceneN;
 
 vec3 demasterSceneToLinear(vec3 c)
 {
@@ -95,7 +112,73 @@ void main()
 		vec3 lit = demasterSceneToLinear(clamp(color.rgb, 0.0, 1.0));
 		if (demasterSceneMaps.w > 0.0)
 			lit *= mix(1.0, texture2D(demasterSceneORM, gl_TexCoord[0].st).r, demasterSceneMaps.w);
-		lit *= demasterScene.rgb;
+		vec3 base = lit; // the picture's own colour: what the stage's lights fall on
+		vec3 added = vec3(0.0);
+		if (demasterSceneProj.w > 0.0)
+		{
+			float z = 1.0 / gl_FragCoord.w;
+			vec2 screen = vec2(gl_FragCoord.x * demasterSceneProj.x, (demasterSceneProj.z - gl_FragCoord.y) * demasterSceneProj.y);
+			vec3 p = vec3((screen - demasterSceneCentre.xy) * (z / demasterSceneProj.w), z);
+			vec3 stage = demasterSceneRot * (p - demasterSceneTrans);
+			if (dot(stage.xz, stage.xz) < demasterSceneCentre.w * demasterSceneCentre.w)
+			{
+				vec3 dp1 = dFdx(p), dp2 = dFdy(p);
+				vec3 face = cross(dp1, dp2);
+				float area = dot(face, face);
+				if (area > 0.0)
+				{
+					face *= inversesqrt(area);
+					if (dot(face, p) > 0.0)
+						face = -face; // towards the camera
+					vec3 n = face;
+					if (demasterSceneDraw.y > 0.5)
+					{
+						vec3 mapped = texture2D(demasterSceneN, gl_TexCoord[0].st).rgb * 2.0 - 1.0;
+						vec2 duv1 = dFdx(gl_TexCoord[0].st), duv2 = dFdy(gl_TexCoord[0].st);
+						vec3 dp2perp = cross(dp2, face), dp1perp = cross(face, dp1);
+						vec3 t = dp2perp * duv1.x + dp1perp * duv2.x;
+						vec3 b = dp2perp * duv1.y + dp1perp * duv2.y;
+						float size = max(dot(t, t), dot(b, b));
+						if (size > 1e-24)
+						{
+							float invmax = inversesqrt(size);
+							// (the image's up runs along -v, as on field models)
+							n = normalize(t * invmax * mapped.x - b * invmax * mapped.y + face * mapped.z);
+						}
+					}
+					if (demasterSceneDraw.x > 0.5)
+					{
+						// the sun: a surface turned away from it darkens (half of it at a right angle), and a normal map's
+						// slopes brighten and darken around that
+						float towards = dot(face, demasterSceneSun.xyz), bent = dot(n, demasterSceneSun.xyz);
+						lit *= 1.0 - demasterSceneSun.w * (0.5 - 0.5 * towards);
+						lit *= clamp(1.0 + demasterSceneSunLight.w * (bent - towards), 0.2, 2.5);
+						if (demasterSceneDraw.z > 0.5 && demasterSceneCentre.z > 0.0 && bent > 0.0)
+						{
+							vec3 orm = texture2D(demasterSceneORM, gl_TexCoord[0].st).rgb;
+							float roughness = clamp(orm.g, 0.08, 1.0);
+							float alpha2 = roughness * roughness * roughness * roughness;
+							vec3 halfway = normalize(demasterSceneSun.xyz - normalize(p));
+							float nh = max(dot(n, halfway), 0.0);
+							float d = nh * nh * (alpha2 - 1.0) + 1.0;
+							added += demasterSceneSunLight.rgb * mix(vec3(0.04), base, orm.b)
+								* (alpha2 / (3.14159265 * d * d) * 0.25 * bent * demasterSceneCentre.z);
+						}
+					}
+					for (int i = 0; i < 4; i++)
+					{
+						if (demasterSceneLightAt[i].w <= 0.0)
+							continue;
+						vec3 to = demasterSceneLightAt[i].xyz - p;
+						float away = length(to);
+						float reach = clamp(1.0 - away / demasterSceneLightAt[i].w, 0.0, 1.0);
+						added += base * demasterSceneLightColour[i].rgb
+							* (reach * reach * (0.25 + 0.75 * max(dot(n, to / max(away, 1.0)), 0.0)));
+					}
+				}
+			}
+		}
+		lit = lit * demasterScene.rgb + added;
 		if (demasterSceneMaps.x > 0.5)
 		{
 			// a lit window (coverage 1) takes the darkened picture's place, a halo (coverage 0) only adds its light

@@ -9,11 +9,15 @@
 //and sets them back to zero for every other draw of that program (the menus, the text, effects that are light themselves).
 //
 //Which draws: by the kind of texture bound (the game's own texture type, remembered when the texture is filled):
-//	battle     the stage (type 11) and the fighters (type 35), unless the draw adds light (blend ONE, ONE)
-//	world map  the world's own textures (type 18), unless the draw adds light
-//Nothing here needs the camera: the picture keeps the light the game gave it and is only dimmed and tinted. Lighting a
-//stage's normal map from a sun that stands still in the world needs the battle camera's rotation; SCENE_DEBUG=1 writes
-//what is needed to find it (the projection's registers at a stage draw) to the log.
+//	battle     the stage and the enemies (type 11), the party (35) and, in a battle on the world map, the world's ground
+//	           and sky the stage is made of (18, 27); not draws that add light (blend ONE, ONE: spells, glows)
+//	world map  the world's own textures (18, 27): the ground, the sky, the haze, the people and vehicles on it
+//
+//Battles are also lit from the stage's own space (scene_light.h, "the battle camera"): the sun and the moon cross the
+//stage by the clock, a stage page's normal map (<page>_N) and ORM map answer to them, and a stage can have four lights of
+//its own (scene_light.txt). For that the shader gets, once a frame, the numbers the game's projection used (read from the
+//game's memory when the first battle draw of the frame arrives) and the sun and the lights in view space. The world map
+//is only dimmed and tinted.
 //
 //Battles: the night only comes where "night = auto" allows it (scene_light.h): battles started on the world map, in a
 //field open to the sky, or in a field that is always night.
@@ -37,14 +41,16 @@ using namespace fieldrt;
 
 namespace
 {
-	constexpr int TYPE_BATTLE_STAGE = 11, TYPE_WORLD = 18, TYPE_BATTLE_CHARACTER = 35;
-	constexpr int UNIT_GLOWS = 10, UNIT_ORM = 11;
+	//(11: battle stages and the enemies; 18 and 27: the world map's ground, its sky and horizon; 35: the party in battle)
+	constexpr int TYPE_BATTLE_STAGE = 11, TYPE_WORLD = 18, TYPE_WORLD_SKY = 27, TYPE_BATTLE_CHARACTER = 35;
+	constexpr int UNIT_GLOWS = 10, UNIT_ORM = 11, UNIT_NORMAL = 12;
+	constexpr float SKY_DISTANCE = 20000.0f; //a stage's sky stands about 30,000 units from its middle; the fighters within a few thousand
 
 	struct SceneTexture
 	{
 		int type = 0; //the game's texture type at its last upload
 		int stage = -1, page = -1; //a battle stage page DEMASTER replaced
-		GLuint glows = 0, orm = 0; //its maps (0: none); the textures belong to `maps` below
+		GLuint glows = 0, orm = 0, normal = 0; //its maps (0: none); the textures belong to `maps` below
 	};
 	std::unordered_map<GLuint, SceneTexture> textures;
 	bool loadingOwn = false; //DEMASTER is filling one of its own map textures: not the game's
@@ -55,9 +61,23 @@ namespace
 	struct ProgramState
 	{
 		bool looked = false;
-		GLint scene = -1, maps = -1;
-		float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }; //as last sent
+		GLint scene = -1, maps = -1, draw = -1, proj = -1, centre = -1, rot = -1, trans = -1, sun = -1, sunLight = -1, lightAt = -1,
+			lightColour = -1;
+		float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 }; //as last sent
+		uint64_t stageSent = 0; //the serial of the stage's light (below) this program has
 	};
+
+	//The stage's light, worked out once a frame: the camera, the sun and the stage's own lights in view space
+	struct StageLight
+	{
+		uint64_t serial = 1, frame = ~0ull;
+		bool camera = false;
+		float proj[4] = { 0, 0, 0, 0 }, centre[4] = { 0, 0, 0, 0 }, rot[9] = {}, trans[3] = {}, sun[4] = { 0, 0, 0, 0 },
+			sunLight[4] = { 0, 0, 0, 0 }, lightAt[16] = {}, lightColour[16] = {};
+	} stageLight;
+	uint64_t sceneFrame = 0; //counts SwapBuffers
+	scenelight::CameraFilter cameraFilter;
+	scenelight::Look battleLook; //this moment's, for the stage's light
 	std::unordered_map<GLint, ProgramState> programs;
 	int programsOn = 0; //programs whose demasterScene is not zero right now
 
@@ -80,6 +100,7 @@ namespace
 		float multiplier[3] = { 1, 1, 1 };
 		float night = 0, ao = 0, glow = 1;
 		bool on = false;
+		bool sunByClock = false; //the night comes here: the sun and the moon go by the clock (else they stand at their highest)
 	} now;
 
 	void ForgetMaps()
@@ -89,7 +110,7 @@ namespace
 				glDeleteTextures(1, &texture);
 		maps.clear();
 		for (auto& [id, t] : textures)
-			t.glows = t.orm = 0;
+			t.glows = t.orm = t.normal = 0;
 	}
 
 	void ReadSettings()
@@ -171,6 +192,79 @@ namespace
 		now.ao = look.ao;
 		now.glow = look.glow;
 		now.on = true;
+		now.sunByClock = look.time == scenelight::Time::Cycle && scenelight::NightHere(look, 1.0, outdoors) > 0.0;
+		if (battle)
+			battleLook = look;
+	}
+
+	//Once a frame in battle: the camera from the game's projection registers, the sun and the stage's lights in view space
+	void WorkStageLight()
+	{
+		if (stageLight.frame == sceneFrame)
+			return;
+		stageLight.frame = sceneFrame;
+		StageLight next;
+		next.serial = stageLight.serial;
+		next.frame = sceneFrame;
+		static const DWORD at = HasAddress(GTE_CONTROL) ? GetAddress(GTE_CONTROL) : 0;
+		int32_t registers[32]{};
+		scenelight::Camera read, camera;
+		const bool readable = at != 0 && GuestRead(registers, at, sizeof(registers)) && scenelight::CameraFromRegisters(registers, read);
+		GLint viewport[4] = { 0, 0, 0, 0 };
+		glGetIntegerv(GL_VIEWPORT, viewport);
+		if (cameraFilter.Frame(readable, read, camera) && viewport[2] > 0 && viewport[3] > 0)
+		{
+			next.camera = true;
+			//the game's 640 x 480 units fill the viewport; the PlayStation's pixels are half of those
+			next.proj[0] = 320.0f / static_cast<float>(viewport[2]);
+			next.proj[1] = 240.0f / static_cast<float>(viewport[3]);
+			next.proj[2] = static_cast<float>(viewport[3]);
+			next.proj[3] = static_cast<float>(camera.distance);
+			next.centre[0] = static_cast<float>(camera.centreX);
+			next.centre[1] = static_cast<float>(camera.centreY);
+			next.centre[2] = battleLook.specular;
+			next.centre[3] = SKY_DISTANCE;
+			for (int i = 0; i < 9; i++)
+				next.rot[i] = static_cast<float>(camera.r[i]); //rows sent as columns: the transpose, view to stage
+			for (int i = 0; i < 3; i++)
+				next.trans[i] = static_cast<float>(camera.t[i]);
+			//where the night doesn't come (or the time is fixed) the sun, or the moon, stands at its highest
+			fieldpbr::SkyTime sky;
+			sky.night = battleLook.time == scenelight::Time::Night;
+			if (now.sunByClock)
+				sky = DayNightSky();
+			const scenelight::Sun sun = scenelight::SunOver(battleLook, sky.night, sky.phase);
+			double towards[3];
+			scenelight::DirectionToView(camera, sun.direction, towards);
+			const double strength = sun.strength;
+			for (int i = 0; i < 3; i++)
+			{
+				next.sun[i] = static_cast<float>(towards[i]);
+				next.sunLight[i] = sun.colour[i] * static_cast<float>(strength);
+			}
+			next.sun[3] = battleLook.sun * static_cast<float>(strength);
+			next.sunLight[3] = battleLook.relief * static_cast<float>(strength);
+			size_t count = 0;
+			for (const scenelight::Light& light : battleLook.lights)
+			{
+				const float on = light.when == 1 ? now.night : light.when == 2 ? 1.0f - now.night : 1.0f;
+				if (on <= 0.0f || count >= scenelight::MAX_LIGHTS)
+					continue;
+				const double place[3] = { light.x, -light.up, light.z }; //the stage's y runs down
+				double view[3];
+				scenelight::PlaceToView(camera, place, view);
+				for (int i = 0; i < 3; i++)
+				{
+					next.lightAt[count * 4 + i] = static_cast<float>(view[i]);
+					next.lightColour[count * 4 + i] = light.colour[i] * on;
+				}
+				next.lightAt[count * 4 + 3] = light.range;
+				count++;
+			}
+		}
+		if (memcmp(next.proj, stageLight.proj, sizeof(float) * (4 + 4 + 9 + 3 + 4 + 4 + 16 + 16)) != 0 || next.camera != stageLight.camera)
+			next.serial = stageLight.serial + 1;
+		stageLight = next;
 	}
 
 	//one of a stage page's maps in a texture of DEMASTER's own (0: no such file, or it can't be read)
@@ -244,8 +338,33 @@ namespace
 			first[3], haveVertex ? "" : " (not read)");
 	}
 
-	void Send(const GLint program, ProgramState& p, const float scene[4], const float maps[4])
+	void Send(const GLint program, ProgramState& p, const float scene[4], const float maps[4], const float draw[4], const bool stage)
 	{
+		if (p.draw >= 0 && memcmp(p.drawValue, draw, sizeof(p.drawValue)) != 0)
+		{
+			memcpy(p.drawValue, draw, sizeof(p.drawValue));
+			glUniform4fv(p.draw, 1, draw);
+		}
+		//the stage's light: when it changed since this program last got it (once a frame while the camera moves). Outside
+		//battles the distance goes to zero and the shader skips all of it
+		const uint64_t want = stage ? stageLight.serial : 0;
+		if (p.proj >= 0 && p.stageSent != want)
+		{
+			p.stageSent = want;
+			static const float none[4] = { 0, 0, 0, 0 };
+			const bool camera = stage && stageLight.camera;
+			glUniform4fv(p.proj, 1, camera ? stageLight.proj : none);
+			if (camera)
+			{
+				glUniform4fv(p.centre, 1, stageLight.centre);
+				glUniformMatrix3fv(p.rot, 1, GL_FALSE, stageLight.rot);
+				glUniform3fv(p.trans, 1, stageLight.trans);
+				glUniform4fv(p.sun, 1, stageLight.sun);
+				glUniform4fv(p.sunLight, 1, stageLight.sunLight);
+				glUniform4fv(p.lightAt, 4, stageLight.lightAt);
+				glUniform4fv(p.lightColour, 4, stageLight.lightColour);
+			}
+		}
 		if (memcmp(p.sceneValue, scene, sizeof(p.sceneValue)) != 0)
 		{
 			programsOn += (scene[3] > 0) - (p.sceneValue[3] > 0);
@@ -269,7 +388,7 @@ void SceneLightTextureFilled(const unsigned int texture, const bool whole)
 	const auto known = textures.find(texture);
 	if (known == textures.end())
 	{
-		if (type == TYPE_BATTLE_STAGE || type == TYPE_WORLD || type == TYPE_BATTLE_CHARACTER)
+		if (type == TYPE_BATTLE_STAGE || type == TYPE_WORLD || type == TYPE_WORLD_SKY || type == TYPE_BATTLE_CHARACTER)
 			textures[texture].type = type;
 		return;
 	}
@@ -317,13 +436,15 @@ void SceneLightStagePage(const int stage, const int page, const char* file)
 			stem.resize(dot);
 		t.glows = PageMap(stem, stage, page, "_EC");
 		t.orm = PageMap(stem, stage, page, "_ORM");
+		t.normal = PageMap(stem, stage, page, "_N");
 		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(bound));
 		static std::string said;
-		if ((t.glows != 0 || t.orm != 0 || SCENE_DEBUG) && said != stem)
+		if ((t.glows != 0 || t.orm != 0 || t.normal != 0 || SCENE_DEBUG) && said != stem)
 		{
 			said = stem;
-			OutputDebug("SCENE_LIGHT: stage %d page %d: %s%s%s\n", stage, page, t.glows != 0 ? "a picture of its glows (_EC)" : "no _EC",
-				t.orm != 0 ? ", an ORM map" : ", no _ORM", t.glows == 0 && t.orm == 0 ? " (next to its picture; the time of day works without them)" : "");
+			OutputDebug("SCENE_LIGHT: stage %d page %d: %s%s%s%s\n", stage, page, t.normal != 0 ? "a normal map (_N)" : "no _N",
+				t.glows != 0 ? ", a picture of its glows (_EC)" : ", no _EC", t.orm != 0 ? ", an ORM map" : ", no _ORM",
+				t.glows == 0 && t.orm == 0 && t.normal == 0 ? " (next to its picture; the time of day and the stage's lights work without them)" : "");
 		}
 	}
 	catch (...)
@@ -367,11 +488,26 @@ void SceneLightBeforeDraw(const int count)
 		{
 			p.scene = glGetUniformLocation(static_cast<GLuint>(program), "demasterScene");
 			p.maps = glGetUniformLocation(static_cast<GLuint>(program), "demasterSceneMaps");
-			if (p.scene < 0)
+			const auto at = [&](const char* name) { return glGetUniformLocation(static_cast<GLuint>(program), name); };
+			p.draw = at("demasterSceneDraw");
+			p.proj = at("demasterSceneProj");
+			p.centre = at("demasterSceneCentre");
+			p.rot = at("demasterSceneRot");
+			p.trans = at("demasterSceneTrans");
+			p.sun = at("demasterSceneSun");
+			p.sunLight = at("demasterSceneSunLight");
+			p.lightAt = at("demasterSceneLightAt[0]");
+			p.lightColour = at("demasterSceneLightColour[0]");
+			if (p.scene < 0 || p.proj < 0)
+			{
+				p.scene = -1;
 				OutputDebug("SCENE_LIGHT: the game's main.frag (program %d) is not this release's: battles and the world map stay as they "
 					"are. Copy DEMASTER_EXP\\shaders\\main.frag from this release.\n", program);
+			}
 			else
 			{
+				if (const GLint normal = at("demasterSceneN"); normal >= 0)
+					glUniform1i(normal, UNIT_NORMAL);
 				if (const GLint glows = glGetUniformLocation(static_cast<GLuint>(program), "demasterSceneEC"); glows >= 0)
 					glUniform1i(glows, UNIT_GLOWS);
 				if (const GLint orm = glGetUniformLocation(static_cast<GLuint>(program), "demasterSceneORM"); orm >= 0)
@@ -381,13 +517,17 @@ void SceneLightBeforeDraw(const int count)
 	}
 	if (p.scene < 0)
 		return;
-	float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 };
+	float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 };
+	bool stageLit = false;
 	if (scene)
 	{
+		//(a battle on the world map stands on the world's own textures)
 		const auto known = textures.find(glstate::BoundTexture2D());
-		bool lit = known != textures.end() && (mode == MODE_BATTLE ? known->second.type == TYPE_BATTLE_STAGE
-			|| known->second.type == TYPE_BATTLE_CHARACTER : known->second.type == TYPE_WORLD);
-		if (lit && glstate::BlendOn())
+		const bool world = known != textures.end() && (known->second.type == TYPE_WORLD || known->second.type == TYPE_WORLD_SKY);
+		bool lit = world || (known != textures.end() && mode == MODE_BATTLE
+			&& (known->second.type == TYPE_BATTLE_STAGE || known->second.type == TYPE_BATTLE_CHARACTER));
+		//(on the world map what is added is its haze and clouds: scenery, dimmed with the rest)
+		if (lit && mode == MODE_BATTLE && glstate::BlendOn())
 		{
 			GLint source = 0, destination = 0;
 			glstate::BlendFactors(source, destination);
@@ -401,10 +541,24 @@ void SceneLightBeforeDraw(const int count)
 			sceneValue[2] = now.multiplier[2];
 			sceneValue[3] = 1.0f;
 			const SceneTexture& t = known->second;
-			if (t.glows != 0 || t.orm != 0)
+			if (mode == MODE_BATTLE)
 			{
-				//its maps on DEMASTER's two units (the game uses neither)
+				WorkStageLight();
+				stageLit = true;
+				//the stage (its own pages, or the world's ground under a battle there) gets the sun; the fighters the lights
+				drawValue[0] = t.stage >= 0 || world ? 1.0f : 0.0f;
+				drawValue[1] = t.normal != 0 ? 1.0f : 0.0f;
+				drawValue[2] = t.orm != 0 ? 1.0f : 0.0f;
+			}
+			if (t.glows != 0 || t.orm != 0 || t.normal != 0)
+			{
+				//its maps on DEMASTER's units (the game uses none of them)
 				const GLenum active = glstate::ActiveTexture();
+				if (t.normal != 0 && glstate::Texture(GL_TEXTURE_2D, UNIT_NORMAL) != t.normal)
+				{
+					glActiveTexture(GL_TEXTURE0 + UNIT_NORMAL);
+					glBindTexture(GL_TEXTURE_2D, t.normal);
+				}
 				if (t.glows != 0 && glstate::Texture(GL_TEXTURE_2D, UNIT_GLOWS) != t.glows)
 				{
 					glActiveTexture(GL_TEXTURE0 + UNIT_GLOWS);
@@ -426,5 +580,13 @@ void SceneLightBeforeDraw(const int count)
 				LogProjection(program, count);
 		}
 	}
-	Send(program, p, sceneValue, mapsValue);
+	Send(program, p, sceneValue, mapsValue, drawValue, stageLit);
+}
+
+//SwapBuffers hook: a frame is over
+void SceneLightFrameEnd()
+{
+	sceneFrame++;
+	if (SCENE_LIGHT && currentMode != MODE_BATTLE)
+		cameraFilter.Reset(); //the next battle starts with its own camera
 }

@@ -1843,8 +1843,118 @@ static void TestSceneLight()
 		CHECK(w.find(part) != std::string::npos);
 }
 
+//SCENE_LIGHT: the battle camera from the game's projection registers, the sun over the stage, a stage's own lights
+static void TestSceneCamera()
+{
+	//the registers DEMASTER logged in a battle on stage 101 with the camera at rest, and corners of that stage's sky and far
+	//hills from the frame log of the same moment (nofield_20261117_212324, draws #330 and #331: x, y in the game's 640 x 480
+	//units, rhw). If the registers are the camera that projected them, the sky's wall is a cylinder around the stage's middle
+	int32_t reg[32]{};
+	const auto pack = [](const int a, const int b) { return static_cast<int32_t>((static_cast<uint32_t>(b & 0xFFFF) << 16) | static_cast<uint32_t>(a & 0xFFFF)); };
+	reg[0] = pack(-3921, 0); reg[1] = pack(1184, 129); reg[2] = pack(4071, 429); reg[3] = pack(-1177, 449); reg[4] = -3898;
+	reg[5] = -547; reg[6] = 469; reg[7] = 8796; reg[24] = 160 << 16; reg[25] = 108 << 16; reg[26] = 512;
+	scenelight::Camera camera;
+	CHECK(scenelight::CameraFromRegisters(reg, camera));
+	CHECK(camera.distance == 512.0 && camera.centreX == 160.0 && camera.centreY == 108.0 && camera.t[2] == 8796.0);
+	const double sky[4][3] = { { 356.75, 165.5, 2.5943e-05 }, { 357.25, 3, 2.63929e-05 }, { 685.5, 168.75, 2.81302e-05 }, { 692.25, -7.5, 2.86607e-05 } };
+	double radius[4];
+	for (int i = 0; i < 4; i++)
+	{
+		const double z = 1.0 / sky[i][2];
+		const double inView[3] = { (sky[i][0] / 2.0 - camera.centreX) * z / camera.distance, (sky[i][1] / 2.0 - camera.centreY) * z / camera.distance, z };
+		double inStage[3];
+		scenelight::PlaceToStage(camera, inView, inStage);
+		radius[i] = std::sqrt(inStage[0] * inStage[0] + inStage[2] * inStage[2]);
+	}
+	for (int i = 0; i < 4; i++)
+		CHECK(radius[i] > 29000.0 && radius[i] < 31000.0 && std::fabs(radius[i] - radius[0]) < 300.0); //one wall, about 30,000 out
+	//a place survives the round trip, and a direction keeps its length
+	const double place[3] = { 1250, 300, -400 };
+	double view[3], back[3];
+	scenelight::PlaceToView(camera, place, view);
+	scenelight::PlaceToStage(camera, view, back);
+	for (int i = 0; i < 3; i++)
+		NEAR(back[i], place[i], 1.5); //(the registers' rotation has 12 bits)
+	const double up[3] = { 0, -1, 0 };
+	scenelight::DirectionToView(camera, up, view);
+	NEAR(std::sqrt(view[0] * view[0] + view[1] * view[1] + view[2] * view[2]), 1.0, 0.002);
+	CHECK(view[1] < -0.9); //that camera looks nearly level: the stage's up is up on the screen
+	//the stage's middle is where the translation says, in front of the camera
+	const double middle[3] = { 0, 0, 0 };
+	scenelight::PlaceToView(camera, middle, view);
+	CHECK(view[0] == -547.0 && view[1] == 469.0 && view[2] == 8796.0);
+	//not a rotation: a row too long, rows not at right angles, no distance
+	int32_t bad[32];
+	std::copy(reg, reg + 32, bad);
+	bad[0] = pack(-3921, 2000);
+	CHECK(!scenelight::CameraFromRegisters(bad, camera));
+	std::copy(reg, reg + 32, bad);
+	bad[1] = pack(1184, -3921);
+	bad[2] = pack(0, 1184);
+	CHECK(!scenelight::CameraFromRegisters(bad, camera));
+	std::copy(reg, reg + 32, bad);
+	bad[26] = 0;
+	CHECK(!scenelight::CameraFromRegisters(bad, camera));
+	CHECK(scenelight::CameraFromRegisters(reg, camera));
+
+	//the filter: a camera that moves a little is followed; a single odd reading is passed over; a cut is taken on its second frame
+	scenelight::CameraFilter filter;
+	scenelight::Camera use, other = camera, moved = camera;
+	CHECK(!filter.Frame(false, camera, use)); //nothing yet
+	CHECK(filter.Frame(true, camera, use) && use.t[2] == 8796.0);
+	moved.t[0] += 150;
+	CHECK(filter.Frame(true, moved, use) && use.t[0] == camera.t[0] + 150);
+	//(something else's rotation: a quarter turn about the vertical, far away)
+	const double turned[9] = { 0, 0, 1, 0, 1, 0, -1, 0, 0 };
+	std::copy(turned, turned + 9, other.r);
+	other.t[2] = 30000;
+	CHECK(filter.Frame(true, other, use) && use.t[0] == camera.t[0] + 150); //one odd frame: the camera in use stays
+	CHECK(filter.Frame(true, moved, use) && use.t[0] == camera.t[0] + 150);
+	CHECK(filter.Frame(true, other, use) && use.t[2] == moved.t[2]); //a cut, first frame: not yet
+	CHECK(filter.Frame(true, other, use) && use.t[2] == 30000.0); //second frame: taken
+	CHECK(filter.Frame(false, other, use) && use.t[2] == 30000.0); //unreadable: the one in use stays
+	filter.Reset();
+	CHECK(!filter.Frame(false, other, use));
+
+	//the sun over the stage: rises along the stage's +x (azimuth 0), stands sun_height high at noon, sets opposite; up is -y
+	scenelight::Look look;
+	look.sunAzimuth = 0;
+	look.sunHeight = 60;
+	scenelight::Sun rise = scenelight::SunOver(look, false, 0.0), noon = scenelight::SunOver(look, false, 0.5), set = scenelight::SunOver(look, false, 1.0);
+	CHECK(rise.direction[0] > 0.99 && std::fabs(rise.direction[1]) < 0.01 && rise.strength < 0.05);
+	NEAR(-noon.direction[1], std::sin(60.0 * 3.14159265358979 / 180.0), 1e-6);
+	CHECK(noon.strength > 0.99 && set.direction[0] < -0.99 && !noon.moon);
+	CHECK(noon.colour[0] > 0.5 && rise.colour[0] > rise.colour[2]); //white high up, orange at the horizon
+	scenelight::Sun moon = scenelight::SunOver(look, true, 0.5);
+	CHECK(moon.moon && moon.colour[2] > moon.colour[0]);
+
+	//a stage's own lights in scene_light.txt
+	scenelight::Settings s;
+	std::string w;
+	scenelight::Parse("[battle]\nsun = 0.5\nrelief = 2\nspecular = 0\nsun_azimuth = 90\nsun_height = 45\n"
+		"[rule torches]\nstage = 12\nlight = -1500 600 800   3 1.6 0.6   4000 night\nlight = 1500 600 800  1 1 1  2500\n"
+		"[rule more]\nstage = 12-13\nsun = 0\nlight = 0 100 0  2 2 2  900 day\nlight = 1 2 3  1 1 1  10\nlight = 4 5 6  1 1 1  10\n"
+		"[rule world]\nwhere = world\nlight = 0 0 0  1 1 1  100\n", s, w);
+	CHECK(w.empty() && s.battle.sun == 0.5f && s.battle.relief == 2.0f && s.battle.specular == 0.0f && s.battle.sunAzimuth == 90.0f && s.battle.sunHeight == 45.0f);
+	scenelight::Look twelve = scenelight::Resolve(s, scenelight::Where::Battle, 12, 0), thirteen = scenelight::Resolve(s, scenelight::Where::Battle, 13, 0),
+		elsewhere = scenelight::Resolve(s, scenelight::Where::Battle, 5, 0), map = scenelight::Resolve(s, scenelight::Where::World, -1, 0);
+	CHECK(twelve.lights.size() == 4 && twelve.lights[0].when == 1 && twelve.lights[0].up == 600.0f && twelve.lights[0].colour[1] == 1.6f
+		&& twelve.lights[1].when == 0 && twelve.lights[1].range == 2500.0f && twelve.lights[2].when == 2 && twelve.sun == 0.0f);
+	CHECK(thirteen.lights.size() == 3 && elsewhere.lights.empty() && elsewhere.sun == 0.5f && map.lights.empty());
+	scenelight::Parse("[rule x]\nlight = 1 2 3  1 1 1\nlight = 1 2 3  1 1 1  -5\nlight = 1 2 3  1 1 1  10 dusk\nlight = 1 2 3  1 1 1  10\nlight = 1 2 3  1 1 1  10\n"
+		"light = 1 2 3  1 1 1  10\nlight = 1 2 3  1 1 1  10\nlight = 1 2 3  1 1 1  10\n[battle]\nsun = 2\nsun_height = 2\n", s, w);
+	CHECK(s.rules.size() == 1 && s.rules[0].look.lights.size() == 4 && s.battle.sun == 0.35f && s.battle.sunHeight == 60.0f);
+	for (const char* part : { "line 2: can't read light", "line 3: can't read light", "line 4: can't read light", "four lights at most", "can't read sun = 2",
+		"can't read sun_height" })
+		CHECK(w.find(part) != std::string::npos);
+	w.clear();
+	scenelight::Parse(scenelight::DefaultText(), s, w);
+	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.size() == 1);
+}
+
 int main(int argc, char** argv)
 {
+	TestSceneCamera();
 	TestSceneLight();
 	TestEmissivePicture();
 	TestColour();

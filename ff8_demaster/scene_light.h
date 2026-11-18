@@ -19,12 +19,22 @@
 //	  night_level = 0-1
 //	  ao          = 0-1     how much of an ORM map's AO is used
 //	  glow        = 0-4     how bright the glows' picture is (1: as painted)
+//	  [battle] only, lit from the stage's own space (the camera's place in it is read from the game each frame):
+//	  sun         = 0-1     how much a surface turned away from the sun (or moon) darkens; 0: the stage as painted
+//	  relief      = 0-4     how strongly a stage page's normal map (<page>_N) shows in the sun's light
+//	  specular    = 0-4     the sun's highlight on pages with an ORM map
+//	  sun_azimuth = degrees, sun_height = degrees   where it rises (0: along the stage's +x) and how high it climbs
 //	[rule <name>]        the same keys (only the ones written change anything), for where its conditions hold:
 //	  where  = battle | world | both      (left out: both)
 //	  stage  = 12, 40-45                  battle stages (a0stgNNN); left out: every stage. With stages: battles only
 //	  moment = 3000-65535                 the story's progress (the game's own counter); left out: always
+//	  light  = x up z  r g b  range [night|day]   a light of the stage's own, up to four per stage (later rules add to
+//	                                      earlier ones): its place in the stage's units (the stage's middle is 0 0 0, "up"
+//	                                      is above its floor), its colour (linear, may be above 1), how far it reaches,
+//	                                      and optionally when it is on. For battles only
 //	Rules are applied in the file's order, later ones over earlier ones.
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,6 +43,15 @@ namespace scenelight
 {
 	enum class Where { Battle, World };
 	enum class Time { Cycle, Day, Night };
+
+	struct Light
+	{
+		float x = 0, up = 0, z = 0;
+		float colour[3] = { 1, 1, 1 };
+		float range = 2000;
+		int when = 0; //0 always, 1 by night, 2 by day
+	};
+	constexpr size_t MAX_LIGHTS = 4;
 
 	struct Look
 	{
@@ -43,6 +62,8 @@ namespace scenelight
 		float nightLevel = 0.3f;
 		float ao = 0.5f;
 		float glow = 1.0f;
+		float sun = 0.35f, relief = 1.0f, specular = 0.5f, sunAzimuth = 30.0f, sunHeight = 60.0f;
+		std::vector<Light> lights; //the stage's own (from rules), four at most
 	};
 
 	struct Rule
@@ -53,7 +74,7 @@ namespace scenelight
 		int momentFrom = -1, momentTo = -1; //inclusive; -1: no condition
 		Look look; //only the members flagged below are used
 		bool hasNight = false, hasTime = false, hasDayTint = false, hasNightTint = false, hasNightLevel = false, hasAo = false,
-			hasGlow = false;
+			hasGlow = false, hasSun = false, hasRelief = false, hasSpecular = false, hasSunAzimuth = false, hasSunHeight = false;
 	};
 
 	struct Settings
@@ -75,4 +96,47 @@ namespace scenelight
 	double NightHere(const Look& look, double clock, bool outdoors);
 	//What the picture is multiplied by, in linear light: day_tint by day, night_level x night_tint by night
 	void Multiplier(const Look& look, double night, float out[3]);
+
+	//--- the battle camera
+	//The game projects with the PlayStation's registers (GTE_CONTROL in mymemory.h): view = rotation x stage + translation
+	//(x right, y down, z away), screen = centre + distance x (x, y) / z, in the PlayStation's 320-wide pixels; a vertex's
+	//rhw is 1 / z. When the game hands its draws to OpenGL the registers hold what was set last: the battle camera, as a
+	//frame log and the registers of the same moment show (the sky's wall comes out as a cylinder around the stage's middle).
+	struct Camera
+	{
+		double r[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 }; //rows
+		double t[3] = { 0, 0, 0 };
+		double distance = 0, centreX = 0, centreY = 0;
+	};
+	//false: the registers don't hold a rotation (rows not of length 1 or not at right angles) or no distance
+	bool CameraFromRegisters(const int32_t registers[32], Camera& camera);
+	//a direction, or a place, of the stage's space in view space
+	void DirectionToView(const Camera& camera, const double stage[3], double view[3]);
+	void PlaceToView(const Camera& camera, const double stage[3], double view[3]);
+	void PlaceToStage(const Camera& camera, const double view[3], double stage[3]);
+	//The registers of one frame are the camera's unless something else was set last. A camera moves a little from frame to
+	//frame, or cuts and then stays: a reading is taken when it is close to the one in use, or when two frames in a row
+	//agree with each other. Else the one in use stays (for that frame).
+	class CameraFilter
+	{
+	public:
+		//true: `use` is this frame's camera; false: there is none yet
+		bool Frame(bool readable, const Camera& read, Camera& use);
+		void Reset() { has = hasPending = false; }
+	private:
+		static bool Close(const Camera& a, const Camera& b);
+		Camera current, pending;
+		bool has = false, hasPending = false;
+	};
+
+	//The sun or the moon over the stage, from the clock: towards it in the stage's space (unit; y is down there), its
+	//light's colour (linear), and how much of it there is (0 at the horizon, 1 from about 10 degrees up)
+	struct Sun
+	{
+		double direction[3] = { 0, -1, 0 };
+		float colour[3] = { 1, 1, 1 };
+		double strength = 0;
+		bool moon = false;
+	};
+	Sun SunOver(const Look& look, bool night, double phase);
 }

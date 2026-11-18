@@ -1,10 +1,10 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.13 (in the source; not packaged yet) - day and night in battles and on the world map, glows and AO on battle stages
+v15.13 (in the source; not packaged yet) - battles and the world map: day and night, the sun over the stage, stage lights
 -----------------------------------------------------------------------------------------------------------------------
-Not run in the game yet. The rules and the shader are tested on Linux (the shader against sums worked out on the CPU);
-the Windows-only files are type-checked. No frame log of a battle or of the world map was there to build against: see
-"what this is not" below.
+Built in two steps. The first (day and night, the rules, glows and AO) ran in the game: the log and six frame logs came
+back and the second step is built from them. The second step has not run in the game yet. The rules and the shader are
+tested on Linux (the shader against sums worked out on the CPU); the Windows-only files are type-checked.
 Day and night in battles and on the world map (new: SCENE_LIGHT, on by default; DEMASTER_EXP\scene_light.txt)
   - Battles and the world map are drawn by the game's main.frag from textures times vertex colours. DEMASTER's main.frag
     now multiplies that picture by a colour, in linear light: nothing by day, night_level x night_tint by night, with
@@ -29,17 +29,36 @@ Battle stages: a picture of the glows, and AO (the maps next to the stage page's
   - a0stgNNN_P_ORM: an ORM map; its red channel (AO) darkens the page by "ao" of it. Roughness and metallic are not used
     yet.
   - An animated page's frames (a0stgNNN_P_F) use their own maps when they have them, else the page's.
+Battle stages lit from their own space: the sun and moon overhead, normal maps, four lights a stage (second step)
+  - From your frame logs and the registers the first step logged: the numbers the game projects with (the PlayStation's
+    rotation, translation, screen centre and distance, kept in the game's memory) are the battle camera's when the game
+    hands its draws to OpenGL. With them the corners of stage 101's sky, taken from the frame log of the same moment,
+    come out as one cylinder 30,000 units around the stage's middle, and its ground as the world map's grid. So every
+    pixel's place in the stage can be worked out in the shader (z is 1 / rhw), and the stage's own space stands still
+    while the camera moves. That is now a test with those very numbers.
+  - The sun and the moon cross the stage by the clock, as in fields (sun_azimuth, sun_height in [battle]); where the
+    night doesn't come they stand at their highest. sun = how much a surface turned away from it darkens (the
+    surface's direction is worked out per pixel from the screen; nothing is read from the stage's file).
+  - a0stgNNN_P_N: a normal map for a stage page (tangent space, as for field models). relief = how strongly it shows in
+    the sun's light. With an _ORM map the sun also leaves a highlight (specular; roughness and metallic are used now).
+  - Up to four lights of a stage's own, in scene_light.txt: light = x up z  r g b  range [night|day] inside a
+    [rule] with stage = N. They light the stage and the fighters (the fighters' surfaces come out faceted: they have no
+    normals of their own here).
+  - The camera is read once a frame. A frame whose registers are not a rotation, or that jump away for a single frame
+    (something else was projected last), keeps the camera in use; a cut is taken on its second frame.
+  - A battle on the world map stands on the world's own textures (types 18 and 27): they are lit as the stage. The
+    world map's sky and haze now darken with the night too (in the first step the sky stayed bright).
 What this is not (yet)
-  - Normal maps are not lit, in battle or on the world map. That needs a sun that stands still in the world while the
-    camera moves, so the camera's rotation at the moment the stage is projected. The game keeps the PlayStation's
-    projection registers in memory (found, EFIGS and JP: GTE_CONTROL in mymemory.h), but they hold whatever was set
-    last, the camera's or a model's. SCENE_DEBUG=1 writes them to the log at a stage draw; with that and one frame log
-    of a battle and one of the world map (Ctrl+F11 works there too) the next build can light them.
-  - World map textures have no maps yet (no _EC, no AO): only the time of day and the rules.
-  - Battle stages get no lights of their own and the fighters no shadows from them: both wait for the same thing.
+  - Seen in the game: the camera was checked against one frame with the camera at rest. Whether the registers are the
+    camera's in every frame of a camera move, a spell or a summon is what the filter is there for; SCENE_DEBUG=1 still
+    logs them at a stage draw.
+  - Shadows: the fighters cast none on the stage from the sun or the lights.
+  - Stage pages DEMASTER doesn't replace are dimmed and get the lights but not the sun's part. World map textures have
+    no maps yet, and the world map itself only darkens and takes the night's colour.
 For working on the code
-  - scene_light.h/.cpp (the rules; field_pbr_test, 17,917 checks), tests/scene_shader_test.cpp (main.frag with
-    DEMASTER's uniforms off, the night, AO, the glows by night, at dusk and by day; in tests/run_tests.sh).
+  - scene_light.h/.cpp (the rules, the camera, its filter, the sun, the lights; field_pbr_test, 17,958 checks),
+    tests/scene_shader_test.cpp (main.frag with DEMASTER's uniforms off, the night, AO, the glows, and a floor drawn
+    as the game hands it over with that battle's camera: the sun's part, a light, a normal map; 24 checks).
 
 v15.12 (in the source; not packaged yet) - glows as a picture, the turn swings, world-map stick, pages that stay pages
 -----------------------------------------------------------------------------------------------------------------------

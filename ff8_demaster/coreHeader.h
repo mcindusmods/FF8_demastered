@@ -155,6 +155,7 @@ void SceneLightTextureForget(unsigned int texture); //the texture is not one of 
 void SceneLightStagePage(int stage, int page, const char* file); //DEMASTER's picture of a battle stage page is in the bound texture
 void SceneLightFieldEntered(bool sky); //a field's .map is read
 void SceneLightBeforeDraw(int count); //before every draw of the game
+void SceneLightFrameEnd(); //SwapBuffers
 void FrameLogNote(const char* format, ...); //a line about what DEMASTER did, in the frame being logged
 //How long DEMASTER's field steps take: CPU time every frame (QueryPerformanceCounter; the frame log writes the average of
 //the frames before the logged one), GPU time in the logged frame (timestamps between the steps)

@@ -572,6 +572,7 @@ BOOL __stdcall HookSwapBuffers(const HDC hdc)
     }
     const BOOL shown = swapBuffersTrampoline(hdc); //static_cast<BOOL (__stdcall*)(HDC)>(swapBuffersTrampoline)(hdc);
     TweenFrameEnd(hdc); //the next frame starts (with a second picture or not)
+    SceneLightFrameEnd(); //SCENE_LIGHT: the battle camera is read once a frame
     return shown;
 }
 

@@ -1,6 +1,8 @@
 #include "scene_light.h"
+#include "field_moving_lights.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -69,6 +71,39 @@ namespace scenelight
 			return !out.empty();
 		}
 
+		//"x up z  r g b  range [night|day]"
+		bool ReadLight(const std::string& value, Light& light)
+		{
+			std::istringstream in(value);
+			double v[7];
+			for (double& number : v)
+				if (!(in >> number))
+					return false;
+			std::string when;
+			if (in >> when)
+			{
+				when = Lower(when);
+				if (when == "night")
+					light.when = 1;
+				else if (when == "day")
+					light.when = 2;
+				else if (when != "always")
+					return false;
+				std::string rest;
+				if (in >> rest)
+					return false;
+			}
+			if (v[3] < 0 || v[4] < 0 || v[5] < 0 || v[6] <= 0)
+				return false;
+			light.x = static_cast<float>(v[0]);
+			light.up = static_cast<float>(v[1]);
+			light.z = static_cast<float>(v[2]);
+			for (int i = 0; i < 3; i++)
+				light.colour[i] = static_cast<float>(std::min(v[3 + i], 64.0));
+			light.range = static_cast<float>(v[6]);
+			return true;
+		}
+
 		//one of a look's keys. 0: not one of them, 1: set, -1: its value isn't understood
 		int SetLook(const std::string& key, const std::string& value, Look& look, Rule* rule)
 		{
@@ -123,6 +158,38 @@ namespace scenelight
 				look.glow = static_cast<float>(v[0]);
 				if (rule != nullptr)
 					rule->hasGlow = true;
+			}
+			else if (key == "sun")
+			{
+				if (!Numbers(value, v, 1) || v[0] < 0 || v[0] > 1)
+					return -1;
+				look.sun = static_cast<float>(v[0]);
+				if (rule != nullptr)
+					rule->hasSun = true;
+			}
+			else if (key == "relief" || key == "specular")
+			{
+				if (!Numbers(value, v, 1) || v[0] < 0 || v[0] > 4)
+					return -1;
+				(key == "relief" ? look.relief : look.specular) = static_cast<float>(v[0]);
+				if (rule != nullptr)
+					(key == "relief" ? rule->hasRelief : rule->hasSpecular) = true;
+			}
+			else if (key == "sun_azimuth")
+			{
+				if (!Numbers(value, v, 1) || v[0] < -360 || v[0] > 360)
+					return -1;
+				look.sunAzimuth = static_cast<float>(v[0]);
+				if (rule != nullptr)
+					rule->hasSunAzimuth = true;
+			}
+			else if (key == "sun_height")
+			{
+				if (!Numbers(value, v, 1) || v[0] < 5 || v[0] > 90)
+					return -1;
+				look.sunHeight = static_cast<float>(v[0]);
+				if (rule != nullptr)
+					rule->hasSunHeight = true;
 			}
 			else
 				return 0;
@@ -200,6 +267,16 @@ namespace scenelight
 				}
 				else if (key == "stage")
 					result = Ranges(value, rule->stages) ? 1 : -1;
+				else if (key == "light")
+				{
+					Light light;
+					if (!ReadLight(value, light))
+						result = -1;
+					else if (rule->look.lights.size() >= MAX_LIGHTS)
+						warnings += where + "a stage has four lights at most: this one is left out\n";
+					else
+						rule->look.lights.push_back(light);
+				}
 				else if (key == "moment")
 				{
 					std::vector<std::pair<int, int>> one;
@@ -244,6 +321,16 @@ namespace scenelight
 			"night_level = 0.3\n"
 			"ao = 0.5\n"
 			"glow = 1\n"
+			"; The sun and the moon cross the stage by the clock (the camera's place in the stage is read from the game):\n"
+			"; sun         = how much a surface turned away from it darkens (0-1; 0: the stage as painted)\n"
+			"; relief      = how strongly a stage page's normal map (<page>_N) shows in its light (0-4)\n"
+			"; specular    = its highlight on pages with an ORM map (0-4)\n"
+			"; sun_azimuth = where it rises, degrees around the stage (0: along the stage's +x); sun_height = how high it climbs\n"
+			"sun = 0.35\n"
+			"relief = 1\n"
+			"specular = 0.5\n"
+			"sun_azimuth = 30\n"
+			"sun_height = 60\n"
 			"\n"
 			"[world]\n"
 			"night = auto\n"
@@ -258,6 +345,10 @@ namespace scenelight
 			";                                      with stages is for battles only\n"
 			";   moment = 3000-65535                the story's progress, the game's own counter (the log says what it is when a\n"
 			";                                      battle or the world map starts, with SCENE_DEBUG=1); left out: always\n"
+			";   light  = x up z  r g b  range [night|day]\n"
+			";            a light of the stage's own, four per stage at most. x and z: its place on the stage's floor, in the\n"
+			";            stage's units (0 0 is the middle; the fighters stand a few thousand apart); up: how far above the\n"
+			";            floor; r g b: its colour (linear, may be above 1); range: how far it reaches; night or day: only then\n"
 			"; Later rules go over earlier ones.\n"
 			"\n"
 			"; After the Lunar Cry (the counter is 3000 once the Ragnarok is yours): the night is red instead of blue.\n"
@@ -273,6 +364,11 @@ namespace scenelight
 			";where = battle\n"
 			";stage = 7, 20-22\n"
 			";night = 0\n"
+			";[rule torches]\n"
+			";where = battle\n"
+			";stage = 12\n"
+			";light = -1500 600 800   3 1.6 0.6   4000 night\n"
+			";light = 1500 600 800    3 1.6 0.6   4000 night\n"
 			";[rule always dusk]\n"
 			";where = battle\n"
 			";stage = 31\n"
@@ -312,6 +408,20 @@ namespace scenelight
 				look.ao = rule.look.ao;
 			if (rule.hasGlow)
 				look.glow = rule.look.glow;
+			if (rule.hasSun)
+				look.sun = rule.look.sun;
+			if (rule.hasRelief)
+				look.relief = rule.look.relief;
+			if (rule.hasSpecular)
+				look.specular = rule.look.specular;
+			if (rule.hasSunAzimuth)
+				look.sunAzimuth = rule.look.sunAzimuth;
+			if (rule.hasSunHeight)
+				look.sunHeight = rule.look.sunHeight;
+			if (where == Where::Battle)
+				for (const Light& light : rule.look.lights)
+					if (look.lights.size() < MAX_LIGHTS)
+						look.lights.push_back(light);
 		}
 		return look;
 	}
@@ -332,5 +442,108 @@ namespace scenelight
 		const float n = static_cast<float>(std::clamp(night, 0.0, 1.0));
 		for (int i = 0; i < 3; i++)
 			out[i] = look.dayTint[i] * (1.0f - n) + look.nightLevel * look.nightTint[i] * n;
+	}
+
+	//--- the battle camera
+
+	bool CameraFromRegisters(const int32_t reg[32], Camera& camera)
+	{
+		const auto low = [](const int32_t v) { return static_cast<double>(static_cast<int16_t>(v & 0xFFFF)) / 4096.0; };
+		const auto high = [](const int32_t v) { return static_cast<double>(static_cast<int16_t>((v >> 16) & 0xFFFF)) / 4096.0; };
+		double* r = camera.r;
+		r[0] = low(reg[0]); r[1] = high(reg[0]); r[2] = low(reg[1]);
+		r[3] = high(reg[1]); r[4] = low(reg[2]); r[5] = high(reg[2]);
+		r[6] = low(reg[3]); r[7] = high(reg[3]); r[8] = low(reg[4]);
+		for (int i = 0; i < 3; i++)
+		{
+			const double length = std::sqrt(r[i * 3] * r[i * 3] + r[i * 3 + 1] * r[i * 3 + 1] + r[i * 3 + 2] * r[i * 3 + 2]);
+			if (std::fabs(length - 1.0) > 0.02)
+				return false;
+			const int j = (i + 1) % 3;
+			if (std::fabs(r[i * 3] * r[j * 3] + r[i * 3 + 1] * r[j * 3 + 1] + r[i * 3 + 2] * r[j * 3 + 2]) > 0.02)
+				return false;
+		}
+		for (int i = 0; i < 3; i++)
+			camera.t[i] = reg[5 + i];
+		camera.centreX = reg[24] / 65536.0;
+		camera.centreY = reg[25] / 65536.0;
+		camera.distance = static_cast<double>(reg[26] & 0xFFFF);
+		return camera.distance >= 16.0;
+	}
+
+	void DirectionToView(const Camera& c, const double s[3], double v[3])
+	{
+		for (int i = 0; i < 3; i++)
+			v[i] = c.r[i * 3] * s[0] + c.r[i * 3 + 1] * s[1] + c.r[i * 3 + 2] * s[2];
+	}
+
+	void PlaceToView(const Camera& c, const double s[3], double v[3])
+	{
+		DirectionToView(c, s, v);
+		for (int i = 0; i < 3; i++)
+			v[i] += c.t[i];
+	}
+
+	void PlaceToStage(const Camera& c, const double v[3], double s[3])
+	{
+		const double d[3] = { v[0] - c.t[0], v[1] - c.t[1], v[2] - c.t[2] };
+		for (int i = 0; i < 3; i++)
+			s[i] = c.r[i] * d[0] + c.r[3 + i] * d[1] + c.r[6 + i] * d[2];
+	}
+
+	bool CameraFilter::Close(const Camera& a, const Camera& b)
+	{
+		//the rotations within about 15 degrees of each other (the sum of the rows' dot products is 3 for the same one), and
+		//the places within a quarter of their distance from the stage's middle (and 2000 units)
+		double same = 0, moved = 0, far = 0;
+		for (int i = 0; i < 9; i++)
+			same += a.r[i] * b.r[i];
+		for (int i = 0; i < 3; i++)
+		{
+			moved += (a.t[i] - b.t[i]) * (a.t[i] - b.t[i]);
+			far += a.t[i] * a.t[i];
+		}
+		return same > 2.93 && std::sqrt(moved) < 2000.0 + 0.25 * std::sqrt(far) && std::fabs(a.distance - b.distance) < 0.5 * a.distance;
+	}
+
+	bool CameraFilter::Frame(const bool readable, const Camera& read, Camera& use)
+	{
+		if (readable)
+		{
+			if (!has || Close(read, current))
+			{
+				current = read;
+				has = true;
+				hasPending = false;
+			}
+			else if (hasPending && Close(read, pending))
+			{
+				current = read; //a cut: two frames agree
+				hasPending = false;
+			}
+			else
+			{
+				pending = read;
+				hasPending = true;
+			}
+		}
+		if (has)
+			use = current;
+		return has;
+	}
+
+	Sun SunOver(const Look& look, const bool night, const double phase)
+	{
+		Sun sun;
+		sun.moon = night;
+		//the stage's space has the same axes as a view (x right, y down, z away), so the fields' arc serves: up is -y
+		const fieldpbr::Vec3 towards = fieldpbr::SunDirection({ 0, -1, 0 }, look.sunAzimuth, look.sunHeight, phase);
+		sun.direction[0] = towards.x;
+		sun.direction[1] = towards.y;
+		sun.direction[2] = towards.z;
+		const double elevation = -towards.y; //the sine of how high it stands
+		fieldpbr::SunColor(elevation, night, sun.colour);
+		sun.strength = fieldpbr::HorizonFade(elevation);
+		return sun;
 	}
 }
