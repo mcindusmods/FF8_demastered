@@ -167,6 +167,14 @@ namespace scenelight
 				if (rule != nullptr)
 					rule->hasSun = true;
 			}
+			else if (key == "fighter_sun" || key == "shadow")
+			{
+				if (!Numbers(value, v, 1) || v[0] < 0 || v[0] > 1)
+					return -1;
+				(key == "shadow" ? look.shadow : look.fighterSun) = static_cast<float>(v[0]);
+				if (rule != nullptr)
+					(key == "shadow" ? rule->hasShadow : rule->hasFighterSun) = true;
+			}
 			else if (key == "relief" || key == "specular")
 			{
 				if (!Numbers(value, v, 1) || v[0] < 0 || v[0] > 4)
@@ -305,8 +313,9 @@ namespace scenelight
 			"; Read again within a second of saving it. Colours are red green blue in linear light: 1 1 1 changes nothing.\n"
 			";\n"
 			"; night       = auto | 0 | 1   does the night come here. auto: the world map always; a battle when it started on\n"
-			";                              the world map, in a field open to the sky (sky = 1 in its _pbr.txt) or in a field\n"
-			";                              whose _pbr.txt says time = night. Battles from other fields stay as painted.\n"
+			";                              the world map or in a field open to the sky (sky = 1 in its _pbr.txt). Battles from\n"
+			";                              other fields stay as painted; from a field with a fixed time (time = day or night\n"
+			";                              in its _pbr.txt) they are fought by day.\n"
 			"; time        = cycle | day | night   cycle: the day/night clock; day or night: always that\n"
 			"; day_tint    = what the picture is multiplied by in daylight\n"
 			"; night_tint, night_level = by night the picture is multiplied by night_level x night_tint\n"
@@ -326,7 +335,11 @@ namespace scenelight
 			"; relief      = how strongly a stage page's normal map (<page>_N) shows in its light (0-4)\n"
 			"; specular    = its highlight on pages with an ORM map (0-4)\n"
 			"; sun_azimuth = where it rises, degrees around the stage (0: along the stage's +x); sun_height = how high it climbs\n"
+			"; fighter_sun = how much of that darkening the fighters get (0-1; their normals are smoothed; 0: as the game lights them)\n"
+			"; shadow      = how much of the sun the fighters' shadows take off the stage (0-1; 0: no shadows)\n"
 			"sun = 0.35\n"
+			"fighter_sun = 0.5\n"
+			"shadow = 0.5\n"
 			"relief = 1\n"
 			"specular = 0.5\n"
 			"sun_azimuth = 30\n"
@@ -412,6 +425,10 @@ namespace scenelight
 				look.sun = rule.look.sun;
 			if (rule.hasRelief)
 				look.relief = rule.look.relief;
+			if (rule.hasFighterSun)
+				look.fighterSun = rule.look.fighterSun;
+			if (rule.hasShadow)
+				look.shadow = rule.look.shadow;
 			if (rule.hasSpecular)
 				look.specular = rule.look.specular;
 			if (rule.hasSunAzimuth)
@@ -482,6 +499,67 @@ namespace scenelight
 		DirectionToView(c, s, v);
 		for (int i = 0; i < 3; i++)
 			v[i] += c.t[i];
+	}
+
+	void ScreenToView(const Camera& camera, const double x, const double y, const double rhw, double view[3])
+	{
+		const double z = rhw > 1e-12 ? 1.0 / rhw : 1e12;
+		const double d = camera.distance > 0 ? camera.distance : 1.0;
+		//the screen is 640 x 480, the PlayStation's pixels (the projection's) half of that
+		view[0] = (x * 0.5 - camera.centreX) * z / d;
+		view[1] = (y * 0.5 - camera.centreY) * z / d;
+		view[2] = z;
+	}
+
+	bool FitSunShadow(const double towards[3], const std::vector<float>& places, const double margin, float out[16])
+	{
+		const double length = std::sqrt(towards[0] * towards[0] + towards[1] * towards[1] + towards[2] * towards[2]);
+		if (places.size() < 3 || !(length > 1e-9))
+			return false;
+		//the map's axes: f along the light (away from the sun), r and u across it
+		const double f[3] = { -towards[0] / length, -towards[1] / length, -towards[2] / length };
+		double helper[3] = { 0, 1, 0 };
+		if (std::fabs(f[1]) > 0.9)
+		{
+			helper[0] = 1;
+			helper[1] = 0;
+		}
+		double r[3] = { helper[1] * f[2] - helper[2] * f[1], helper[2] * f[0] - helper[0] * f[2], helper[0] * f[1] - helper[1] * f[0] };
+		const double rl = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+		for (double& c : r)
+			c /= rl;
+		const double u[3] = { f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0] };
+		double lo[3] = { 1e300, 1e300, 1e300 }, hi[3] = { -1e300, -1e300, -1e300 };
+		for (size_t i = 0; i + 2 < places.size(); i += 3)
+		{
+			const double p[3] = { places[i], places[i + 1], places[i + 2] };
+			const double a[3] = { p[0] * r[0] + p[1] * r[1] + p[2] * r[2], p[0] * u[0] + p[1] * u[1] + p[2] * u[2],
+				p[0] * f[0] + p[1] * f[1] + p[2] * f[2] };
+			for (int k = 0; k < 3; k++)
+			{
+				lo[k] = std::min(lo[k], a[k]);
+				hi[k] = std::max(hi[k], a[k]);
+			}
+		}
+		//square across (the map's texels stay square), the depth with room behind for the ground the shadows fall on
+		const double half = std::max(hi[0] - lo[0], hi[1] - lo[1]) * 0.5 + margin;
+		const double cx = (lo[0] + hi[0]) * 0.5, cy = (lo[1] + hi[1]) * 0.5;
+		const double nearest = lo[2] - margin, farthest = hi[2] + margin * 8.0;
+		if (!(half > 0) || !(farthest > nearest))
+			return false;
+		const double sx = 0.5 / half, sz = 1.0 / (farthest - nearest);
+		//row k of the map: (axis . p) scaled and moved; column-major out
+		const double rows[3][4] = {
+			{ r[0] * sx, r[1] * sx, r[2] * sx, 0.5 - cx * sx },
+			{ u[0] * sx, u[1] * sx, u[2] * sx, 0.5 - cy * sx },
+			{ f[0] * sz, f[1] * sz, f[2] * sz, -nearest * sz } };
+		for (int c = 0; c < 4; c++)
+		{
+			for (int k = 0; k < 3; k++)
+				out[c * 4 + k] = static_cast<float>(rows[k][c]);
+			out[c * 4 + 3] = c == 3 ? 1.0f : 0.0f;
+		}
+		return true;
 	}
 
 	void PlaceToStage(const Camera& c, const double v[3], double s[3])

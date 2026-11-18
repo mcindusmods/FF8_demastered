@@ -3,7 +3,7 @@ DEMASTER changelog (MCINDUS's continuation)
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------
 Built in steps: the first (fields, fieldprep, battles fought by day from fixed-time fields), the second (the time of
-day per save). Tested on Linux
+day per save), the third (battles: the fighters' smooth normals and shadows). Tested on Linux
 (the light rules, the evening and the lights file in field_pbr_test, fieldprep on bdifrit1 with a layer taken out, the
 field shader strictly with glslang and drawn through Mesa); the Windows-only files are type-checked. Not run in the game.
 Lights on at a time: 2 by day, 6 by night (was 2 of fieldprep's and 6 of yours, each time of day)
@@ -54,6 +54,23 @@ The time of day per save (second step; new: DAY_NIGHT_SAVES=1, DAY_NIGHT_SAVE_FO
     a field is a new game: the morning. Otherwise the clock goes on. The log says each.
   - The counter's speed is measured after a minute of play and logged once (1 a second if it is seconds, as the save
     format says).
+Battles: the fighters with smooth normals, their shadows on the stage (third step; new: demaster_fighter.vert)
+  - The fighters (the party, and enemies: draws that aren't a stage page of DEMASTER's) are drawn by DEMASTER: the game's
+    corners, texture and state, through main.frag with DEMASTER_FIGHTER and demaster_fighter.vert, which hands on a
+    normal per corner. The normals are the field characters' smoothing (corners at the same place on the screen are one
+    corner, faces less than 60 degrees apart are smoothed together), so the stage's lights no longer show the facets.
+    The game's own main program doesn't change. If the fighter program can't be built the game draws them as before.
+  - The fighters get a share of the sun's darkening now that their normals are smooth: fighter_sun in scene_light.txt
+    [battle] (0-1, default 0.5; 0: as the game lights them).
+  - Their shadows fall on the stage: each frame the fighters' corners go into the stage's space, and before the stage's
+    first draw of the next frame they are drawn as the sun sees them (an orthographic depth map fitted around them,
+    1024, or 2048 at FIELD_PBR_QUALITY=high); the stage's pages look it up (four taps). A frame behind, which doesn't
+    show at the game's speeds. shadow in [battle] (0-1, default 0.5): how much of the sun a shadow takes; by night the
+    moon's are as weak as the moon. A draw larger than 4,000 units (a stage page without an HD picture) casts none.
+  - Not a hook of the game's stage drawing: the camera is still the projection's registers read once a frame, and the
+    fighters are told from the stage by their textures. The tests check the shadow on a floor drawn through main.frag
+    with the registers of a real battle, and that the fighter program links.
+  - The default scene_light.txt describes the new keys; an existing one works without them (the defaults apply).
 Battles
   - A battle started in a field with a fixed time (time = day or night in its _pbr.txt: an inside place, a boss) is
     fought by day, the sun at its highest. The field keeps its own time.

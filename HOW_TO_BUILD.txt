@@ -20,7 +20,8 @@ HOW TO BUILD (this folder is the complete project)
      FIELD_PBR_REFLECTIONS, FIELD_PBR_CHARACTERS and FIELD_AVATARS are new in v15; FIELD_PBR_QUALITY and
      FIELD_GL_TRACK in v15.3)
    - every file in DEMASTER_EXP\shaders\  ->  <game>\DEMASTER_EXP\shaders\  (needed for PBR):
-     main.frag, demaster_field.vert, demaster_field.frag, demaster_chara.vert, demaster_chara.frag, demaster_shadow.frag
+     main.frag, demaster_field.vert, demaster_field.frag, demaster_chara.vert, demaster_chara.frag, demaster_shadow.frag,
+     demaster_fighter.vert
 
 4. fieldprep.exe can go anywhere (the game folder is handy). It's a command-line program:
    open a command prompt and run, for example,

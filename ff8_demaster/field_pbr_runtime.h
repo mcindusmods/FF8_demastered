@@ -3,6 +3,7 @@
 //(texturepatch_v2_fieldPbr.cpp) share. The rules both sides of PBR agree on (file names, lights, depth) are in
 //field_pbr.h, which fieldprep uses too.
 
+#include "field_chars.h"
 #include "field_layers.h"
 #include "field_pbr.h"
 #include "field_moving_lights.h"
@@ -208,7 +209,9 @@ namespace fieldrt
 	//--- shaders (DEMASTER_EXP\shaders\) and the game's programs
 	//0 and error set when a file is missing or does not compile or link
 	//defines: lines put right after the vertex shader's #version line (#extension, #define)
-	GLuint BuildProgram(const char* vertexFile, const char* fragmentFile, std::string& error, const char* defines = nullptr);
+	//defines: lines put after the vertex shader's #version line; fragmentDefines: the same for the fragment shader
+	GLuint BuildProgram(const char* vertexFile, const char* fragmentFile, std::string& error, const char* defines = nullptr,
+		const char* fragmentDefines = nullptr);
 	enum class ProgramKind
 	{
 		Unknown,   //no source
@@ -260,6 +263,10 @@ namespace fieldrt
 	//the character module, for the kept-back draws: characters are waiting (and the framebuffer they go to); draw them now
 	bool CharsPending(GLint& framebuffer);
 	void CharsFlush();
+
+	//--- the game's draw (texturepatch_v2_fieldChars.cpp): its corners, one per index (TLVERTEX in client memory; false: not
+	//readable, or not that kind of draw)
+	bool ReadDrawCorners(GLsizei count, GLenum type, const void* indices, std::vector<fieldchars::GameVertex>& corners);
 
 	//--- memory (texturepatch_v2_fieldLayers.cpp)
 	bool SafeRead(void* destination, const void* source, size_t length); //false: not readable

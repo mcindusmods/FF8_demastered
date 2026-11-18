@@ -332,13 +332,14 @@ void fieldrt::RawTexSubImage(const GLint level, const GLint x, const GLint y, co
 		glTexSubImage2D(GL_TEXTURE_2D, level, x, y, width, height, format, type, data);
 }
 
-GLuint fieldrt::BuildProgram(const char* vertexFile, const char* fragmentFile, std::string& error, const char* defines)
+GLuint fieldrt::BuildProgram(const char* vertexFile, const char* fragmentFile, std::string& error, const char* defines,
+	const char* fragmentDefines)
 {
 	CheckGlew();
 	const GLuint vertex = Compile(GL_VERTEX_SHADER, vertexFile, error, defines);
 	if (vertex == 0)
 		return 0;
-	const GLuint fragment = Compile(GL_FRAGMENT_SHADER, fragmentFile, error);
+	const GLuint fragment = Compile(GL_FRAGMENT_SHADER, fragmentFile, error, fragmentDefines);
 	if (fragment == 0)
 	{
 		glDeleteShader(vertex);

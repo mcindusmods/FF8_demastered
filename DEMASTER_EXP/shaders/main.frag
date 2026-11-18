@@ -36,10 +36,19 @@ uniform vec3 demasterSceneTrans;
 uniform vec4 demasterSceneSun;     // xyz: towards the sun or moon, view space; w: how much turning away from it darkens
 uniform vec4 demasterSceneSunLight; // rgb: its light (colour x strength); w: relief (how strongly a normal map shows)
 uniform vec4 demasterSceneDraw;    // this draw: x 1 = the stage (the sun's part; fighters only get the lights), y 1 = a
-                                   // normal map on demasterSceneN, z 1 = an ORM map on demasterSceneORM
+                                   // normal map on demasterSceneN, z 1 = an ORM map on demasterSceneORM; w: a fighter
+                                   // DEMASTER draws (DEMASTER_FIGHTER): its share of the sun's darkening
 uniform vec4 demasterSceneLightAt[4];     // the stage's own lights: xyz view space, w range (0: none)
 uniform vec4 demasterSceneLightColour[4]; // rgb, linear
 uniform sampler2D demasterSceneN;
+// The fighters' shadows on the stage: last frame's fighters as the sun sees them (a depth map)
+uniform sampler2D demasterSceneShadowMap;
+uniform mat4 demasterSceneShadowMatrix; // the stage's space to the map: x, y 0-1 across it, z its depth (0 nearest the sun)
+uniform vec4 demasterSceneShadowInfo;   // x: how much of the sun a shadow takes; y: the depth's bias; z: one texel; w: 1 = on
+#ifdef DEMASTER_FIGHTER
+// DEMASTER's fighter program (demaster_fighter.vert): the corners' smooth normals, view space
+varying vec3 demasterVertexNormal;
+#endif
 
 vec3 demasterSceneToLinear(vec3 c)
 {
@@ -131,6 +140,12 @@ void main()
 					if (dot(face, p) > 0.0)
 						face = -face; // towards the camera
 					vec3 n = face;
+#ifdef DEMASTER_FIGHTER
+					// a fighter: its smooth normal (on the side the camera sees) for the lights, and its share of the sun's darkening
+					vec3 smoothNormal = normalize(demasterVertexNormal);
+					n = dot(smoothNormal, face) < 0.0 ? -smoothNormal : smoothNormal;
+					lit *= 1.0 - demasterSceneDraw.w * demasterSceneSun.w * (0.5 - 0.5 * dot(n, demasterSceneSun.xyz));
+#endif
 					if (demasterSceneDraw.y > 0.5)
 					{
 						vec3 mapped = texture2D(demasterSceneN, gl_TexCoord[0].st).rgb * 2.0 - 1.0;
@@ -152,6 +167,20 @@ void main()
 						// slopes brighten and darken around that
 						float towards = dot(face, demasterSceneSun.xyz), bent = dot(n, demasterSceneSun.xyz);
 						lit *= 1.0 - demasterSceneSun.w * (0.5 - 0.5 * towards);
+						// the fighters' shadows: where the map has something nearer the sun than this place (four taps)
+						if (demasterSceneShadowInfo.w > 0.5 && towards > 0.0)
+						{
+							vec4 s = demasterSceneShadowMatrix * vec4(stage, 1.0);
+							if (s.x > 0.0 && s.x < 1.0 && s.y > 0.0 && s.y < 1.0 && s.z < 1.0)
+							{
+								float texel = demasterSceneShadowInfo.z, depth = s.z - demasterSceneShadowInfo.y;
+								float dark = step(texture2D(demasterSceneShadowMap, s.xy + vec2(-0.5, -0.5) * texel).r, depth)
+									+ step(texture2D(demasterSceneShadowMap, s.xy + vec2(0.5, -0.5) * texel).r, depth)
+									+ step(texture2D(demasterSceneShadowMap, s.xy + vec2(-0.5, 0.5) * texel).r, depth)
+									+ step(texture2D(demasterSceneShadowMap, s.xy + vec2(0.5, 0.5) * texel).r, depth);
+								lit *= 1.0 - demasterSceneShadowInfo.x * 0.25 * dark * min(towards * 4.0, 1.0);
+							}
+						}
 						lit *= clamp(1.0 + demasterSceneSunLight.w * (bent - towards), 0.2, 2.5);
 						if (demasterSceneDraw.z > 0.5 && demasterSceneCentre.z > 0.0 && bent > 0.0)
 						{

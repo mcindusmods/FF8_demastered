@@ -117,6 +117,19 @@ int main(int argc, char** argv)
 	Check(linked != 0, "main.frag links");
 	if (!linked)
 		return 1;
+	//DEMASTER's fighter program: demaster_fighter.vert with main.frag, DEMASTER_FIGHTER defined after its #version line
+	{
+		std::string fragment = ReadFile(folder + "main.frag");
+		const size_t line = fragment.find('\n');
+		fragment.insert(line == std::string::npos ? fragment.size() : line + 1, "#define DEMASTER_FIGHTER 1\n");
+		const GLuint fighter = glCreateProgram();
+		glAttachShader(fighter, Compile(GL_VERTEX_SHADER, ReadFile(folder + "demaster_fighter.vert")));
+		glAttachShader(fighter, Compile(GL_FRAGMENT_SHADER, fragment));
+		glLinkProgram(fighter);
+		GLint fighterLinked = 0;
+		glGetProgramiv(fighter, GL_LINK_STATUS, &fighterLinked);
+		Check(fighterLinked != 0 && glGetUniformLocation(fighter, "demasterSceneDraw") >= 0, "the fighter program (demaster_fighter.vert + main.frag) links");
+	}
 	glUseProgram(program);
 	const auto at = [&](const char* name) { return glGetUniformLocation(program, name); };
 	Check(at("demasterScene") >= 0 && at("demasterSceneMaps") >= 0 && at("demasterSceneEC") >= 0 && at("demasterSceneORM") >= 0,
@@ -340,6 +353,38 @@ int main(int argc, char** argv)
 			want[c] = level(linear(painted[c]) * (1.0 - 0.8 * (0.5 - 0.5 * towards)));
 		Check(near(got, want), "the sun low over the stage: the floor darkens by how far it is turned away");
 		printf("stage, low sun: the floor is turned %.3f towards it; got %d %d %d, want %d %d %d\n", towards, got[0], got[1], got[2], want[0], want[1], want[2]);
+		//the fighters' shadows: a map with something nearer the sun takes the shadow's share of the sun off the floor; one with
+		//nothing nearer leaves it; the map fitted around fighters standing on that floor
+		{
+			glUniform1i(at("demasterSceneShadowMap"), 13);
+			towards = sun(0, -1, 0, 1.0f, 1.0f);
+			const double overhead[3] = { 0, -1, 0 };
+			const std::vector<float> standing = { 750.0f, static_cast<float>(floorY), -500.0f, 1750.0f, static_cast<float>(floorY) - 1800.0f, 500.0f };
+			float m[16];
+			Check(scenelight::FitSunShadow(overhead, standing, 100.0, m), "a shadow map fits around the fighters");
+			glUniformMatrix4fv(at("demasterSceneShadowMatrix"), 1, GL_FALSE, m);
+			const GLuint nearer = Texture1(0, 0, 0, 255), farther = Texture1(255, 255, 255, 255);
+			glActiveTexture(GL_TEXTURE13);
+			glBindTexture(GL_TEXTURE_2D, nearer);
+			glUniform4f(at("demasterSceneShadowInfo"), 0.5f, 0.004f, 1.0f / 1024.0f, 1.0f);
+			drawFloor(got, px, py);
+			for (int c = 0; c < 3; c++)
+				want[c] = level(linear(painted[c]) * 0.5);
+			Check(near(got, want), "a fighter's shadow (strength 0.5) takes half the sun off the floor");
+			printf("stage, in a shadow: got %d %d %d, want %d %d %d\n", got[0], got[1], got[2], want[0], want[1], want[2]);
+			glActiveTexture(GL_TEXTURE13);
+			glBindTexture(GL_TEXTURE_2D, farther);
+			drawFloor(got, px, py);
+			for (int c = 0; c < 3; c++)
+				want[c] = static_cast<int>(std::lround(painted[c]));
+			Check(near(got, want), "nothing nearer the sun in the map: the floor as painted");
+			glUniform4f(at("demasterSceneShadowInfo"), 0, 0, 0, 0);
+			glActiveTexture(GL_TEXTURE0);
+			//back to the low sun for the checks below
+			towards = sun(1, -0.2, 0.3, 0.8f, 1.0f);
+			for (int c = 0; c < 3; c++)
+				want[c] = level(linear(painted[c]) * (1.0 - 0.8 * (0.5 - 0.5 * towards)));
+		}
 		//a flat normal map changes nothing
 		const GLuint flatMap = Texture1(128, 128, 255, 255);
 		glActiveTexture(GL_TEXTURE12);

@@ -2,8 +2,9 @@
 ; Read again within a second of saving it. Colours are red green blue in linear light: 1 1 1 changes nothing.
 ;
 ; night       = auto | 0 | 1   does the night come here. auto: the world map always; a battle when it started on
-;                              the world map, in a field open to the sky (sky = 1 in its _pbr.txt) or in a field
-;                              whose _pbr.txt says time = night. Battles from other fields stay as painted.
+;                              the world map or in a field open to the sky (sky = 1 in its _pbr.txt). Battles from
+;                              other fields stay as painted; from a field with a fixed time (time = day or night
+;                              in its _pbr.txt) they are fought by day.
 ; time        = cycle | day | night   cycle: the day/night clock; day or night: always that
 ; day_tint    = what the picture is multiplied by in daylight
 ; night_tint, night_level = by night the picture is multiplied by night_level x night_tint
@@ -23,7 +24,11 @@ glow = 1
 ; relief      = how strongly a stage page's normal map (<page>_N) shows in its light (0-4)
 ; specular    = its highlight on pages with an ORM map (0-4)
 ; sun_azimuth = where it rises, degrees around the stage (0: along the stage's +x); sun_height = how high it climbs
+; fighter_sun = how much of that darkening the fighters get (0-1; their normals are smoothed; 0: as the game lights them)
+; shadow      = how much of the sun the fighters' shadows take off the stage (0-1; 0: no shadows)
 sun = 0.35
+fighter_sun = 0.5
+shadow = 0.5
 relief = 1
 specular = 0.5
 sun_azimuth = 30

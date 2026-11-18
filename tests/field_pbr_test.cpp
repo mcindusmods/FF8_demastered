@@ -1968,6 +1968,53 @@ static void TestSceneCamera()
 	const double middle[3] = { 0, 0, 0 };
 	scenelight::PlaceToView(camera, middle, view);
 	CHECK(view[0] == -547.0 && view[1] == 469.0 && view[2] == 8796.0);
+	//a corner the game hands OpenGL comes back to the place it was projected from (640 x 480 screen, rhw = 1 / z)
+	{
+		double v[3], st[3];
+		scenelight::PlaceToView(camera, place, view);
+		const double x = 2.0 * (camera.centreX + camera.distance * view[0] / view[2]), y = 2.0 * (camera.centreY + camera.distance * view[1] / view[2]);
+		scenelight::ScreenToView(camera, x, y, 1.0 / view[2], v);
+		for (int i = 0; i < 3; i++)
+			NEAR(v[i], view[i], 1e-6 * std::fabs(view[2]));
+		scenelight::PlaceToStage(camera, v, st);
+		for (int i = 0; i < 3; i++)
+			NEAR(st[i], place[i], 1.5);
+	}
+	//the sun's shadow map: around the fighters, the place under a fighter farther from the sun at the same spot of the map
+	{
+		const double overhead[3] = { 0.3, -0.9, 0.2 }; //towards the sun (the stage's y runs down)
+		std::vector<float> fighters;
+		for (const float x : { -1500.0f, 1500.0f })
+			for (const float yy : { 0.0f, -1800.0f })
+				for (const float z : { -300.0f, 300.0f })
+					fighters.insert(fighters.end(), { x, yy, z });
+		float m[16];
+		CHECK(scenelight::FitSunShadow(overhead, fighters, 100.0, m));
+		const auto map = [&](const double x, const double yy, const double z, double out[3])
+		{
+			for (int k = 0; k < 3; k++)
+				out[k] = m[k] * x + m[4 + k] * yy + m[8 + k] * z + m[12 + k];
+		};
+		bool inside = true;
+		for (size_t i = 0; i < fighters.size(); i += 3)
+		{
+			double o[3];
+			map(fighters[i], fighters[i + 1], fighters[i + 2], o);
+			inside = inside && o[0] > 0 && o[0] < 1 && o[1] > 0 && o[1] < 1 && o[2] > 0 && o[2] < 1;
+		}
+		CHECK(inside);
+		//a fighter's head, and the ground the sun's ray through it reaches (y = 0 is the floor)
+		const double len = std::sqrt(0.3 * 0.3 + 0.9 * 0.9 + 0.2 * 0.2);
+		const double head[3] = { 1500, -1800, 300 }, t = 1800.0 / (0.9 / len);
+		const double ground[3] = { head[0] - 0.3 / len * t, 0.0, head[2] - 0.2 / len * t };
+		double a[3], b[3];
+		map(head[0], head[1], head[2], a);
+		map(ground[0], ground[1], ground[2], b);
+		NEAR(a[0], b[0], 1e-4);
+		NEAR(a[1], b[1], 1e-4);
+		CHECK(b[2] > a[2] && b[2] < 1.0); //the ground is behind the head as the sun sees it, still on the map
+		CHECK(!scenelight::FitSunShadow(overhead, std::vector<float>{}, 100.0, m));
+	}
 	//not a rotation: a row too long, rows not at right angles, no distance
 	int32_t bad[32];
 	std::copy(reg, reg + 32, bad);

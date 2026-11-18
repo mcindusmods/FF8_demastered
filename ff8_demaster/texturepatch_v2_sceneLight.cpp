@@ -43,7 +43,8 @@ namespace
 {
 	//(11: battle stages and the enemies; 18 and 27: the world map's ground, its sky and horizon; 35: the party in battle)
 	constexpr int TYPE_BATTLE_STAGE = 11, TYPE_WORLD = 18, TYPE_WORLD_SKY = 27, TYPE_BATTLE_CHARACTER = 35;
-	constexpr int UNIT_GLOWS = 10, UNIT_ORM = 11, UNIT_NORMAL = 12;
+	constexpr int UNIT_GLOWS = 10, UNIT_ORM = 11, UNIT_NORMAL = 12, UNIT_SHADOW = 13;
+	constexpr double FIGHTER_SIZE = 4000.0; //a draw larger than this (the stage's units) casts no shadow: it is the stage's
 	constexpr float SKY_DISTANCE = 20000.0f; //a stage's sky stands about 30,000 units from its middle; the fighters within a few thousand
 
 	struct SceneTexture
@@ -62,7 +63,8 @@ namespace
 	{
 		bool looked = false;
 		GLint scene = -1, maps = -1, draw = -1, proj = -1, centre = -1, rot = -1, trans = -1, sun = -1, sunLight = -1, lightAt = -1,
-			lightColour = -1;
+			lightColour = -1, shadowMatrix = -1, shadowInfo = -1;
+		uint64_t shadowSent = 0; //the serial of the shadow map this program has (0: none)
 		float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 }; //as last sent
 		uint64_t stageSent = 0; //the serial of the stage's light (below) this program has
 	};
@@ -72,6 +74,9 @@ namespace
 	{
 		uint64_t serial = 1, frame = ~0ull;
 		bool camera = false;
+		scenelight::Camera view; //the camera itself (for the fighters' corners)
+		double sunStage[3] = { 0, -1, 0 }; //towards the sun or moon, the stage's space
+		float sunShadow = 0; //how much of the sun a shadow takes (the look's shadow x the sun's strength)
 		float proj[4] = { 0, 0, 0, 0 }, centre[4] = { 0, 0, 0, 0 }, rot[9] = {}, trans[3] = {}, sun[4] = { 0, 0, 0, 0 },
 			sunLight[4] = { 0, 0, 0, 0 }, lightAt[16] = {}, lightColour[16] = {};
 	} stageLight;
@@ -220,6 +225,7 @@ namespace
 		if (cameraFilter.Frame(readable, read, camera) && viewport[2] > 0 && viewport[3] > 0)
 		{
 			next.camera = true;
+			next.view = camera;
 			//the game's 640 x 480 units fill the viewport; the PlayStation's pixels are half of those
 			next.proj[0] = 320.0f / static_cast<float>(viewport[2]);
 			next.proj[1] = 240.0f / static_cast<float>(viewport[3]);
@@ -242,6 +248,9 @@ namespace
 			double towards[3];
 			scenelight::DirectionToView(camera, sun.direction, towards);
 			const double strength = sun.strength;
+			for (int i = 0; i < 3; i++)
+				next.sunStage[i] = sun.direction[i];
+			next.sunShadow = battleLook.shadow * static_cast<float>(strength);
 			for (int i = 0; i < 3; i++)
 			{
 				next.sun[i] = static_cast<float>(towards[i]);
@@ -343,6 +352,37 @@ namespace
 			first[3], haveVertex ? "" : " (not read)");
 	}
 
+	//--- the fighters' shadows on the stage: last frame's fighters as the sun sees them (a depth map), sampled by the stage
+	struct ShadowMap
+	{
+		bool tried = false, failed = false;
+		GLuint framebuffer = 0, depth = 0, program = 0;
+		GLint uvLocation = -1;
+		int size = 0;
+		bool on = false; //this frame's map holds something
+		uint64_t serial = 0, frame = ~0ull;
+		float matrix[16] = {};
+		float info[4] = { 0, 0, 0, 0 }; //strength, bias, one texel, on
+	} shadow;
+
+	void SendShadow(ProgramState& p, const bool stage)
+	{
+		if (p.shadowInfo < 0)
+			return;
+		const uint64_t want = stage && shadow.on ? shadow.serial : 0;
+		if (p.shadowSent == want)
+			return;
+		p.shadowSent = want;
+		static const float none[4] = { 0, 0, 0, 0 };
+		if (want != 0)
+		{
+			glUniformMatrix4fv(p.shadowMatrix, 1, GL_FALSE, shadow.matrix);
+			glUniform4fv(p.shadowInfo, 1, shadow.info);
+		}
+		else
+			glUniform4fv(p.shadowInfo, 1, none);
+	}
+
 	void Send(const GLint program, ProgramState& p, const float scene[4], const float maps[4], const float draw[4], const bool stage)
 	{
 		if (p.draw >= 0 && memcmp(p.drawValue, draw, sizeof(p.drawValue)) != 0)
@@ -370,6 +410,7 @@ namespace
 				glUniform4fv(p.lightColour, 4, stageLight.lightColour);
 			}
 		}
+		SendShadow(p, stage && draw[0] > 0.5f);
 		if (memcmp(p.sceneValue, scene, sizeof(p.sceneValue)) != 0)
 		{
 			programsOn += (scene[3] > 0) - (p.sceneValue[3] > 0);
@@ -380,6 +421,411 @@ namespace
 		{
 			memcpy(p.mapsValue, maps, sizeof(p.mapsValue));
 			glUniform4fv(p.maps, 1, maps);
+		}
+	}
+
+	//the uniforms of a program with this release's main.frag (the game's main program, or DEMASTER's fighter program)
+	void LookUpUniforms(const GLint program, ProgramState& p)
+	{
+		const auto at = [&](const char* name) { return glGetUniformLocation(static_cast<GLuint>(program), name); };
+		p.scene = at("demasterScene");
+		p.maps = at("demasterSceneMaps");
+		p.draw = at("demasterSceneDraw");
+		p.proj = at("demasterSceneProj");
+		p.centre = at("demasterSceneCentre");
+		p.rot = at("demasterSceneRot");
+		p.trans = at("demasterSceneTrans");
+		p.sun = at("demasterSceneSun");
+		p.sunLight = at("demasterSceneSunLight");
+		p.lightAt = at("demasterSceneLightAt[0]");
+		p.lightColour = at("demasterSceneLightColour[0]");
+		p.shadowMatrix = at("demasterSceneShadowMatrix");
+		p.shadowInfo = at("demasterSceneShadowInfo");
+		if (p.scene < 0 || p.proj < 0)
+		{
+			p.scene = -1;
+			return;
+		}
+		const GLint previous = glstate::Program();
+		if (previous != program)
+			glUseProgram(static_cast<GLuint>(program));
+		if (const GLint normal = at("demasterSceneN"); normal >= 0)
+			glUniform1i(normal, UNIT_NORMAL);
+		if (const GLint glows = at("demasterSceneEC"); glows >= 0)
+			glUniform1i(glows, UNIT_GLOWS);
+		if (const GLint orm = at("demasterSceneORM"); orm >= 0)
+			glUniform1i(orm, UNIT_ORM);
+		if (const GLint map = at("demasterSceneShadowMap"); map >= 0)
+			glUniform1i(map, UNIT_SHADOW);
+		if (previous != program)
+			glUseProgram(static_cast<GLuint>(previous));
+	}
+
+	//--- the fighters, drawn by DEMASTER with smooth normals (the game's corners, its texture and state, main.frag with
+	//DEMASTER_FIGHTER and demaster_fighter.vert, which hands the normals on). The field characters' smoothing
+	//(fieldchars::SmoothNormals): corners at the same place on the screen are one corner, faces less than 60 degrees apart
+	//are smoothed together. What they cover goes into the next frame's shadow map, in the stage's space.
+	struct FighterVertex
+	{
+		float pos[4];
+		uint8_t color[4];
+		float uv[2];
+		float normal[3];
+	};
+	struct Caster
+	{
+		GLuint texture = 0;
+		size_t first = 0, count = 0; //corners in places / 3
+	};
+	struct Fighters
+	{
+		bool tried = false;
+		GLuint program = 0;
+		ProgramState state;
+		GLint vertextype = -1, blendMode = -1, effecttype = -1, effectoption = -1, tileClamp = -1;
+		std::vector<FighterVertex> vertices;
+		std::vector<float> places, uv, lastPlaces, lastUv; //the stage's space, 3 per corner; 2 per corner
+		std::vector<Caster> casters, lastCasters;
+		uint64_t frame = ~0ull;
+		size_t drawn = 0, logged = 0;
+	} fighters;
+
+	uint64_t CornerKey(const fieldchars::GameVertex& v)
+	{
+		uint32_t a, b, c;
+		memcpy(&a, &v.x, 4);
+		memcpy(&b, &v.y, 4);
+		memcpy(&c, &v.rhw, 4);
+		uint64_t h = 0x9E3779B97F4A7C15ull ^ a;
+		h = (h ^ (static_cast<uint64_t>(b) << 21)) * 0xBF58476D1CE4E5B9ull;
+		h = (h ^ (h >> 29) ^ c) * 0x94D049BB133111EBull;
+		return h ^ (h >> 32);
+	}
+
+	bool MakeFighterProgram()
+	{
+		Fighters& f = fighters;
+		if (f.tried)
+			return f.program != 0;
+		f.tried = true;
+		std::string error;
+		f.program = BuildProgram("demaster_fighter.vert", "main.frag", error, nullptr, "#define DEMASTER_FIGHTER 1\n");
+		if (f.program == 0)
+		{
+			OutputDebug("SCENE_LIGHT: the fighters are drawn by the game (faceted under the lights): %s. Copy DEMASTER_EXP\\shaders\\ from "
+				"this release\n", error.c_str());
+			return false;
+		}
+		LookUpUniforms(static_cast<GLint>(f.program), f.state);
+		f.state.looked = true;
+		const auto at = [&](const char* name) { return glGetUniformLocation(f.program, name); };
+		f.vertextype = at("vertextype");
+		f.blendMode = at("blend_mode");
+		f.effecttype = at("effecttype");
+		f.effectoption = at("effectoption");
+		f.tileClamp = at("demasterTileClamp");
+		const GLint previous = glstate::Program();
+		glUseProgram(f.program);
+		if (const GLint tex = at("tex"); tex >= 0)
+			glUniform1i(tex, 0);
+		glUseProgram(static_cast<GLuint>(previous));
+		if (f.state.scene < 0)
+		{
+			OutputDebug("SCENE_LIGHT: DEMASTER_EXP\\shaders\\main.frag is not this release's: the fighters are drawn by the game\n");
+			glDeleteProgram(f.program);
+			f.program = 0;
+			return false;
+		}
+		OutputDebug("SCENE_LIGHT: the fighters are drawn by DEMASTER with smooth normals (program %u); their shadows fall on the stage\n",
+			f.program);
+		return true;
+	}
+
+	//a fighter's draw: true when DEMASTER drew it (the game's draw is skipped)
+	bool DrawFighter(const GLint gameProgram, const GLenum mode, const GLsizei count, const GLenum type, const void* indices,
+		const float scene[4], const float maps[4], float draw[4])
+	{
+		Fighters& f = fighters;
+		if (mode != GL_TRIANGLES || count < 3 || count % 3 != 0 || !stageLight.camera || !MakeFighterProgram())
+			return false;
+		static std::vector<fieldchars::GameVertex> corners;
+		if (!ReadDrawCorners(count, type, indices, corners) || corners.size() != static_cast<size_t>(count))
+			return false;
+		if (f.frame != sceneFrame)
+		{
+			f.frame = sceneFrame;
+			f.drawn = 0;
+		}
+		const scenelight::Camera& camera = stageLight.view;
+		static std::vector<fieldchars::V3> positions, normals;
+		static std::vector<uint64_t> keys;
+		positions.resize(corners.size());
+		keys.resize(corners.size());
+		for (size_t i = 0; i < corners.size(); i++)
+		{
+			double v[3];
+			scenelight::ScreenToView(camera, corners[i].x, corners[i].y, corners[i].rhw, v);
+			positions[i] = { static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]) };
+			keys[i] = CornerKey(corners[i]);
+		}
+		fieldchars::SmoothNormals(positions, keys, 60.0f, normals);
+		f.vertices.resize(corners.size());
+		for (size_t i = 0; i < corners.size(); i++)
+		{
+			FighterVertex& v = f.vertices[i];
+			v.pos[0] = corners[i].x;
+			v.pos[1] = corners[i].y;
+			v.pos[2] = corners[i].z;
+			v.pos[3] = corners[i].rhw;
+			memcpy(v.color, corners[i].color, 4);
+			v.uv[0] = corners[i].u;
+			v.uv[1] = corners[i].v;
+			v.normal[0] = normals[i].x;
+			v.normal[1] = normals[i].y;
+			v.normal[2] = normals[i].z;
+		}
+		//for the next frame's shadow map: its corners in the stage's space (the sky's far wall stays out)
+		const GLuint texture = glstate::BoundTexture2D();
+		if (battleLook.shadow > 0.0f)
+		{
+			const size_t first = f.places.size() / 3;
+			bool inside = true;
+			double lo[3] = { 1e300, 1e300, 1e300 }, hi[3] = { -1e300, -1e300, -1e300 };
+			for (size_t i = 0; i < corners.size() && inside; i++)
+			{
+				const double v[3] = { positions[i].x, positions[i].y, positions[i].z };
+				double st[3];
+				scenelight::PlaceToStage(camera, v, st);
+				inside = st[0] * st[0] + st[2] * st[2] < 0.25 * SKY_DISTANCE * SKY_DISTANCE;
+				for (int k = 0; k < 3; k++)
+				{
+					lo[k] = std::min(lo[k], st[k]);
+					hi[k] = std::max(hi[k], st[k]);
+				}
+				f.places.insert(f.places.end(), { static_cast<float>(st[0]), static_cast<float>(st[1]), static_cast<float>(st[2]) });
+				f.uv.insert(f.uv.end(), { corners[i].u, corners[i].v });
+			}
+			//a fighter is a few thousand units at most; larger is the stage's own (a page without an HD picture)
+			inside = inside && std::max({ hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2] }) < FIGHTER_SIZE;
+			if (inside)
+				f.casters.push_back({ texture, first, corners.size() });
+			else
+			{
+				f.places.resize(first * 3);
+				f.uv.resize(first * 2);
+			}
+		}
+		//the game's uniforms and its client arrays as they are, DEMASTER's arrays for this one draw
+		const GLint program = gameProgram;
+		glUseProgram(f.program);
+		if (f.vertextype >= 0)
+			glUniform1i(f.vertextype, 3);
+		const auto copyInt = [&](const GLint ours, const char* name)
+		{
+			if (ours < 0)
+				return;
+			const GLint theirs = glGetUniformLocation(static_cast<GLuint>(program), name);
+			glUniform1i(ours, theirs >= 0 ? glstate::UniformInt(program, theirs) : 0);
+		};
+		copyInt(f.blendMode, "blend_mode");
+		copyInt(f.effecttype, "effecttype");
+		copyInt(f.effectoption, "effectoption");
+		if (f.tileClamp >= 0)
+			glUniform4f(f.tileClamp, 0.0f, 0.0f, 0.0f, 0.0f);
+		draw[3] = battleLook.fighterSun;
+		Send(static_cast<GLint>(f.program), f.state, scene, maps, draw, true);
+		glstate::ClientState saved;
+		glstate::SaveClient(saved);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		const uint8_t* base = reinterpret_cast<const uint8_t*>(f.vertices.data());
+		glVertexPointer(4, GL_FLOAT, sizeof(FighterVertex), base + offsetof(FighterVertex, pos));
+		glEnableClientState(GL_VERTEX_ARRAY);
+		glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(FighterVertex), base + offsetof(FighterVertex, color));
+		glEnableClientState(GL_COLOR_ARRAY);
+		glNormalPointer(GL_FLOAT, sizeof(FighterVertex), base + offsetof(FighterVertex, normal));
+		glEnableClientState(GL_NORMAL_ARRAY);
+		glClientActiveTexture(GL_TEXTURE0);
+		glTexCoordPointer(2, GL_FLOAT, sizeof(FighterVertex), base + offsetof(FighterVertex, uv));
+		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+		glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(f.vertices.size()));
+		glstate::RestoreClient(saved);
+		glUseProgram(static_cast<GLuint>(program));
+		f.drawn++;
+		return true;
+	}
+
+	bool MakeShadowMap()
+	{
+		ShadowMap& m = shadow;
+		if (m.tried)
+			return !m.failed;
+		m.tried = true;
+		m.failed = true;
+		m.size = FIELD_PBR_QUALITY >= 2 ? 2048 : 1024;
+		static const char* vertex = "#version 120\nvoid main() { gl_Position = gl_Vertex; gl_TexCoord[0] = gl_MultiTexCoord0; }\n";
+		static const char* fragment = "#version 120\nuniform sampler2D tex;\nvoid main() { if (texture2D(tex, gl_TexCoord[0].st).a < 0.44) "
+			"discard; gl_FragColor = vec4(1.0); }\n";
+		const auto compile = [](const GLenum kind, const char* text) -> GLuint
+		{
+			const GLuint shader = glCreateShader(kind);
+			glShaderSource(shader, 1, &text, nullptr);
+			glCompileShader(shader);
+			GLint ok = GL_FALSE;
+			glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+			if (ok != GL_TRUE)
+			{
+				glDeleteShader(shader);
+				return 0;
+			}
+			return shader;
+		};
+		const GLuint vs = compile(GL_VERTEX_SHADER, vertex), fs = compile(GL_FRAGMENT_SHADER, fragment);
+		if (vs != 0 && fs != 0)
+		{
+			m.program = glCreateProgram();
+			glAttachShader(m.program, vs);
+			glAttachShader(m.program, fs);
+			glLinkProgram(m.program);
+			GLint ok = GL_FALSE;
+			glGetProgramiv(m.program, GL_LINK_STATUS, &ok);
+			if (ok != GL_TRUE)
+			{
+				glDeleteProgram(m.program);
+				m.program = 0;
+			}
+		}
+		if (vs != 0)
+			glDeleteShader(vs);
+		if (fs != 0)
+			glDeleteShader(fs);
+		if (m.program == 0)
+		{
+			OutputDebug("SCENE_LIGHT: the fighters' shadow map's shader doesn't compile here: no shadows in battle\n");
+			return false;
+		}
+		const GLint previous = glstate::Program();
+		glUseProgram(m.program);
+		glUniform1i(glGetUniformLocation(m.program, "tex"), 0);
+		glUseProgram(static_cast<GLuint>(previous));
+		const GLenum active = glstate::ActiveTexture();
+		const GLuint unit0 = glstate::Texture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+		glGenTextures(1, &m.depth);
+		glBindTexture(GL_TEXTURE_2D, m.depth);
+		RawTexImage(GL_DEPTH_COMPONENT24, m.size, m.size, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+		glBindTexture(GL_TEXTURE_2D, unit0);
+		glActiveTexture(active);
+		const GLuint before = glstate::DrawFramebuffer();
+		glGenFramebuffers(1, &m.framebuffer);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m.framebuffer);
+		glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m.depth, 0);
+		glDrawBuffer(GL_NONE);
+		const GLenum status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, before);
+		if (status != GL_FRAMEBUFFER_COMPLETE)
+		{
+			OutputDebug("SCENE_LIGHT: the fighters' shadow map can't be drawn on this GPU (status 0x%X): no shadows in battle\n", status);
+			return false;
+		}
+		m.failed = false;
+		OutputDebug("SCENE_LIGHT: the fighters' shadows: a %d x %d map from the sun, a frame behind\n", m.size, m.size);
+		return true;
+	}
+
+	//before the stage's first draw of a frame: last frame's fighters into the map
+	void RenderShadowMap()
+	{
+		ShadowMap& m = shadow;
+		if (m.frame == sceneFrame)
+			return;
+		m.frame = sceneFrame;
+		m.on = false;
+		const Fighters& f = fighters;
+		if (battleLook.shadow <= 0.0f || stageLight.sunShadow <= 0.0f || f.lastCasters.empty() || !MakeShadowMap())
+			return;
+		float matrix[16];
+		if (!scenelight::FitSunShadow(stageLight.sunStage, f.lastPlaces, 150.0, matrix))
+			return;
+		static std::vector<float> clip;
+		clip.resize(f.lastPlaces.size());
+		for (size_t i = 0; i + 2 < f.lastPlaces.size(); i += 3)
+		{
+			const float x = f.lastPlaces[i], y = f.lastPlaces[i + 1], z = f.lastPlaces[i + 2];
+			for (int k = 0; k < 3; k++)
+				clip[i + k] = (matrix[k] * x + matrix[4 + k] * y + matrix[8 + k] * z + matrix[12 + k]) * 2.0f - 1.0f;
+		}
+		glstate::RenderState state;
+		glstate::Capture(state);
+		glstate::ClientState client;
+		glstate::SaveClient(client);
+		const GLint program = glstate::Program();
+		const GLenum active = glstate::ActiveTexture();
+		const GLuint unit0 = glstate::Texture(GL_TEXTURE_2D, 0);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m.framebuffer);
+		glstate::RawViewport(0, 0, m.size, m.size);
+		glDisable(GL_SCISSOR_TEST);
+		glDisable(GL_BLEND);
+		glDisable(GL_ALPHA_TEST);
+		glDisable(GL_CULL_FACE);
+		glDisable(GL_STENCIL_TEST);
+		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+		glEnable(GL_DEPTH_TEST);
+		glDepthFunc(GL_LESS);
+		glDepthMask(GL_TRUE);
+		glClearDepth(1.0);
+		glClear(GL_DEPTH_BUFFER_BIT);
+		glUseProgram(m.program);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glVertexPointer(3, GL_FLOAT, 0, clip.data());
+		glEnableClientState(GL_VERTEX_ARRAY);
+		glDisableClientState(GL_COLOR_ARRAY);
+		glDisableClientState(GL_NORMAL_ARRAY);
+		glClientActiveTexture(GL_TEXTURE0);
+		glTexCoordPointer(2, GL_FLOAT, 0, f.lastUv.data());
+		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+		glActiveTexture(GL_TEXTURE0);
+		for (const Caster& c : f.lastCasters)
+		{
+			glBindTexture(GL_TEXTURE_2D, c.texture);
+			glDrawArrays(GL_TRIANGLES, static_cast<GLint>(c.first), static_cast<GLsizei>(c.count));
+		}
+		glBindTexture(GL_TEXTURE_2D, unit0);
+		//the map on its unit for the stage's draws
+		glActiveTexture(GL_TEXTURE0 + UNIT_SHADOW);
+		glBindTexture(GL_TEXTURE_2D, m.depth);
+		glActiveTexture(active);
+		glUseProgram(static_cast<GLuint>(program));
+		glstate::RestoreClient(client);
+		glstate::Apply(state);
+		memcpy(m.matrix, matrix, sizeof(matrix));
+		m.info[0] = std::min(1.0f, stageLight.sunShadow);
+		m.info[1] = 0.004f; //the depth's bias (of the map's whole depth)
+		m.info[2] = 1.0f / static_cast<float>(m.size);
+		m.info[3] = 1.0f;
+		m.on = true;
+		m.serial++;
+	}
+
+	//a frame is over: this frame's fighters are the next frame's shadow casters
+	void FightersFrameEnd()
+	{
+		Fighters& f = fighters;
+		std::swap(f.places, f.lastPlaces);
+		std::swap(f.uv, f.lastUv);
+		std::swap(f.casters, f.lastCasters);
+		f.places.clear();
+		f.uv.clear();
+		f.casters.clear();
+		if (SCENE_DEBUG && f.drawn > 0 && f.logged < 3 && currentMode == MODE_BATTLE)
+		{
+			f.logged++;
+			OutputDebug("SCENE_LIGHT: %zu fighter draw(s) with smooth normals this frame, %zu shadow caster(s)%s\n", f.drawn, f.lastCasters.size(),
+				shadow.on ? ", the shadow map on" : "");
 		}
 	}
 }
@@ -464,11 +910,11 @@ void SceneLightFieldEntered(const bool sky)
 	fieldSky = sky;
 }
 
-//glDrawElements hook, before every draw of the game
-void SceneLightBeforeDraw(const int count)
+//glDrawElements hook, before every draw of the game. true: DEMASTER drew it (a fighter with smooth normals)
+bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum indexType, const void* indices)
 {
 	if (!SCENE_LIGHT)
-		return;
+		return false;
 	const int mode = currentMode;
 	if (mode != lastMode)
 	{
@@ -481,49 +927,28 @@ void SceneLightBeforeDraw(const int count)
 	}
 	const bool scene = mode == MODE_BATTLE || mode == MODE_WORLDMAP;
 	if (!scene && programsOn == 0)
-		return;
+		return false;
 	const GLint program = glstate::Program();
 	if (program == 0)
-		return;
+		return false;
 	ProgramState& p = programs[program];
 	if (!p.looked)
 	{
 		p.looked = true;
 		if (GameProgramOf(program).kind == ProgramKind::Main)
 		{
-			p.scene = glGetUniformLocation(static_cast<GLuint>(program), "demasterScene");
-			p.maps = glGetUniformLocation(static_cast<GLuint>(program), "demasterSceneMaps");
-			const auto at = [&](const char* name) { return glGetUniformLocation(static_cast<GLuint>(program), name); };
-			p.draw = at("demasterSceneDraw");
-			p.proj = at("demasterSceneProj");
-			p.centre = at("demasterSceneCentre");
-			p.rot = at("demasterSceneRot");
-			p.trans = at("demasterSceneTrans");
-			p.sun = at("demasterSceneSun");
-			p.sunLight = at("demasterSceneSunLight");
-			p.lightAt = at("demasterSceneLightAt[0]");
-			p.lightColour = at("demasterSceneLightColour[0]");
-			if (p.scene < 0 || p.proj < 0)
-			{
-				p.scene = -1;
+			LookUpUniforms(program, p);
+			if (p.scene < 0)
 				OutputDebug("SCENE_LIGHT: the game's main.frag (program %d) is not this release's: battles and the world map stay as they "
 					"are. Copy DEMASTER_EXP\\shaders\\main.frag from this release.\n", program);
-			}
-			else
-			{
-				if (const GLint normal = at("demasterSceneN"); normal >= 0)
-					glUniform1i(normal, UNIT_NORMAL);
-				if (const GLint glows = glGetUniformLocation(static_cast<GLuint>(program), "demasterSceneEC"); glows >= 0)
-					glUniform1i(glows, UNIT_GLOWS);
-				if (const GLint orm = glGetUniformLocation(static_cast<GLuint>(program), "demasterSceneORM"); orm >= 0)
-					glUniform1i(orm, UNIT_ORM);
-			}
 		}
+		else
+			p.scene = -1;
 	}
 	if (p.scene < 0)
-		return;
+		return false;
 	float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 };
-	bool stageLit = false;
+	bool stageLit = false, knownFighter = false;
 	if (scene)
 	{
 		//(a battle on the world map stands on the world's own textures)
@@ -548,12 +973,18 @@ void SceneLightBeforeDraw(const int count)
 			const SceneTexture& t = known->second;
 			if (mode == MODE_BATTLE)
 			{
+				//the party (35) and the enemies (11 without a stage page of DEMASTER's: a stage page without an HD picture comes
+				//here too; it gets smooth normals, and casts no shadow when it is large)
+				knownFighter = !world && t.stage < 0 && (t.type == TYPE_BATTLE_CHARACTER || t.type == TYPE_BATTLE_STAGE);
 				WorkStageLight();
 				stageLit = true;
-				//the stage (its own pages, or the world's ground under a battle there) gets the sun; the fighters the lights
+				//the stage (its own pages, or the world's ground under a battle there) gets the sun and the fighters' shadows; the
+				//fighters the lights and their share of the sun, with smooth normals
 				drawValue[0] = t.stage >= 0 || world ? 1.0f : 0.0f;
 				drawValue[1] = t.normal != 0 ? 1.0f : 0.0f;
 				drawValue[2] = t.orm != 0 ? 1.0f : 0.0f;
+				if (drawValue[0] > 0.5f)
+					RenderShadowMap();
 			}
 			if (t.glows != 0 || t.orm != 0 || t.normal != 0)
 			{
@@ -585,13 +1016,19 @@ void SceneLightBeforeDraw(const int count)
 				LogProjection(program, count);
 		}
 	}
+	//a fighter: drawn by DEMASTER with smooth normals (its maps' units are set above, as for the game's draw)
+	if (stageLit && drawValue[0] < 0.5f && knownFighter && DrawFighter(program, drawMode, count, indexType, indices, sceneValue, mapsValue, drawValue))
+		return true;
 	Send(program, p, sceneValue, mapsValue, drawValue, stageLit);
+	return false;
 }
 
 //SwapBuffers hook: a frame is over
 void SceneLightFrameEnd()
 {
 	sceneFrame++;
+	if (SCENE_LIGHT)
+		FightersFrameEnd();
 	if (SCENE_LIGHT && currentMode != MODE_BATTLE)
 		cameraFilter.Reset(); //the next battle starts with its own camera
 }

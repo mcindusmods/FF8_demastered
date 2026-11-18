@@ -63,6 +63,8 @@ namespace scenelight
 		float ao = 0.5f;
 		float glow = 1.0f;
 		float sun = 0.35f, relief = 1.0f, specular = 0.5f, sunAzimuth = 30.0f, sunHeight = 60.0f;
+		float fighterSun = 0.5f; //the fighters' share of the sun's darkening (their smooth normals; 0: as the game lights them)
+		float shadow = 0.5f; //how much of the sun the fighters' shadows take off the stage (0: none)
 		std::vector<Light> lights; //the stage's own (from rules), four at most
 	};
 
@@ -74,7 +76,8 @@ namespace scenelight
 		int momentFrom = -1, momentTo = -1; //inclusive; -1: no condition
 		Look look; //only the members flagged below are used
 		bool hasNight = false, hasTime = false, hasDayTint = false, hasNightTint = false, hasNightLevel = false, hasAo = false,
-			hasGlow = false, hasSun = false, hasRelief = false, hasSpecular = false, hasSunAzimuth = false, hasSunHeight = false;
+			hasGlow = false, hasSun = false, hasRelief = false, hasSpecular = false, hasSunAzimuth = false, hasSunHeight = false,
+			hasFighterSun = false, hasShadow = false;
 	};
 
 	struct Settings
@@ -114,6 +117,12 @@ namespace scenelight
 	void DirectionToView(const Camera& camera, const double stage[3], double view[3]);
 	void PlaceToView(const Camera& camera, const double stage[3], double view[3]);
 	void PlaceToStage(const Camera& camera, const double view[3], double stage[3]);
+	//a corner the game hands OpenGL (x, y on its 640 x 480 screen, rhw = 1 / z) in view space
+	void ScreenToView(const Camera& camera, double x, double y, double rhw, double view[3]);
+	//The sun's shadow map: an orthographic camera looking along -towards (towards the sun, the stage's space) around the
+	//given places (x, y, z each, the stage's space), `margin` wider on each side. out: column-major, the stage's space to
+	//the map: x, y 0-1 across it, z 0-1 its depth (0 nearest the sun). false: nothing to fit
+	bool FitSunShadow(const double towards[3], const std::vector<float>& places, double margin, float out[16]);
 	//The registers of one frame are the camera's unless something else was set last. A camera moves a little from frame to
 	//frame, or cuts and then stays: a reading is taken when it is close to the one in use, or when two frames in a row
 	//agree with each other. Else the one in use stays (for that frame).

@@ -1897,3 +1897,9 @@ void FieldCharsSwap()
 		LogOnce("chars-swap-failed", "FIELD_PBR: the end of a frame failed once\n");
 	}
 }
+
+bool fieldrt::ReadDrawCorners(const GLsizei count, const GLenum type, const void* indices, std::vector<GameVertex>& corners)
+{
+	static std::vector<uint32_t> list;
+	return count > 0 && ReadIndices(count, type, indices, list) == count && ReadGameVertices(list, corners);
+}
