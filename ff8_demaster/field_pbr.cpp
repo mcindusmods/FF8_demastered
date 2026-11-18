@@ -1625,6 +1625,52 @@ namespace fieldpbr
 		return Wrap(next - std::max(0.0, lead), c.Length());
 	}
 
+	void SaveClocks::Record(const uint32_t play, const double clock)
+	{
+		entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const SaveClock& e) { return e.play == play; }), entries.end());
+		entries.push_back({ play, std::isfinite(clock) ? clock : 0.0 });
+		if (entries.size() > MOST)
+			entries.erase(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(entries.size() - MOST));
+	}
+
+	const SaveClock* SaveClocks::Find(const uint32_t loaded, const uint32_t tolerance) const
+	{
+		const SaveClock* best = nullptr;
+		for (const SaveClock& e : entries) //later ones win a tie: the newest save at that play time
+			if (e.play >= loaded && e.play - loaded <= tolerance && (best == nullptr || e.play - loaded <= best->play - loaded))
+				best = &e;
+		return best;
+	}
+
+	bool ParseSaveClocks(const std::string& text, SaveClocks& out)
+	{
+		SaveClocks result;
+		std::istringstream lines(text);
+		std::string line;
+		bool any = false;
+		while (std::getline(lines, line))
+		{
+			line = Trim(line.substr(0, line.find(';')));
+			unsigned long play = 0;
+			double clock = 0;
+			if (line.empty() || sscanf(line.c_str(), "play = %lu clock = %lf", &play, &clock) != 2 || !std::isfinite(clock))
+				continue;
+			result.Record(static_cast<uint32_t>(play), clock);
+			any = true;
+		}
+		out = result;
+		return any;
+	}
+
+	std::string WriteSaveClocks(const SaveClocks& clocks)
+	{
+		std::string out = "; DEMASTER: the time of day each save was made at (DAY_NIGHT_SAVES). play: the game's play time when the save\n"
+			"; was written (a save brings it back when it is loaded); clock: seconds into the day/night cycle then. Newest last.\n";
+		for (const SaveClock& e : clocks.entries)
+			out += Format("play = %lu clock = %.2f\n", static_cast<unsigned long>(e.play), e.clock);
+		return out;
+	}
+
 	std::string ClockText(const DayNightCycle& cycle, const double time)
 	{
 		const DayNightCycle c = cycle.Checked();

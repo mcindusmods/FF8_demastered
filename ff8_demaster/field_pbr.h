@@ -407,6 +407,25 @@ namespace fieldpbr
 	double BeforeNextFade(const DayNightCycle& cycle, double time, double lead);
 	//"day, 2:15 in (dusk in 5:05)" for the log
 	std::string ClockText(const DayNightCycle& cycle, double time);
+	//The time of day each save was made at (DEMASTER_EXP\daynight_saves.txt, DAY_NIGHT_SAVES): the game's play time when the
+	//save was written, and the clock then. A save that is loaded brings its play time back, and with it its time of day.
+	struct SaveClock
+	{
+		uint32_t play = 0; //the game's play time counter at the save
+		double clock = 0; //seconds into the cycle
+	};
+	struct SaveClocks
+	{
+		std::vector<SaveClock> entries; //oldest first
+		static constexpr size_t MOST = 400;
+		//a save at this play time: one already there for the same play time is replaced; the oldest go past MOST
+		void Record(uint32_t play, double clock);
+		//the save a loaded play time belongs to: its play time at most `tolerance` before ours (the game counts on for a
+		//moment after it makes the save's picture, before the file is written and seen); the nearest. nullptr: none
+		const SaveClock* Find(uint32_t loaded, uint32_t tolerance) const;
+	};
+	bool ParseSaveClocks(const std::string& text, SaveClocks& out);
+	std::string WriteSaveClocks(const SaveClocks& clocks);
 	//the clock's file (DEMASTER_EXP\daynight.txt): "time = <seconds into the cycle>"
 	bool ParseClock(const std::string& text, double& time);
 	std::string WriteClock(const DayNightCycle& cycle, double time);

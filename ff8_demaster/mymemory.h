@@ -22,7 +22,7 @@ BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, 
 	PSX_VRAM, READ_VRAM_PALETTE, WRITE_PALETTE,
 	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
 	ANALOG_GET_VALUE, ANALOG_FIELD_TEST, ANALOG_FIELD_X, ANALOG_FIELD_Y,
-	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY, GTE_CONTROL, GAME_MOMENT,
+	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY, GTE_CONTROL, GAME_MOMENT, GAME_TIME,
 	ADDRESS_NAME_COUNT //keep last
 };
 
@@ -149,6 +149,10 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 	//GAME_MOMENT: the story's progress (u16; FFNx's field_game_moment)
 	{ GTE_CONTROL          , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CA927C,} },
 	{ GAME_MOMENT          , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CFEAB8,} },
+	//GAME_TIME: the play time (u32), the savemap's game_time (FFNx's save_data.h: the savemap is at 0x1CFDC58, its field
+	//variables at 0x1CFE9B8 = savemap + 0xD60, the story counter 0x100 into them; game_time at savemap + 0xCD0). The code
+	//reads and writes it at 17 places in EFIGS (16 in JP, 0x505F98 on); a save brings its own back when it is loaded
+	{ GAME_TIME            , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CFE928,} },
 	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
 	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
 	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
@@ -315,6 +319,7 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
 //(registers 5 and 26 and the counter were found in the JP code at the places that match EFIGS's; all three are 0x505F98 on)
 { GTE_CONTROL          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x21AF214 }},
 { GAME_MOMENT          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2204A50 }},
+{ GAME_TIME            , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x22048C0 }},
 };
 
 

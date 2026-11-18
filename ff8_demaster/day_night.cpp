@@ -6,16 +6,22 @@
 #include "config.h"
 #include "coreHeader.h"
 #include "debug.h"
+#include "field_pbr_runtime.h"
 #include "gl_state.h"
 
 #include <GL/glew.h>
 #include <windows.h>
+#include <shlobj.h>
+#pragma comment(lib, "shell32.lib") //SHGetKnownFolderPath (the Documents folder)
+#pragma comment(lib, "ole32.lib")   //CoTaskMemFree
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <iterator>
+#include <map>
 #include <string>
 
 namespace
@@ -33,6 +39,7 @@ namespace
 	std::atomic<int> fieldTime{ static_cast<int>(fieldpbr::FieldTime::Cycle) }; //the place you are: its _pbr.txt time
 	LARGE_INTEGER frequency{}, lastCount{};
 	double realTime = 0; //seconds since the clock started (for the bar and saving)
+	double wallTime = 0; //the same, not held back on hitches (for the play time's jumps)
 	double lastSave = 0;
 	bool unsaved = false;
 	double barUntil = -1;
@@ -167,6 +174,206 @@ namespace
 		}
 	}
 
+	//--- the time of day per save (DAY_NIGHT_SAVES)
+	//
+	//The game's play time (GAME_TIME, in its savemap) comes back with a save when the save is loaded. When the game writes a
+	//save file (seen in the save folder: FindFirstChangeNotification, no hook), the play time and the clock are kept in
+	//DEMASTER_EXP\daynight_saves.txt. When the play time jumps (a save was loaded) and a kept save matches it, the clock goes
+	//back to that save's time of day. Saves made before this, or elsewhere, have none: the clock goes on as it is.
+	namespace persave
+	{
+		bool tried = false, on = false;
+		fieldpbr::SaveClocks clocks;
+		HANDLE watch = INVALID_HANDLE_VALUE;
+		std::filesystem::path folder;
+		std::map<std::wstring, long long> seen; //the save files and when they were last written
+		int64_t lastPlay = -1; //the play time at the last reading in the game; -1: none yet
+		double lastPlayAt = 0; //realTime then
+		int64_t segmentPlay = -1; //a stretch without jumps, for the counter's speed
+		double segmentAt = 0;
+		double rate = 1.0; //the counter's steps per second (seconds: 1)
+		bool rateLogged = false;
+		double lastRecord = -1e9;
+
+		std::string Path()
+		{
+			return std::string(DIRECT_IO_EXPORT_DIR) + "daynight_saves.txt";
+		}
+
+		bool ReadPlay(uint32_t& out)
+		{
+			static const uint32_t at = HasAddress(GAME_TIME) ? GetAddress(GAME_TIME) : 0;
+			return at != 0 && fieldrt::GuestRead(&out, at, 4);
+		}
+
+		//where the play time is the game's own: playing (fields, the world map, battles), and the menus a save is made in
+		bool Playing(const int mode)
+		{
+			return mode == MODE_FIELD || mode == MODE_WORLDMAP || mode == MODE_BATTLE || mode == MODE_BATTLESWIRL;
+		}
+
+		bool Saving(const int mode)
+		{
+			return mode == MODE_FIELD || mode == MODE_WORLDMAP || mode == MODE_MENU || mode == MODE_MENU2;
+		}
+
+		//the save files there now (.ff8, or a name with "save" in it); true when one is new or was written since the last look
+		bool Scan()
+		{
+			bool changed = false;
+			std::error_code error;
+			for (std::filesystem::recursive_directory_iterator it(folder, std::filesystem::directory_options::skip_permission_denied, error), end;
+				!error && it != end; it.increment(error))
+			{
+				if (!it->is_regular_file(error))
+					continue;
+				std::wstring name = it->path().filename().wstring();
+				std::transform(name.begin(), name.end(), name.begin(), [](const wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+				//the game's saves are .ff8 files (Steam's cloud: game_data\user\saves\*.ff8); anything named save* too
+				const bool ff8 = name.size() > 4 && name.compare(name.size() - 4, 4, L".ff8") == 0;
+				if ((!ff8 && name.find(L"save") == std::wstring::npos) || (name.size() >= 4 && name.compare(name.size() - 4, 4, L".tmp") == 0))
+					continue;
+				const auto written = it->last_write_time(error);
+				if (error)
+					continue;
+				const long long stamp = static_cast<long long>(written.time_since_epoch().count());
+				auto& known = seen[it->path().wstring()];
+				changed = changed || known != stamp;
+				known = stamp;
+			}
+			return changed;
+		}
+
+		void Write()
+		{
+			FILE* file = nullptr;
+			if (fopen_s(&file, Path().c_str(), "wb") != 0 || file == nullptr)
+				return;
+			const std::string text = fieldpbr::WriteSaveClocks(clocks);
+			fwrite(text.data(), 1, text.size(), file);
+			fclose(file);
+		}
+
+		void Start()
+		{
+			if (tried)
+				return;
+			tried = true;
+			if (!DAY_NIGHT_SAVES)
+				return;
+			uint32_t play = 0;
+			if (!ReadPlay(play))
+			{
+				OutputDebug("DAY_NIGHT: the game's play time can't be read here: the time of day isn't kept per save\n");
+				return;
+			}
+			if (!DAY_NIGHT_SAVE_FOLDER.empty())
+				folder = std::filesystem::path(DAY_NIGHT_SAVE_FOLDER);
+			else
+			{
+				PWSTR documents = nullptr;
+				if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &documents)) && documents != nullptr)
+					folder = std::filesystem::path(documents) / L"My Games" / L"FINAL FANTASY VIII Remastered";
+				CoTaskMemFree(documents);
+			}
+			std::error_code error;
+			if (folder.empty() || !std::filesystem::is_directory(folder, error))
+			{
+				OutputDebug("DAY_NIGHT: no save folder at %s: the time of day isn't kept per save (DAY_NIGHT_SAVE_FOLDER says where it is)\n",
+					folder.string().c_str());
+				return;
+			}
+			watch = FindFirstChangeNotificationW(folder.wstring().c_str(), TRUE,
+				FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE);
+			if (watch == INVALID_HANDLE_VALUE)
+			{
+				OutputDebug("DAY_NIGHT: can't watch the save folder %s: the time of day isn't kept per save\n", folder.string().c_str());
+				return;
+			}
+			Scan();
+			if (FILE* file = nullptr; fopen_s(&file, Path().c_str(), "rb") == 0 && file != nullptr)
+			{
+				std::string text(1 << 16, '\0');
+				text.resize(fread(text.data(), 1, text.size(), file));
+				fclose(file);
+				fieldpbr::ParseSaveClocks(text, clocks);
+			}
+			on = true;
+			OutputDebug("DAY_NIGHT: the time of day is kept per save (DEMASTER_EXP\\daynight_saves.txt, %zu save(s) known); watching %s "
+				"(%zu save file(s)); the play time reads %u now\n", clocks.entries.size(), folder.string().c_str(), seen.size(), play);
+		}
+
+		//once a frame, after the clock moved: a save written, a save loaded. now: seconds of real time (not held back on hitches)
+		void Frame(const int mode, const double now)
+		{
+			Start();
+			if (!on)
+				return;
+			uint32_t play = 0;
+			const bool readable = ReadPlay(play);
+			//a save file written: the play time and the clock now (the menu is open, the play time is the save's or a moment on)
+			if (WaitForSingleObject(watch, 0) == WAIT_OBJECT_0)
+			{
+				FindNextChangeNotification(watch);
+				if (Scan() && readable && Saving(mode) && now - lastRecord > 2.0)
+				{
+					lastRecord = now;
+					clocks.Record(play, clockTime);
+					Write();
+					OutputDebug("DAY_NIGHT: a save was written (play time %u): its time of day is %s\n", play,
+						fieldpbr::ClockText(cycle, clockTime).c_str());
+				}
+			}
+			if (!readable || !Playing(mode))
+				return;
+			//the counter's speed, from a minute without jumps (for how far a save's play time may be from the one loaded)
+			if (segmentPlay < 0)
+			{
+				segmentPlay = play;
+				segmentAt = now;
+			}
+			//a jump: back, or on by more than the time that passed could explain (a save was loaded, or a new game)
+			const bool first = lastPlay < 0;
+			const double since = now - lastPlayAt;
+			const bool jumped = !first && (static_cast<int64_t>(play) < lastPlay
+				|| static_cast<double>(static_cast<int64_t>(play) - lastPlay) > since * rate * 2.0 + 5.0 * rate);
+			if (first || jumped)
+			{
+				const uint32_t tolerance = static_cast<uint32_t>(std::ceil(10.0 * rate));
+				if (const fieldpbr::SaveClock* kept = clocks.Find(play, tolerance))
+				{
+					clockTime = fieldpbr::AdvanceClock(cycle, kept->clock, 0, false);
+					unsaved = true;
+					OutputDebug("DAY_NIGHT: a save was loaded (play time %u): back to the time of day it was saved at, %s\n", play,
+						fieldpbr::ClockText(cycle, clockTime).c_str());
+				}
+				else if (jumped && mode == MODE_FIELD && play < static_cast<uint32_t>(60.0 * rate))
+				{
+					clockTime = cycle.fade / 2; //a new game starts in the morning
+					unsaved = true;
+					OutputDebug("DAY_NIGHT: a new game (play time %u): the morning\n", play);
+				}
+				else if (jumped && FIELD_DEBUG)
+					OutputDebug("DAY_NIGHT: the play time jumped to %u (a save loaded?), none kept for it: the clock goes on\n", play);
+				segmentPlay = play;
+				segmentAt = now;
+			}
+			else if (now - segmentAt >= 60.0 && play > segmentPlay)
+			{
+				rate = std::clamp(static_cast<double>(play - segmentPlay) / (now - segmentAt), 0.5, 120.0);
+				if (!rateLogged)
+				{
+					rateLogged = true;
+					OutputDebug("DAY_NIGHT: the game's play time counts %.2f a second (1 = seconds)\n", rate);
+				}
+				segmentPlay = play;
+				segmentAt = now;
+			}
+			lastPlay = play;
+			lastPlayAt = now;
+		}
+	}
+
 	//--- the bar (testing): the cycle across the top of the screen, amber day to blue night, and where the clock is
 	GLuint barProgram = 0;
 	GLint barColour = -1;
@@ -293,6 +500,7 @@ void DayNightSwap()
 	lastCount = now;
 	const double step = std::clamp(seconds, 0.0, MAX_STEP);
 	realTime += step;
+	wallTime += std::max(0.0, seconds);
 	//the world map is never fixed: leaving a fixed field for it lets the clock go again
 	const int mode = currentMode;
 	if (mode == MODE_WORLDMAP && Held())
@@ -309,6 +517,7 @@ void DayNightSwap()
 		unsaved = true;
 	}
 	Keys();
+	persave::Frame(mode, wallTime);
 	if (unsaved && realTime - lastSave >= SAVE_EVERY)
 		Save();
 	if (DAY_NIGHT_BAR && (paused || speed != 0 || realTime < barUntil))

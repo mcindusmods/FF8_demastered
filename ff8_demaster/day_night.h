@@ -5,7 +5,9 @@
 //and DAY_NIGHT_NIGHT of night, DAY_NIGHT_FADE-second fades), in battle DAY_NIGHT_BATTLE times slower, so the time of day
 //goes on from wherever the battle left it. A field with time = day or night in its _pbr.txt is always that, and the clock
 //waits underneath while you are there (battles started from it too) until you go somewhere else. The time is kept in
-//DEMASTER_EXP\daynight.txt between sessions.
+//DEMASTER_EXP\daynight.txt between sessions, and per save (DAY_NIGHT_SAVES): when the game writes a save file, its play
+//time and the clock go into DEMASTER_EXP\daynight_saves.txt, and loading that save (its play time comes back) brings the
+//time of day back.
 //
 //Keys for testing (DAY_NIGHT_KEYS): Ctrl+F7 swaps day and night, Ctrl+F8 pauses the clock, Ctrl+F9 runs it at 1x, 10x,
 //60x, Ctrl+F6 jumps to 5 seconds before the next fade. While the clock is paused or sped up, and for a few seconds after a

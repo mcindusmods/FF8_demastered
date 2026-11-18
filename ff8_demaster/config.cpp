@@ -85,6 +85,8 @@ void ReadConfigFile()
     DAY_NIGHT_FADE = conf.GetReal("", "DAY_NIGHT_FADE", 40);
     DAY_NIGHT_BATTLE = conf.GetReal("", "DAY_NIGHT_BATTLE", 3);
     DAY_NIGHT_EVENING = conf.GetReal("", "DAY_NIGHT_EVENING", 0.9);
+    DAY_NIGHT_SAVES = conf.GetInteger("", "DAY_NIGHT_SAVES", 1);
+    DAY_NIGHT_SAVE_FOLDER = conf.Get("", "DAY_NIGHT_SAVE_FOLDER", "");
     DAY_NIGHT_KEYS = conf.GetInteger("", "DAY_NIGHT_KEYS", 1);
     DAY_NIGHT_BAR = conf.GetInteger("", "DAY_NIGHT_BAR", 1);
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);

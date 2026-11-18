@@ -2,7 +2,8 @@ DEMASTER changelog (MCINDUS's continuation)
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------
-Built in steps; this is the first (fields, fieldprep, battles fought by day from fixed-time fields). Tested on Linux
+Built in steps: the first (fields, fieldprep, battles fought by day from fixed-time fields), the second (the time of
+day per save). Tested on Linux
 (the light rules, the evening and the lights file in field_pbr_test, fieldprep on bdifrit1 with a layer taken out, the
 field shader strictly with glslang and drawn through Mesa); the Windows-only files are type-checked. Not run in the game.
 Lights on at a time: 2 by day, 6 by night (was 2 of fieldprep's and 6 of yours, each time of day)
@@ -42,6 +43,17 @@ fieldprep
   - A warning when the albedo is much darker than the painting (the light more than 2x the albedo on most of the
     field, or 6x somewhere): the albedo is probably from another version of the painting. "albedo raised in N pixels"
     now counts only pixels raised by more than 2 steps of 255.
+The time of day per save (second step; new: DAY_NIGHT_SAVES=1, DAY_NIGHT_SAVE_FOLDER)
+  - The game keeps its play time in its save data (the savemap's game_time, 0x1CFE928; JP 0x22048C0: FFNx's layout of
+    the savemap at 0x1CFDC58, the story counter 0x100 into its field variables; the game's code uses the address at 17
+    places), and a save brings it back when it is loaded.
+  - When the game writes a save file (.ff8 in Documents\My Games\FINAL FANTASY VIII Remastered, watched for changes; no
+    hook, the files are only looked at), DEMASTER notes the play time and the clock in DEMASTER_EXP\daynight_saves.txt.
+  - When the play time jumps (back, or on by more than the time that passed) and a noted save matches it (its play time
+    up to 10 seconds after the loaded one), the clock goes back to that save's time of day. A jump to under a minute in
+    a field is a new game: the morning. Otherwise the clock goes on. The log says each.
+  - The counter's speed is measured after a minute of play and logged once (1 a second if it is seconds, as the save
+    format says).
 Battles
   - A battle started in a field with a fixed time (time = day or night in its _pbr.txt: an inside place, a boss) is
     fought by day, the sun at its highest. The field keeps its own time.

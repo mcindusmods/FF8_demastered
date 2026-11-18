@@ -148,7 +148,9 @@ One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, w
 - **Characters lit by the room** dim the same way (their light grid times the same level, tint and lamps). Characters the game lights itself (`FIELD_PBR_CHARACTERS=0`, or fields without PBR) don't change.
 - **Not changed:** fields without PBR files, layers without PBR maps (layers with no `_A`, and the game's glow and shadow layers, blend 0-3), and battles and the world map (no PBR there yet: they only move the clock).
 
-**A field's own time:** `time = day` or `time = night` in its `_pbr.txt` fixes it, and the clock waits while you are there (see "Your keys" below).
+**Per save (v15.14, `DAY_NIGHT_SAVES=1`):** when the game writes a save, DEMASTER notes the game's own play time and the time of day in `DEMASTER_EXP\daynight_saves.txt`. A save brings its play time back when it is loaded, and DEMASTER puts the clock back to that save's time of day (the log: `DAY_NIGHT: a save was loaded (play time …): back to the time of day it was saved at`). A new game starts in the morning. Saves made before v15.14 have none: the clock goes on as it is until you save again. DEMASTER sees a save being written by watching the save folder (`Documents\My Games\FINAL FANTASY VIII Remastered`, or `DAY_NIGHT_SAVE_FOLDER`); it doesn't touch the save files.
+
+**A field's own time:** `time = day` or `time = night` in its `_pbr.txt` fixes it, and the clock waits while you are there (see "Your keys" below). A battle started there is fought by day (v15.14).
 
 **Testing** (`DAY_NIGHT_KEYS=1`):
 - **Ctrl+F7** swaps day and night: to the start of the full night when it's mostly day now, to the start of the full day when it's mostly night.

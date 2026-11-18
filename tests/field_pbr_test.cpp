@@ -1274,6 +1274,29 @@ static void TestDayNight()
 		CHECK(!ParseClock("; nothing\nspeed = 2\n", t));
 		NEAR(t, 92.5, 1e-9);
 	}
+	//the time of day per save: kept, found again by the play time a loaded save brings back, written and read
+	{
+		SaveClocks k;
+		k.Record(1000, 100.0);
+		k.Record(5000, 300.5);
+		k.Record(1000, 120.0); //saved again at the same play time: the newer one
+		CHECK(k.entries.size() == 2 && k.entries.back().play == 1000);
+		const SaveClock* f = k.Find(998, 10); //the save's own play time is a moment before we saw the file written
+		CHECK(f != nullptr && f->clock == 120.0);
+		CHECK(k.Find(1001, 10) == nullptr); //later than any save at that time: not that save
+		CHECK(k.Find(980, 10) == nullptr);
+		f = k.Find(4995, 10);
+		CHECK(f != nullptr && f->play == 5000);
+		const std::string text = WriteSaveClocks(k);
+		SaveClocks again;
+		CHECK(ParseSaveClocks(text, again) && again.entries.size() == 2);
+		CHECK(again.entries[0].play == 5000 && again.entries[1].play == 1000);
+		NEAR(again.entries[0].clock, 300.5, 1e-6);
+		CHECK(!ParseSaveClocks("; nothing\nplay = x\n", again) && again.entries.empty());
+		for (uint32_t i = 0; i < SaveClocks::MOST + 20; i++)
+			k.Record(10000 + i, 1.0);
+		CHECK(k.entries.size() == SaveClocks::MOST && k.entries.front().play == 10000 + 20); //the two from before and the first 20 went
+	}
 
 	//the lights on: 2 found + 6 yours per time of day, day and night cross-fading, a lamp on both always on
 	{
