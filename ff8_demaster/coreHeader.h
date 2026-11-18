@@ -143,6 +143,7 @@ void FieldCharsMapRead(bool pbrField); //game thread, a field's .map was read (w
 bool FieldModelTexImage(unsigned int texture, int width, int height, const void* data); //glTexImage2D of the game, after it
 void FieldModelTexSubImage(unsigned int texture, int x, int y, int width, int height); //glTexSubImage2D of the game, after it
 int FieldModelFilter(unsigned int texture, unsigned int name, int param); //glTexParameteri: the value to use
+bool FieldModelIsBc7(unsigned int texture); //glTexSubImage2D of the game, before it: a model atlas that is BC7 (FIELD_MODEL_BC7)
 bool FieldModelMaps(unsigned int texture, unsigned int& normal, unsigned int& orme); //the atlas's _N and _ORME (0: none)
 //FIELD_FRAME_LOG (frame_log.cpp)
 void FrameLogDraw(unsigned int mode, int count, unsigned int type, const void* indices);

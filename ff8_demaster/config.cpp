@@ -22,6 +22,7 @@ void ReadConfigFile()
     LOG = conf.GetInteger("", "LOG", 0);
     BATTLE_CHARA = conf.GetInteger("", "BATTLE_CHARACTER", 0);
     FIELD_ENTITY = conf.GetInteger("", "FIELD_ENTITY", 0);
+    FIELD_MODEL_BC7 = conf.GetInteger("", "FIELD_MODEL_BC7", 1);
     BATTLE_HOOK = conf.GetInteger("", "BATTLE_HOOK_MONSTER_FIELDS", 0);
     FIELD_BACKGROUND = conf.GetInteger("", "FIELD_BACKGROUND", 0);
     WORLD_TEXTURES = conf.GetInteger("", "WORLD_TEXTURES", 0);

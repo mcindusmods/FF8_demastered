@@ -3,7 +3,8 @@ DEMASTER changelog (MCINDUS's continuation)
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------
 Built in steps: the first (fields, fieldprep, battles fought by day from fixed-time fields), the second (the time of
-day per save), the third (battles: the fighters' smooth normals and shadows). Tested on Linux
+day per save), the third (battles: the fighters' smooth normals and shadows), the fourth (BC7 field model atlases).
+Tested on Linux
 (the light rules, the evening and the lights file in field_pbr_test, fieldprep on bdifrit1 with a layer taken out, the
 field shader strictly with glslang and drawn through Mesa); the Windows-only files are type-checked. Not run in the game.
 Lights on at a time: 2 by day, 6 by night (was 2 of fieldprep's and 6 of yours, each time of day)
@@ -71,6 +72,16 @@ Battles: the fighters with smooth normals, their shadows on the stage (third ste
     fighters are told from the stage by their textures. The tests check the shadow on a floor drawn through main.frag
     with the registers of a real battle, and that the fighter program links.
   - The default scene_light.txt describes the new keys; an existing one works without them (the defaults apply).
+Field models: BC7 straight to the GPU (fourth step; new: FIELD_MODEL_BC7=1)
+  - A model's atlas used to be RGBA on the GPU, every .dds decoded into it. Now, when every image in it has a BC7 .dds
+    of its size whose place lines up with BC7's 4 x 4 blocks, the atlas is made as BC7 and the files' blocks are copied
+    in as they are, with the levels as far as every image's line up: nothing decoded, a quarter of the video memory.
+    The game's own RGBA copies into such an atlas are skipped (its .dds goes in instead). One image without a BC7 .dds
+    and the atlas is RGBA again, every image put back from its file, as before.
+  - The _N and _ORME map atlases do the same when every image has that map as a BC7 .dds.
+  - Already BC7 on the GPU before this: field layers, battle stage pages, battle characters and monsters, the world
+    map's terrain. Still decoded: the world map's vehicles and named textures (WORLD_VEHICLES), which are fitted onto
+    the game's pages by resizing on the GPU.
 Battles
   - A battle started in a field with a fixed time (time = day or night in its _pbr.txt: an inside place, a boss) is
     fought by day, the sun at its highest. The field keeps its own time.

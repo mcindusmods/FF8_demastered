@@ -4,7 +4,10 @@
 //glTexSubImage2D, one call per image, at the image's own place. It draws the atlas with point sampling and no mip levels.
 //For every image that has a .dds next to it (the newer of .png and .dds, as for field layers):
 //	- the .dds goes into the atlas in place of the game's copy, every mip level of it at the matching place of the atlas's
-//	  own levels (BC7 is decoded once; the atlas stays RGBA);
+//	  own levels. FIELD_MODEL_BC7: when every image in the atlas has a BC7 .dds whose place lines up with BC7's 4 x 4
+//	  blocks, the atlas itself goes to the GPU as BC7 (its blocks copied as the files have them: a quarter of the video
+//	  memory, nothing decoded), with its levels as far as every image's line up; otherwise BC7 is decoded once and the
+//	  atlas stays RGBA, as before;
 //	- the atlas is filtered GL_NEAREST_MIPMAP_LINEAR: inside a level exactly as before (no softening), between your own
 //	  levels only when the model is drawn smaller than the texture;
 //	- parts of the atlas no .dds covers get levels made from the game's own pixels.
@@ -48,6 +51,8 @@ namespace
 		int width = 0, height = 0;
 		std::vector<Region> regions;
 		bool mipmapped = false;
+		bool compressed = false; //the atlas is BC7 on the GPU (FIELD_MODEL_BC7)
+		int levels = 1; //levels in use
 		GLuint normal = 0, orme = 0;
 	};
 	std::unordered_map<GLuint, Atlas> atlases;
@@ -140,6 +145,106 @@ namespace
 		return &(decoded[path] = std::move(d));
 	}
 
+	int LevelsOf(int size);
+
+	//--- FIELD_MODEL_BC7: a .dds's BC7 blocks, every level, as the file has them
+	struct Blocks
+	{
+		std::filesystem::file_time_type time{};
+		bool bc7 = false;
+		std::vector<std::vector<uint8_t>> levels; //16 bytes per 4 x 4 block, rows of blocks
+		std::vector<std::pair<int, int>> sizes; //each level's size in texels
+	};
+	std::unordered_map<std::string, Blocks> blockFiles;
+	size_t blockBytes = 0;
+
+	const Blocks* ReadBlocks(const std::string& path)
+	{
+		const auto time = TimeOf(path);
+		if (const auto it = blockFiles.find(path); it != blockFiles.end() && it->second.time == time)
+			return &it->second;
+		Blocks b;
+		b.time = time;
+		const SafeBimg image = LoadImageFromFile(path.c_str());
+		if (image && image->m_format == bimg::TextureFormat::BC7)
+		{
+			b.bc7 = true;
+			for (uint8_t lod = 0; lod < image->m_numMips; lod++)
+			{
+				bimg::ImageMip mip{};
+				if (!bimg::imageGetRawData(*image, 0, lod, image->m_data, image->m_size, mip))
+					break;
+				const size_t bytes = static_cast<size_t>((mip.m_width + 3) / 4) * ((mip.m_height + 3) / 4) * 16;
+				if (mip.m_size < bytes)
+					break;
+				b.levels.emplace_back(mip.m_data, mip.m_data + bytes);
+				b.sizes.emplace_back(static_cast<int>(mip.m_width), static_cast<int>(mip.m_height));
+				blockBytes += bytes;
+			}
+			b.bc7 = !b.levels.empty();
+		}
+		return &(blockFiles[path] = std::move(b));
+	}
+
+	//the bound atlas made again as BC7 from every image's blocks; its levels as far as every image's line up with the 4 x 4
+	//blocks there (and the image has that level). false (nothing changed): an image without a BC7 .dds of its size, or
+	//one whose place doesn't line up even at full size
+	//suffix: "" for the images themselves, "_N" or "_ORME" for one of their maps (each image's map, as a BC7 .dds)
+	bool PutBc7Atlas(const Atlas& atlas, int& levelsUsed, const char* suffix = "")
+	{
+		if (!FIELD_MODEL_BC7 || !GLEW_ARB_texture_compression_bptc)
+			return false;
+		std::vector<const Blocks*> images(atlas.regions.size(), nullptr);
+		for (size_t i = 0; i < atlas.regions.size(); i++)
+		{
+			const Region& r = atlas.regions[i];
+			std::string dds = *suffix == 0 ? DdsOf(r.stem) : MapOf(r.stem, suffix);
+			if (dds.size() < 4 || dds.compare(dds.size() - 4, 4, ".dds") != 0)
+				dds.clear();
+			images[i] = dds.empty() ? nullptr : ReadBlocks(dds);
+			if (images[i] == nullptr || !images[i]->bc7 || images[i]->sizes[0].first != r.width || images[i]->sizes[0].second != r.height)
+				return false;
+		}
+		const int most = LevelsOf(std::max(atlas.width, atlas.height));
+		int usable = 0;
+		for (int level = 0; level < most; level++)
+		{
+			bool fits = true;
+			for (size_t i = 0; i < images.size() && fits; i++)
+			{
+				const Region& r = atlas.regions[i];
+				const int x = r.x >> level, y = r.y >> level;
+				fits = static_cast<int>(images[i]->levels.size()) > level && x % 4 == 0 && y % 4 == 0;
+			}
+			if (!fits)
+				break;
+			usable = level + 1;
+		}
+		if (usable == 0)
+			return false;
+		static std::vector<uint8_t> data;
+		for (int level = 0; level < usable; level++)
+		{
+			const int width = std::max(1, atlas.width >> level), height = std::max(1, atlas.height >> level);
+			const int across = (width + 3) / 4, down = (height + 3) / 4;
+			data.assign(static_cast<size_t>(across) * down * 16, 0); //(a block of zeros is transparent black)
+			for (size_t i = 0; i < images.size(); i++)
+			{
+				const Region& r = atlas.regions[i];
+				const int bx = (r.x >> level) / 4, by = (r.y >> level) / 4;
+				const int imageAcross = (images[i]->sizes[level].first + 3) / 4, imageDown = (images[i]->sizes[level].second + 3) / 4;
+				const int copyAcross = std::min(imageAcross, across - bx), copyDown = std::min(imageDown, down - by);
+				for (int row = 0; row < copyDown && copyAcross > 0; row++)
+					memcpy(data.data() + (static_cast<size_t>(by + row) * across + bx) * 16,
+						images[i]->levels[level].data() + static_cast<size_t>(row) * imageAcross * 16, static_cast<size_t>(copyAcross) * 16);
+			}
+			glCompressedTexImage2D(GL_TEXTURE_2D, level, GL_COMPRESSED_RGBA_BPTC_UNORM, width, height, 0, static_cast<GLsizei>(data.size()),
+				data.data());
+		}
+		levelsUsed = usable;
+		return true;
+	}
+
 	int LevelsOf(const int size)
 	{
 		int levels = 1;
@@ -197,6 +302,23 @@ namespace
 	//one of the model's map atlases: flat everywhere, the images' maps where they have one
 	GLuint MakeMap(const Atlas& atlas, const char* suffix, const uint8_t neutral[4], const char* what)
 	{
+		//FIELD_MODEL_BC7: every image's map a BC7 .dds that lines up: the map atlas as BC7 too (nothing decoded)
+		{
+			GLuint texture = 0;
+			glGenTextures(1, &texture);
+			glBindTexture(GL_TEXTURE_2D, texture);
+			if (int bc7Levels = 0; PutBc7Atlas(atlas, bc7Levels, suffix))
+			{
+				SetFilter(bc7Levels > 1, bc7Levels);
+				reinterpret_cast<void* (__stdcall*)(GLenum, GLenum, GLint)>(ogl_tex_parametri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+				reinterpret_cast<void* (__stdcall*)(GLenum, GLenum, GLint)>(ogl_tex_parametri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+				if (FIELD_DEBUG)
+					Log("FIELD_ENTITY: %s for %s%s: BC7 on the GPU, %d level(s)\n", what, atlas.regions[0].stem.c_str(),
+						atlas.regions.size() > 1 ? " ..." : "", bc7Levels);
+				return texture;
+			}
+			glDeleteTextures(1, &texture);
+		}
 		std::vector<const Decoded*> maps(atlas.regions.size(), nullptr);
 		size_t found = 0;
 		bool levels = false;
@@ -255,8 +377,37 @@ namespace
 			decoded.clear();
 			decodedBytes = 0;
 		}
+		if (blockBytes > DECODED_LIMIT)
+		{
+			blockFiles.clear();
+			blockBytes = 0;
+		}
 		applying = true;
 		Unpack unpack;
+		//FIELD_MODEL_BC7: every image a BC7 .dds that lines up: the atlas as BC7, nothing decoded
+		int bc7Levels = 0;
+		if (PutBc7Atlas(atlas, bc7Levels))
+		{
+			const bool first = !atlas.compressed;
+			atlas.compressed = true;
+			atlas.levels = bc7Levels;
+			atlas.mipmapped = bc7Levels > 1;
+			SetFilter(atlas.mipmapped, bc7Levels);
+			if (first)
+				LogOnce("model-bc7-" + atlas.regions[0].stem + "-" + std::to_string(texture), "FIELD_ENTITY: atlas %u (%dx%d, %s ...) is BC7 on "
+					"the GPU, %d level(s)\n", texture, atlas.width, atlas.height, atlas.regions[0].stem.c_str(), bc7Levels);
+		}
+		else
+		{
+		//BC7 no longer fits (an image without a BC7 .dds came in): RGBA again, every image from its file
+		const bool wasCompressed = atlas.compressed;
+		if (wasCompressed)
+		{
+			atlas.compressed = false;
+			RawTexImage(GL_RGBA8, atlas.width, atlas.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+			LogOnce("model-rgba-" + std::to_string(texture), "FIELD_ENTITY: atlas %u is RGBA again (%s has no BC7 .dds that fits)\n", texture,
+				atlas.regions.back().stem.c_str());
+		}
 		std::vector<const Decoded*> images(atlas.regions.size(), nullptr);
 		size_t count = 0;
 		for (size_t i = 0; i < atlas.regions.size(); i++)
@@ -264,9 +415,13 @@ namespace
 			const std::string dds = DdsOf(atlas.regions[i].stem);
 			if (!dds.empty())
 				images[i] = Decode(dds);
+			else if (wasCompressed)
+				if (const Decoded* png = Decode(atlas.regions[i].stem + ".png"); png != nullptr)
+					PutLevels(*png, atlas.regions[i], atlas.width, atlas.height, 0); //the game's copy didn't go into the BC7 atlas
 			count += images[i] != nullptr;
 		}
 		const int levels = LevelsOf(std::max(atlas.width, atlas.height));
+		atlas.levels = levels;
 		atlas.mipmapped = count > 0;
 		if (atlas.mipmapped)
 		{
@@ -282,6 +437,7 @@ namespace
 			if (images.back() != nullptr)
 				LogOnce("model-dds-" + last.stem + "-" + std::to_string(texture), "FIELD_ENTITY: %s.dds into atlas %u at %d,%d (%zu level(s))\n",
 					last.stem.c_str(), texture, last.x, last.y, images.back()->levels.size());
+		}
 		}
 		DeleteMaps(atlas);
 		static const uint8_t flatNormal[4] = { 128, 128, 255, 255 };
@@ -391,6 +547,17 @@ void FieldModelTexSubImage(const unsigned int texture, const int x, const int y,
 		LogOnce("model-failed", "FIELD_ENTITY: putting a model's .dds into its atlas failed once\n");
 		applying = false;
 	}
+}
+
+//glTexSubImage2D of the game, before it: the texture is a model atlas DEMASTER made BC7 (FIELD_MODEL_BC7). The game's copy
+//(RGBA) can't go into it: it is skipped, and FieldModelTexSubImage puts the image's .dds in instead (or makes the atlas
+//RGBA again when the image has none)
+bool FieldModelIsBc7(const unsigned int texture)
+{
+	if (atlases.empty())
+		return false;
+	const auto it = atlases.find(texture);
+	return it != atlases.end() && it->second.compressed;
 }
 
 //glTexParameteri: an atlas with levels keeps GL_NEAREST_MIPMAP_LINEAR (the game asks for GL_NEAREST)

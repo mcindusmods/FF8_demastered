@@ -13,6 +13,7 @@ inline int IMGUI_DEBUG;
 inline int LOG;
 inline int BATTLE_CHARA;
 inline int FIELD_ENTITY;
+inline int FIELD_MODEL_BC7; //a field model's atlas as BC7 on the GPU when all its images have BC7 .dds that line up (1)
 inline int BATTLE_HOOK;
 inline int FIELD_BACKGROUND;
 inline int WORLD_TEXTURES;

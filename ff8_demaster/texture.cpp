@@ -319,6 +319,12 @@ void __stdcall HookGlTexSubImage2D( 	GLenum target,
 	}
 	
 	OutputDebug("Hooked glTexSubImage2D width: %d height: %d\n", width, height);
+	//FIELD_MODEL_BC7: a model atlas that is BC7 on the GPU takes no RGBA copy; its image's .dds goes in instead
+	if (target == GL_TEXTURE_2D && level == 0 && FieldModelIsBc7(GetCurrentBoundTextureID()))
+	{
+		FieldModelTexSubImage(GetCurrentBoundTextureID(), xoffset, yoffset, width, height);
+		return;
+	}
 	
 	static_cast<void (__stdcall*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei,
 									  GLenum, GLenum, const void*)>(ogl_subTexImage2D)

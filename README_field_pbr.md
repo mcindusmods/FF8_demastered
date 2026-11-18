@@ -304,6 +304,8 @@ DEMASTER collects every model the game draws in a frame (the game sends them alr
 
 When the game copies a model image (`field.fs\field_hd_new\d001_0.png` and so on) into the model's atlas, DEMASTER puts `d001_0.dds` there instead if it exists and is the newer of the two (as for layers), **with all its mip levels**. Filtering stays nearest inside each level (no softening), and blends between your levels only when the model is drawn smaller than the texture. Keep the PNG next to the DDS: the game reads the PNG to place it.
 
+**BC7 straight to the GPU (v15.14, `FIELD_MODEL_BC7=1`).** When every image of a model's atlas has a BC7 `.dds` of its size, and each one's place in the atlas lines up with BC7's 4 × 4 blocks, the atlas itself is BC7 on the GPU: the files' blocks are copied in as they are (nothing decoded, a quarter of the video memory). Its levels go as far as every image's line up and the images have them. The `_N` and `_ORME` map atlases do the same when every image has that map as a BC7 `.dds`. One PNG (or another format) in the atlas and it is decoded and RGBA, as before; the log says which atlases are BC7 (`FIELD_DEBUG=1`). Everything else already went to the GPU as BC7: field layers (block by block into the pages), battle stage pages, battle characters and monsters, and the world map's terrain. The world map's vehicles and its other named textures (`WORLD_VEHICLES`) are still decoded: they are fitted onto the game's pages by resizing on the GPU, which BC7 can't be.
+
 ### Model PBR maps
 
 Next to the image, laid out exactly like it:
