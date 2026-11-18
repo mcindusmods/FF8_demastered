@@ -201,6 +201,11 @@ void* __stdcall HookGlTexImage2D(GLenum target,
 	GLuint boundId = GetCurrentBoundTextureID();
 	FieldLayersForgetTexture(boundId); //the game gives this texture new content: not a field page from layers any more
 	FrameLogTextureFilled(boundId); //FIELD_FRAME_LOG: what kind of texture it is
+	//SCENE_LIGHT: the same. Without data it is storage for something drawn into (a framebuffer's texture), not a picture
+	if (data != nullptr)
+		SceneLightTextureFilled(boundId, true);
+	else
+		SceneLightTextureForget(boundId);
 	if (DEBUG_GLTEXIMAGE2D)
 		OutputDebug("glTexImage2D (%d): format: %d, %dx%d, void: %08x\n",boundId, internalformat, width, height, data);
 	int lengthModifier = 0;
@@ -255,6 +260,7 @@ void __stdcall HookGlTexSubImage2D( 	GLenum target,
 	OutputDebug("GlTexSubImage2D: ID: %d Width: %d Height: %d. Last path: %s\n", GetCurrentBoundTextureID(),
 		width, height, LastFilePath.c_str());
 	FrameLogTextureFilled(GetCurrentBoundTextureID()); //FIELD_FRAME_LOG
+	SceneLightTextureFilled(GetCurrentBoundTextureID(), false); //SCENE_LIGHT
 
 	bool tryToReplace = false;
 	

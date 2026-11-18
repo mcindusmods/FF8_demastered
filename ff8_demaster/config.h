@@ -75,6 +75,8 @@ inline double FIELD_SUN;              //the sun's strength (fields with sky = 1,
 inline int FIELD_PARTY_LIGHT;         //the light the party leader carries: 0 off, 1 at night, 2 always
 inline double FIELD_PARTY_LIGHT_STRENGTH;
 //Movement and motion (texturepatch_v2_analogMove.cpp, texturepatch_v2_fieldTween.cpp)
+inline int SCENE_LIGHT;               //battles and the world map: the time of day, scene_light.txt, stage pages' _EC and _ORM maps
+inline int SCENE_DEBUG;               //log what SCENE_LIGHT decides, and the projection's registers at a stage draw
 inline int ANALOG_MOVEMENT;           //fields: the pad's left stick walks at any angle (the game's own analogue code, answered for it)
 inline double ANALOG_DEADZONE;        //how far the stick moves before it counts (0.05-0.9 of its throw)
 inline int ANALOG_WORLD_MAP;          //the world map: the left stick moves at any angle too

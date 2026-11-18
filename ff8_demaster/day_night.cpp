@@ -340,6 +340,11 @@ fieldpbr::SkyTime DayNightSky()
 	return fieldpbr::SkyTimeOf(cycle, clockTime);
 }
 
+fieldpbr::FieldTime DayNightPlaceTime()
+{
+	return static_cast<fieldpbr::FieldTime>(fieldTime.load());
+}
+
 double DayNightAmount(const fieldpbr::FieldTime time)
 {
 	if (!DAY_NIGHT)

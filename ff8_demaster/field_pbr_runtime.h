@@ -105,7 +105,8 @@ namespace fieldrt
 	//the canvas fieldprep wrote into the field's _pbr.txt (canvas = left top width height); false: no file, or none in it
 	bool PbrCanvas(const std::string& folder, const std::string& name, const std::string& language, fieldlayers::Frame& canvas);
 	//the field's time of day from its _pbr.txt (time = cycle | day | night); false: no file
-	bool PbrFieldTime(const std::string& folder, const std::string& name, const std::string& language, fieldpbr::FieldTime& time);
+	bool PbrFieldTime(const std::string& folder, const std::string& name, const std::string& language, fieldpbr::FieldTime& time,
+		bool* sky = nullptr);
 	void PbrEndFrame(); //SwapBuffers: what the frame's tile draws measured becomes the next frame's
 
 	//--- what the character module (texturepatch_v2_fieldChars.cpp) gets of the field being drawn

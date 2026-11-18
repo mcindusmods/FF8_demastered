@@ -158,6 +158,7 @@ void _bspGl()
 	if (LoadImageIntoBattleSceneryStruct(tPage - 16, tPage, localn))
 	{
 		RenderTexture(bss[tPage - 16].current());
+		SceneLightStagePage(currentStage, static_cast<int>(tPage), localn); //SCENE_LIGHT: the page's _EC and _ORM maps
 	}
 	return;
 }

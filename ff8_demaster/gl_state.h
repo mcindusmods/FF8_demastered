@@ -57,6 +57,7 @@ namespace glstate
 	GLuint ReadFramebuffer();
 	void SaveClient(ClientState& c);
 	bool BlendOn();
+	void BlendFactors(GLint& sourceRgb, GLint& destinationRgb);
 	GLint BlendEquationRgb();
 	GLint ElementBuffer();
 	GLint VertexArrayBuffer(); //the buffer the vertex array reads from (0: client memory)

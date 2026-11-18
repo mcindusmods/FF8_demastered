@@ -1062,6 +1062,18 @@ bool glstate::BlendOn()
 	return glIsEnabled(GL_BLEND) != GL_FALSE;
 }
 
+void glstate::BlendFactors(GLint& sourceRgb, GLint& destinationRgb)
+{
+	if (Ready())
+	{
+		sourceRgb = c.draw.blendSrcRgb;
+		destinationRgb = c.draw.blendDstRgb;
+		return;
+	}
+	glGetIntegerv(GL_BLEND_SRC_RGB, &sourceRgb);
+	glGetIntegerv(GL_BLEND_DST_RGB, &destinationRgb);
+}
+
 GLint glstate::BlendEquationRgb()
 {
 	if (Ready())

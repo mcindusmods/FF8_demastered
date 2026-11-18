@@ -65,6 +65,8 @@ bool DDSorPNG(char* buffer, const size_t inSize, const char* fmt, ...)
 }
 void RenderTexture(const bimg::ImageContainer* img)
 {
+	//SCENE_LIGHT: a replacement goes into the game's texture (a compressed one never passes the glTexImage2D hook)
+	SceneLightTextureFilled(GetCurrentBoundTextureID(), true);
 	const TextureFormatInfo& texInfo = s_textureFormat[img->m_format];
 	if (isCompressed(img->m_format))
 		RenderCompressedTexture(img, texInfo);

@@ -24,6 +24,8 @@ void DayNightSwap(); //SwapBuffers (renderer thread): the clock moves on, the ke
 void DayNightFieldEntered(const std::string& field, fieldpbr::FieldTime time);
 //how night the clock says it is (0 day, 1 night, between: a fade); 0 with DAY_NIGHT off. Renderer thread
 double DayNightClockAmount();
+//the place you are: the last field's time setting (cycle on the world map and in fields that follow the clock)
+fieldpbr::FieldTime DayNightPlaceTime();
 //for a field with this time setting: its own (day 0, night 1) or the clock's
 double DayNightAmount(fieldpbr::FieldTime time);
 //where the clock is on the sun's arc (by day) or the moon's (by night), for the moving lights. With DAY_NIGHT off: the day,

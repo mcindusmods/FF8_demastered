@@ -1,0 +1,55 @@
+; DEMASTER: the time of day and colour overrides in battles and on the world map (SCENE_LIGHT in demaster.conf).
+; Read again within a second of saving it. Colours are red green blue in linear light: 1 1 1 changes nothing.
+;
+; night       = auto | 0 | 1   does the night come here. auto: the world map always; a battle when it started on
+;                              the world map, in a field open to the sky (sky = 1 in its _pbr.txt) or in a field
+;                              whose _pbr.txt says time = night. Battles from other fields stay as painted.
+; time        = cycle | day | night   cycle: the day/night clock; day or night: always that
+; day_tint    = what the picture is multiplied by in daylight
+; night_tint, night_level = by night the picture is multiplied by night_level x night_tint
+; ao          = how much of a stage page's ORM map's AO is used (0-1)
+; glow        = how bright a stage page's picture of its glows is (<page>_EC; 1: as painted)
+
+[battle]
+night = auto
+time = cycle
+day_tint = 1 1 1
+night_tint = 0.55 0.65 1
+night_level = 0.3
+ao = 0.5
+glow = 1
+
+[world]
+night = auto
+time = cycle
+day_tint = 1 1 1
+night_tint = 0.55 0.65 1
+night_level = 0.3
+
+; Rules change the settings above where their conditions hold. Only the keys written in a rule change anything.
+;   where  = battle | world | both     (left out: both)
+;   stage  = 12, 40-45                 battle stages by number (a0stg012 is 12); left out: every stage. A rule
+;                                      with stages is for battles only
+;   moment = 3000-65535                the story's progress, the game's own counter (the log says what it is when a
+;                                      battle or the world map starts, with SCENE_DEBUG=1); left out: always
+; Later rules go over earlier ones.
+
+; After the Lunar Cry (the counter is 3000 once the Ragnarok is yours): the night is red instead of blue.
+; Change the colours to taste, or delete the rule.
+[rule lunar cry]
+where = both
+moment = 3000-65535
+day_tint = 1 0.94 0.92
+night_tint = 1 0.5 0.45
+
+; Examples (take the ; away):
+;[rule a cave]
+;where = battle
+;stage = 7, 20-22
+;night = 0
+;[rule always dusk]
+;where = battle
+;stage = 31
+;time = night
+;night_level = 0.6
+;night_tint = 1 0.7 0.5

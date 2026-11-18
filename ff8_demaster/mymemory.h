@@ -22,7 +22,7 @@ BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, 
 	PSX_VRAM, READ_VRAM_PALETTE, WRITE_PALETTE,
 	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
 	ANALOG_GET_VALUE, ANALOG_FIELD_TEST, ANALOG_FIELD_X, ANALOG_FIELD_Y,
-	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY,
+	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY, GTE_CONTROL, GAME_MOMENT,
 	ADDRESS_NAME_COUNT //keep last
 };
 
@@ -143,6 +143,12 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 	//guest address: the script entity the player moves (s16; the field's movement code gives the pad to the entity whose
 	//index this is)
 	{ FIELD_PLAYER_ENTITY  , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CD8FD0,} },
+	//guest addresses. GTE_CONTROL: the projection's 32 control registers as the PlayStation has them (DWORDs: 0-4 the
+	//rotation, two s16 each, 4096 = 1; 5-7 the translation; 24, 25 the screen centre, 16.16; 26 the screen distance),
+	//written by the host of 0x45D7F0; FFNx reads the same block (its camera_zoom_dword_1CA92E4 is register 26).
+	//GAME_MOMENT: the story's progress (u16; FFNx's field_game_moment)
+	{ GTE_CONTROL          , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CA927C,} },
+	{ GAME_MOMENT          , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CFEAB8,} },
 	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
 	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
 	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
@@ -306,6 +312,9 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
 { WM_KEYS              , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2543EC8 }},
 { WM_KEY_INDEX         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2544A9C }},
 { FIELD_PLAYER_ENTITY  , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x21DEF68 }},
+//(registers 5 and 26 and the counter were found in the JP code at the places that match EFIGS's; all three are 0x505F98 on)
+{ GTE_CONTROL          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x21AF214 }},
+{ GAME_MOMENT          , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2204A50 }},
 };
 
 

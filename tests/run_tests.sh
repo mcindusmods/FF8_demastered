@@ -17,6 +17,7 @@ run "$OUT/field_layers_test"
 run "$OUT/field_chars_test"
 run "$OUT/field_tween_test"
 run "$OUT/mirror_test"
+run "$OUT/scene_shader_test" DEMASTER_EXP/shaders
 scratch=$(mktemp -d)
 run "$OUT/fieldprep_model_test" "$scratch"
 rm -rf "$scratch"

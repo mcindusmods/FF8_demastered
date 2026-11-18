@@ -7,6 +7,7 @@
 #include "../ff8_demaster/field_layers.h"
 #include "../ff8_demaster/field_pbr.h"
 #include "../ff8_demaster/field_moving_lights.h"
+#include "../ff8_demaster/scene_light.h"
 #include "../fieldprep/archive.h"
 #include "../fieldprep/image_io.h"
 #include "../fieldprep/prep.h"
@@ -1791,8 +1792,60 @@ static void TestEmissivePicture()
 	CHECK(std::string(KindSuffix(EMISSIVE)) == "_EC" && KIND_COUNT == 5);
 }
 
+//SCENE_LIGHT's rules (scene_light.h): battles and the world map
+static void TestSceneLight()
+{
+	using scenelight::Where;
+	using scenelight::Time;
+	using scenelight::Resolve;
+	using scenelight::NightHere;
+	scenelight::Settings s;
+	std::string w;
+	//the file DEMASTER writes is understood without a warning and holds the defaults and the Lunar Cry's rule
+	scenelight::Parse(scenelight::DefaultText(), s, w);
+	CHECK(w.empty());
+	CHECK(s.battle.night == -1 && s.battle.time == Time::Cycle && s.world.nightLevel == 0.3f && s.battle.ao == 0.5f);
+	CHECK(s.rules.size() == 1 && s.rules[0].name == "lunar cry" && s.rules[0].momentFrom == 3000 && s.rules[0].momentTo == 65535);
+	CHECK(s.rules[0].hasNightTint && s.rules[0].hasDayTint && !s.rules[0].hasNightLevel && !s.rules[0].hasNight);
+	//before the Lunar Cry: the place's own; after: the rule's tints over it, the rest untouched; unknown moment: not applied
+	scenelight::Look before = Resolve(s, Where::World, -1, 2500), after = Resolve(s, Where::World, -1, 3150), unknown = Resolve(s, Where::Battle, 5, -1);
+	CHECK(before.nightTint[2] == 1.0f && after.nightTint[0] == 1.0f && after.nightTint[2] == 0.45f && after.nightLevel == 0.3f);
+	CHECK(unknown.nightTint[2] == 1.0f);
+	float m[3];
+	scenelight::Multiplier(before, 0.0, m);
+	CHECK(m[0] == 1.0f && m[1] == 1.0f && m[2] == 1.0f); //by day: as painted
+	scenelight::Multiplier(before, 1.0, m);
+	NEAR(m[0], 0.3f * 0.55f, 1e-6);
+	NEAR(m[2], 0.3f, 1e-6);
+	scenelight::Multiplier(after, 0.5, m);
+	NEAR(m[0], 0.5f * 1.0f + 0.5f * 0.3f * 1.0f, 1e-6);
+	//does the night come here: the world always; a battle only outdoors unless a rule says so; time fixes it
+	CHECK(NightHere(before, 0.7, true) == 0.7 && NightHere(before, 0.7, false) == 0.0 && NightHere(before, 3.0, true) == 1.0);
+	//rules: stages, where, order, the keys
+	scenelight::Parse("[battle]\nnight_level = 0.5\n[world]\nday_tint = 0.9 0.9 1\n"
+		"[rule cave]\nwhere = battle\nstage = 7, 20-22\nnight = 0\n"
+		"[rule dusk]\nstage = 22\ntime = night\nnight_tint = 1 0.7 0.5\nglow = 2\nao = 1\n"
+		"[rule later]\nwhere = world\nmoment = 100-200\nnight = 1\nnight_level = 0.1\n", s, w);
+	CHECK(w.empty() && s.rules.size() == 3);
+	scenelight::Look cave = Resolve(s, Where::Battle, 21, 0), open = Resolve(s, Where::Battle, 8, 0), dusk = Resolve(s, Where::Battle, 22, 0);
+	CHECK(cave.night == 0 && open.night == -1 && cave.nightLevel == 0.5f);
+	CHECK(NightHere(cave, 1.0, true) == 0.0 && NightHere(open, 1.0, true) == 1.0);
+	CHECK(dusk.night == 0 && dusk.time == Time::Night && NightHere(dusk, 0.0, false) == 1.0 && dusk.glow == 2.0f && dusk.ao == 1.0f
+		&& dusk.nightTint[1] == 0.7f);
+	scenelight::Look world = Resolve(s, Where::World, 22, 150), worldLater = Resolve(s, Where::World, 22, 201);
+	CHECK(world.nightLevel == 0.1f && world.night == 1 && world.time == Time::Cycle && world.dayTint[0] == 0.9f);
+	CHECK(worldLater.nightLevel == 0.3f && worldLater.night == -1);
+	//what isn't understood is said and skipped
+	scenelight::Parse("stray = 1\n[battle]\nnight = maybe\nnight_level = 2\ncolour = 1\n[weather]\nrain = 1\n[rule x]\nstage = a\nmoment = 5-3\nwhere = sea\n", s, w);
+	CHECK(s.battle.night == -1 && s.battle.nightLevel == 0.3f && s.rules.size() == 1 && s.rules[0].stages.empty() && s.rules[0].momentFrom == -1);
+	for (const char* part : { "can't read night", "can't read night_level", "unknown setting colour", "unknown section [weather]", "can't read stage",
+		"can't read moment", "can't read where" })
+		CHECK(w.find(part) != std::string::npos);
+}
+
 int main(int argc, char** argv)
 {
+	TestSceneLight();
 	TestEmissivePicture();
 	TestColour();
 	TestSpace();

@@ -87,6 +87,8 @@ void ReadConfigFile()
     DAY_NIGHT_KEYS = conf.GetInteger("", "DAY_NIGHT_KEYS", 1);
     DAY_NIGHT_BAR = conf.GetInteger("", "DAY_NIGHT_BAR", 1);
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);
+    SCENE_LIGHT = conf.GetInteger("", "SCENE_LIGHT", 1);
+    SCENE_DEBUG = conf.GetInteger("", "SCENE_DEBUG", 0);
     ANALOG_MOVEMENT = conf.GetInteger("", "ANALOG_MOVEMENT", 1);
     ANALOG_DEADZONE = conf.GetReal("", "ANALOG_DEADZONE", 0.25);
     ANALOG_WORLD_MAP = conf.GetInteger("", "ANALOG_WORLD_MAP", 1);

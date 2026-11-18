@@ -14,6 +14,27 @@ uniform vec4 demasterTileClamp;
 
 // DEMASTER (FIELD_PBR) draws its PBR pages with its own program (demaster_field.vert/.frag), not with this one.
 
+// DEMASTER (SCENE_LIGHT): battles and the world map. All zero unless DEMASTER lights this draw (a battle stage, the
+// fighters, the world map's ground): then the picture is multiplied by a colour in linear light (the time of day and the
+// place's rules in DEMASTER_EXP\scene_light.txt), and a battle stage page can bring a picture of its glows and an ORM map.
+uniform vec4 demasterScene;        // rgb: what the picture is multiplied by; a: 1 = on
+uniform vec4 demasterSceneMaps;    // x: 1 = a picture of the glows is on demasterSceneEC; y: how much of it shows (how
+                                   // night it is) times its brightness in z; w: how much of the AO in demasterSceneORM is
+                                   // used (0: no ORM map)
+uniform sampler2D demasterSceneEC; // the glows: colour (sRGB, times its coverage) and coverage (alpha), as in fields
+uniform sampler2D demasterSceneORM;
+
+vec3 demasterSceneToLinear(vec3 c)
+{
+	return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+
+vec3 demasterSceneToSrgb(vec3 c)
+{
+	c = clamp(c, 0.0, 1.0);
+	return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+
 vec4 demasterTileTexture(vec2 uv)
 {
 	vec2 texel = demasterTileClamp.zw;
@@ -68,6 +89,22 @@ void main()
 		color.rgb *= texture_color.rgb;
 	}
 	color.a = texture_color.a;
+
+	if (demasterScene.a > 0.0)
+	{
+		vec3 lit = demasterSceneToLinear(clamp(color.rgb, 0.0, 1.0));
+		if (demasterSceneMaps.w > 0.0)
+			lit *= mix(1.0, texture2D(demasterSceneORM, gl_TexCoord[0].st).r, demasterSceneMaps.w);
+		lit *= demasterScene.rgb;
+		if (demasterSceneMaps.x > 0.5)
+		{
+			// a lit window (coverage 1) takes the darkened picture's place, a halo (coverage 0) only adds its light
+			vec4 glows = texture2D(demasterSceneEC, gl_TexCoord[0].st);
+			float showing = clamp(demasterSceneMaps.y, 0.0, 1.0);
+			lit = lit * (1.0 - glows.a * showing) + demasterSceneToLinear(glows.rgb) * (showing * demasterSceneMaps.z);
+		}
+		color.rgb = demasterSceneToSrgb(lit);
+	}
 
 	gl_FragColor = color;
 }

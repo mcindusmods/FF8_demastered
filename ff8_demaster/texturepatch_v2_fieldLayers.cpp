@@ -370,9 +370,11 @@ namespace
 		FieldCharsMapRead(false); //the game's own back-face cull, unless this field has PBR files (below)
 		//DAY_NIGHT: the field's own time of day (time = day or night in its _pbr.txt holds the clock); else the clock's
 		fieldpbr::FieldTime time = fieldpbr::FieldTime::Cycle;
+		bool sky = false;
 		if (FIELD_PBR && HasFolder(name))
-			PbrFieldTime(FieldFolder(name), name, language, time);
+			PbrFieldTime(FieldFolder(name), name, language, time, &sky);
 		DayNightFieldEntered(name, time);
+		SceneLightFieldEntered(sky); //SCENE_LIGHT: a battle started here is under the sky or not
 
 		Field next;
 		{

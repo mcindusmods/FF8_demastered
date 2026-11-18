@@ -115,6 +115,7 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
     }
 #endif
     FrameLogDraw(mode, count, type, indices); //FIELD_FRAME_LOG, the game's own state, before DEMASTER changes any
+    SceneLightBeforeDraw(static_cast<int>(count)); //SCENE_LIGHT: battles and the world map (main.frag's uniforms)
     //FIELD_SMOOTH_SCROLL, FIELD_INTERPOLATION: which layer the draw is; true: kept back until the characters are drawn
     const bool tween = fieldrt::TweenOn();
     if (tween && fieldrt::TweenBeforeDraw(mode, count, type, indices))

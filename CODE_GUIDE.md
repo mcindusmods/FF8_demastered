@@ -123,6 +123,10 @@ Things that are easy to get wrong:
 - **The world map (`ANALOG_WORLD_MAP`).** `WorldStick` answers the eight calls in the world map's input function (found by scanning 0x240 bytes from `ANALOG_WORLD_FIRST` for calls to the getter: there must be exactly eight). It takes the d-pad bits out of `WM_KEYS[WM_KEY_INDEX]` while the left stick is pushed.
 - **Who the player moves.** `FIELD_PLAYER_ENTITY` (a guest address, s16): the index of the script entity the movement code gives the pad to. The party light reads it (`texturepatch_v2_fieldChars.cpp`, passed to `fieldpbr::ChooseLeader` as `controlled`).
 
+## Battles and the world map (SCENE_LIGHT)
+
+`scene_light.h/.cpp` holds the rules (scene_light.txt, which look applies where, the multiplier), `texturepatch_v2_sceneLight.cpp` the DLL's side: it remembers the game's texture type per texture (`SceneLightTextureFilled`, from the upload hooks and `RenderTexture`), loads a stage page's `_EC` and `_ORM` (`SceneLightStagePage`, from `_bspGl`), and before every draw sets `demasterScene` / `demasterSceneMaps` of the game's main.frag (`SceneLightBeforeDraw`, from the glDrawElements hook). The shader's part is at the end of `DEMASTER_EXP/shaders/main.frag`. Nothing there uses the camera. `GTE_CONTROL` and `GAME_MOMENT` in `mymemory.h` are the projection's registers and the story's counter in the game's memory.
+
 ## Field pages: on the list, parked, taken back (FIELD_LAYERS)
 
 `fieldPages` in `texturepatch_v2_fieldLayers.cpp` maps a game texture to the page DEMASTER built into it; a draw with such a texture bound gets the tile filter and, with PBR maps, DEMASTER's field program. A page leaves the list when the game uploads to its texture (`FieldLayersForgetTexture`, from the glTexImage2D hook), when its texture has another size (`DriverWidth`, asked only when the driver has that texture bound), or when a .map is read (`ParkAll`: the pages go to `parkedPages`). A parked page whose texture the game draws without a new upload, in the same field, is put back by `TakeBack`. `LogDrop` writes each case to the log with `FIELD_DEBUG`.

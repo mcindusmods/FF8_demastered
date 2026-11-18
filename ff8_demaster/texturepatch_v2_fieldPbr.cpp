@@ -134,7 +134,8 @@ bool fieldrt::PbrCanvas(const std::string& folder, const std::string& name, cons
 	return true;
 }
 
-bool fieldrt::PbrFieldTime(const std::string& folder, const std::string& name, const std::string& language, fieldpbr::FieldTime& time)
+bool fieldrt::PbrFieldTime(const std::string& folder, const std::string& name, const std::string& language, fieldpbr::FieldTime& time,
+	bool* sky)
 {
 	const std::string path = FieldFile(folder, name, language, fieldpbr::SETTINGS_SUFFIX);
 	std::string text, warnings;
@@ -143,6 +144,8 @@ bool fieldrt::PbrFieldTime(const std::string& folder, const std::string& name, c
 	fieldpbr::Settings settings;
 	fieldpbr::ParseSettings(text, settings, warnings);
 	time = settings.time;
+	if (sky != nullptr)
+		*sky = settings.sky;
 	return true;
 }
 

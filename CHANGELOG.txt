@@ -1,5 +1,46 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.13 (in the source; not packaged yet) - day and night in battles and on the world map, glows and AO on battle stages
+-----------------------------------------------------------------------------------------------------------------------
+Not run in the game yet. The rules and the shader are tested on Linux (the shader against sums worked out on the CPU);
+the Windows-only files are type-checked. No frame log of a battle or of the world map was there to build against: see
+"what this is not" below.
+Day and night in battles and on the world map (new: SCENE_LIGHT, on by default; DEMASTER_EXP\scene_light.txt)
+  - Battles and the world map are drawn by the game's main.frag from textures times vertex colours. DEMASTER's main.frag
+    now multiplies that picture by a colour, in linear light: nothing by day, night_level x night_tint by night, with
+    the clock's fades in between. In battle: the stage and the fighters. On the world map: everything drawn from the
+    world's own textures. Draws that add light (spells, glows) and the menus and text are left alone.
+  - Where the night comes (night = auto): the world map always. A battle when it started on the world map, in a field
+    open to the sky (sky = 1 in its _pbr.txt) or in a field that is always night (time = night). Battles started in
+    other fields stay as painted, so indoor stages don't go dark. Battles keep their slower clock.
+  - DEMASTER_EXP\scene_light.txt (written with the defaults the first time, read again when you save it): [battle] and
+    [world] with night, time, day_tint, night_tint, night_level, ao, glow.
+Rules for places and for the story (the Lunar Cry)
+  - [rule <name>] in scene_light.txt changes any of those settings where its conditions hold: where = battle / world /
+    both, stage = 12, 40-45 (battle stages by number), moment = 3000-65535 (the story's progress, the game's own
+    counter, read from the game: EFIGS and JP). Later rules go over earlier ones.
+  - The file comes with [rule lunar cry]: from counter 3000 on (the Ragnarok is yours) the night is red instead of blue
+    and the day slightly warm, in battles and on the world map. The colours are a starting point: change or delete it.
+    SCENE_DEBUG=1 writes the counter to the log whenever a battle or the world map starts.
+Battle stages: a picture of the glows, and AO (the maps next to the stage page's picture in battle.fs\hd_new)
+  - a0stgNNN_P_EC (.dds or .png): the glows as a picture, exactly as fields have them since v15.12 (colour times
+    coverage, coverage in alpha): it takes the darkened stage's place by night. fieldprep doesn't make it for stages
+    yet: paint it with an alpha of its own (a layer over the page), or on black.
+  - a0stgNNN_P_ORM: an ORM map; its red channel (AO) darkens the page by "ao" of it. Roughness and metallic are not used
+    yet.
+  - An animated page's frames (a0stgNNN_P_F) use their own maps when they have them, else the page's.
+What this is not (yet)
+  - Normal maps are not lit, in battle or on the world map. That needs a sun that stands still in the world while the
+    camera moves, so the camera's rotation at the moment the stage is projected. The game keeps the PlayStation's
+    projection registers in memory (found, EFIGS and JP: GTE_CONTROL in mymemory.h), but they hold whatever was set
+    last, the camera's or a model's. SCENE_DEBUG=1 writes them to the log at a stage draw; with that and one frame log
+    of a battle and one of the world map (Ctrl+F11 works there too) the next build can light them.
+  - World map textures have no maps yet (no _EC, no AO): only the time of day and the rules.
+  - Battle stages get no lights of their own and the fighters no shadows from them: both wait for the same thing.
+For working on the code
+  - scene_light.h/.cpp (the rules; field_pbr_test, 17,917 checks), tests/scene_shader_test.cpp (main.frag with
+    DEMASTER's uniforms off, the night, AO, the glows by night, at dusk and by day; in tests/run_tests.sh).
+
 v15.12 (in the source; not packaged yet) - glows as a picture, the turn swings, world-map stick, pages that stay pages
 -----------------------------------------------------------------------------------------------------------------------
 Not run in the game yet. The shared code and the shader are tested on Linux (the new glows against sums worked out on
