@@ -323,15 +323,19 @@ namespace
 	//SCENE_DEBUG: what a later build needs to light stages from a sun that stands still in the world: the projection's
 	//registers (the game keeps the PlayStation's: rotation, translation, screen centre, distance) while a stage is drawn,
 	//and the first corner of the draw. Once per battle.
-	void LogProjection(const GLint program, const int count)
+	//world: a draw of the world map's own textures (the first step of its light: is the projection the same as in battle?)
+	void LogProjection(const GLint program, const int count, const bool world = false)
 	{
 		static int loggedStage = -2;
 		static ULONGLONG loggedAt = 0;
 		const ULONGLONG tick = GetTickCount64();
-		if (loggedStage == currentStage && tick - loggedAt < 20000)
+		const int key = world ? -100 : currentStage;
+		if (loggedStage == key && tick - loggedAt < 20000)
 			return;
-		loggedStage = currentStage;
+		loggedStage = key;
 		loggedAt = tick;
+		if (world)
+			OutputDebug("SCENE_LIGHT: the world map (the registers and the first corner of one of its draws follow):\n");
 		static const DWORD at = HasAddress(GTE_CONTROL) ? GetAddress(GTE_CONTROL) : 0;
 		int32_t r[32]{};
 		if (at == 0 || !GuestRead(r, at, sizeof(r)))
@@ -1014,6 +1018,8 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 			}
 			if (SCENE_DEBUG && mode == MODE_BATTLE && t.type == TYPE_BATTLE_STAGE)
 				LogProjection(program, count);
+			else if (SCENE_DEBUG && mode == MODE_WORLDMAP && world)
+				LogProjection(program, count, true);
 		}
 	}
 	//a fighter: drawn by DEMASTER with smooth normals (its maps' units are set above, as for the game's draw)

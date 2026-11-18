@@ -72,6 +72,11 @@ Battles: the fighters with smooth normals, their shadows on the stage (third ste
     fighters are told from the stage by their textures. The tests check the shadow on a floor drawn through main.frag
     with the registers of a real battle, and that the fighter program links.
   - The default scene_light.txt describes the new keys; an existing one works without them (the defaults apply).
+The world map's light: the first measurement (with the fourth step)
+  - Its draws are corners already on the screen, as in battle (the frame logs of 17 November: every world draw is
+    vertex type 3). With SCENE_DEBUG=1 the log now has the projection's registers and the first corner of a world draw
+    every 20 seconds, as the battle stage's had before the battles' second step. With a frame log of the same moment
+    that shows whether the battle's way (each pixel's place from the registers) works on the world map too.
 Field models: BC7 straight to the GPU (fourth step; new: FIELD_MODEL_BC7=1)
   - A model's atlas used to be RGBA on the GPU, every .dds decoded into it. Now, when every image in it has a BC7 .dds
     of its size whose place lines up with BC7's 4 x 4 blocks, the atlas is made as BC7 and the files' blocks are copied
