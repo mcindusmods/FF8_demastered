@@ -39,10 +39,11 @@ using namespace fieldrt;
 namespace
 {
 	constexpr int UNIT_LIGHTMAP = 1, UNIT_NORMAL = 2, UNIT_ORME = 3, UNIT_CELLS = 4, UNIT_ROOM = 5, UNIT_CAPTURE = 6, UNIT_SHADOW = 7,
-		UNIT_CHAR_DEPTH = 8, UNIT_EMISSIVE = 9;
-	constexpr int UNIT_FIRST = 1, UNIT_LAST = 9;
+		UNIT_CHAR_DEPTH = 8, UNIT_EMISSIVE = 9, UNIT_NIGHT = 10;
+	constexpr int UNIT_FIRST = 1, UNIT_LAST = 10;
 	//EMISSIVE: the ORM map is an _ORME (its alpha: the old glow mask); GLOWS: the cell has a picture of its glows (_EC)
-	constexpr float FLAG_PBR = 1.0f, FLAG_NORMAL = 2.0f, FLAG_ORME = 4.0f, FLAG_EMISSIVE = 8.0f, FLAG_GLOWS = 16.0f;
+	constexpr float FLAG_PBR = 1.0f, FLAG_NORMAL = 2.0f, FLAG_ORME = 4.0f, FLAG_EMISSIVE = 8.0f, FLAG_GLOWS = 16.0f, FLAG_NIGHT = 32.0f,
+		FLAG_PAINTED = 64.0f;
 	constexpr const char* PROBES_SUFFIX = "_PROBES.dds";
 
 	bool ReadBytes(const std::string& path, std::string& text)
@@ -164,7 +165,7 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 	const bool fieldEmissive = !fieldStem[fieldpbr::ORME].empty();
 	if (!fieldEmissive)
 		fieldStem[fieldpbr::ORME] = FindImageStem(folder, name, language, false, 0, fieldpbr::OLD_ORM_SUFFIX);
-	std::vector<std::string> noLightmap, fromState;
+	std::vector<std::string> noLightmap, fromState, paintedFrames;
 	for (const auto& [pupu, blend] : layers)
 	{
 		//A picture of an animation state without an _ND, _ORME or _EC of its own takes its state's first picture's (the
@@ -176,7 +177,15 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 			continue; //only opaque layers: glows and shadows are drawn as they are
 		PbrField::Layer layer;
 		layer.stem[fieldpbr::ALBEDO] = FindImageStem(folder, name, language, true, pupu, fieldpbr::KindSuffix(fieldpbr::ALBEDO));
-		if (layer.stem[fieldpbr::ALBEDO].empty())
+		//an animation state's picture needs no _A of its own: when its state's first picture has one it is drawn from its
+		//painting, lit like the rest (an _A of its own, when there is one, is used instead)
+		if (layer.stem[fieldpbr::ALBEDO].empty() && hasFirst
+			&& !FindImageStem(folder, name, language, true, first, fieldpbr::KindSuffix(fieldpbr::ALBEDO)).empty())
+		{
+			layer.painted = true;
+			paintedFrames.push_back(PupuHex(pupu));
+		}
+		if (layer.stem[fieldpbr::ALBEDO].empty() && !layer.painted)
 			continue;
 		for (int k = fieldpbr::LIGHTMAP; k < fieldpbr::KIND_COUNT; k++)
 		{
@@ -189,7 +198,8 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 				if (layer.stem[k].empty())
 					layer.stem[k] = FindImageStem(folder, name, language, true, pupu, fieldpbr::OLD_ORM_SUFFIX);
 			}
-			if (layer.stem[k].empty() && hasFirst && k != fieldpbr::LIGHTMAP)
+			//(not its night picture: a frame's night picture is its own, the first state's shows another frame)
+			if (layer.stem[k].empty() && hasFirst && k != fieldpbr::LIGHTMAP && k != fieldpbr::NIGHT)
 			{
 				layer.stem[k] = FindImageStem(folder, name, language, true, first, fieldpbr::KindSuffix(static_cast<fieldpbr::Kind>(k)));
 				if (k == fieldpbr::ORME)
@@ -224,6 +234,14 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 			list += " " + noLightmap[i];
 		Log("FIELD_PBR: %s: %zu layer(s) have an _A but no _LF (theirs or %s_LF): drawn from their paintings:%s\n", name.c_str(),
 			noLightmap.size(), name.c_str(), list.c_str());
+	}
+	if (!paintedFrames.empty() && FIELD_DEBUG)
+	{
+		std::string list;
+		for (size_t i = 0; i < paintedFrames.size() && i < 16; i++)
+			list += " " + paintedFrames[i];
+		Log("FIELD_PBR: %s: %zu picture(s) of an animation state have no _A of their own: drawn from their paintings, lit like "
+			"the rest (the albedo taken out of the painting by the lightmap):%s\n", name.c_str(), paintedFrames.size(), list.c_str());
 	}
 	if (!fromState.empty() && FIELD_DEBUG)
 	{
@@ -410,7 +428,7 @@ namespace
 		uint64_t entry = 0;
 		PageJob job; //the game page's job, without the game's pixels (to make the maps again)
 		PageSize size; //of the albedo page
-		GLuint map[fieldpbr::KIND_COUNT] = {}; //LIGHTMAP, NORMAL_DEPTH, ORME, EMISSIVE (ALBEDO is the game's texture)
+		GLuint map[fieldpbr::KIND_COUNT] = {}; //LIGHTMAP, NORMAL_DEPTH, ORME, EMISSIVE, NIGHT (ALBEDO is the game's texture)
 		PageSize mapSize[fieldpbr::KIND_COUNT];
 		GLuint cells = 0;
 		int cellsX = 16, cellsY = 16;
@@ -749,6 +767,10 @@ void main()
 			}
 			if (glows)
 				flags += FLAG_GLOWS;
+			if (page.map[fieldpbr::NIGHT] != 0 && !layer->second.stem[fieldpbr::NIGHT].empty())
+				flags += FLAG_NIGHT;
+			if (layer->second.painted)
+				flags += FLAG_PAINTED;
 			const size_t index = static_cast<size_t>(cy) * page.cellsX + cx;
 			float* cell = data.data() + index * 4;
 			cell[0] = static_cast<float>(stamp->layerX);
@@ -1056,10 +1078,10 @@ void main()
 		const GLint previous = glstate::Program();
 		glUseProgram(id);
 		const char* samplers[] = { "tex", "demasterLF", "demasterND", "demasterORME", "demasterCells", "demasterRoom", "demasterCapture",
-			"demasterShadowMap", "demasterCharDepth", "demasterEC" };
+			"demasterShadowMap", "demasterCharDepth", "demasterEC", "demasterNT" };
 		const int units[] = { 0, UNIT_LIGHTMAP, UNIT_NORMAL, UNIT_ORME, UNIT_CELLS, UNIT_ROOM, UNIT_CAPTURE, UNIT_SHADOW, UNIT_CHAR_DEPTH,
-			UNIT_EMISSIVE };
-		for (int i = 0; i < 10; i++)
+			UNIT_EMISSIVE, UNIT_NIGHT };
+		for (int i = 0; i < 11; i++)
 			if (const GLint location = at(samplers[i]); location >= 0)
 				glUniform1i(location, units[i]);
 		glUseProgram(static_cast<GLuint>(previous));
@@ -1090,11 +1112,15 @@ void main()
 		//the time of day (DAY_NIGHT): the field's own (time = day or night in _pbr.txt) or the clock's; which lights are on and
 		//how much, the night's darkness
 		const double night = DayNightAmount(current.settings.time);
-		//the moving lights (the sun, the party light) take places among the lights; the field's own get the rest
+		//the evening (DAY_NIGHT_EVENING): the day's own lights start going and the glows start coming before the dusk's fade
+		const double evening = DayNightEvening(current.settings.time);
+		//the moving lights (the sun, the party light) take places among the lights; the field's own get the rest. By day the
+		//sun is one of the day's two
 		const int moving = MovingLightsWanted(current.settings, current.lights, night);
+		const int dayPlaces = fieldpbr::MAX_DAY_LIGHTS - (MovingSunOut(current.settings, current.lights) ? 1 : 0);
 		size_t dropped = 0;
 		const std::vector<fieldpbr::ActiveLight> active = fieldpbr::ActiveLights(current.lights, night, &dropped,
-			static_cast<size_t>(fieldpbr::MAX_LIGHTS - moving));
+			static_cast<size_t>(fieldpbr::MAX_LIGHTS - moving), 1.0 - evening, dayPlaces);
 		if (dropped > 0)
 			LogOnce("daynight-dropped-" + std::to_string(current.entry), "FIELD_PBR: %s: more than %d lights on during a fade between day and "
 				"night: the %zu faintest left out until it ends\n", current.field != nullptr ? current.field->name.c_str() : "?", fieldpbr::MAX_LIGHTS,
@@ -1103,7 +1129,7 @@ void main()
 		u.night[0] = static_cast<float>(night);
 		u.night[1] = dark.level;
 		u.night[2] = dark.lamps;
-		u.night[3] = 0.0f;
+		u.night[3] = static_cast<float>(evening); //the glows come on with the evening
 		for (int c = 0; c < 3; c++)
 			u.nightTint[c] = dark.tint[c];
 		u.count = static_cast<int>(std::min<size_t>(active.size(), static_cast<size_t>(fieldpbr::MAX_LIGHTS - moving)));
@@ -1139,7 +1165,9 @@ void main()
 			u.flicker[i * 4 + 0] = owns ? static_cast<float>(flicker * groupMean * lit - 1.0) : 0.0f;
 			u.flicker[i * 4 + 1] = owns ? 1.0f : 0.0f;
 			u.flicker[i * 4 + 2] = l.ShadowStrength() * weight; //a light fading out takes its shadows with it
-			u.flicker[i * 4 + 3] = active[i].nightLamp && on ? 1.0f : 0.0f;
+			//a night lamp: (range / its night radius) squared, how much farther out its keep window reaches than its light (0: no lamp)
+			const float keep = l.range / std::max(1e-3f, l.KeepRadius());
+			u.flicker[i * 4 + 3] = active[i].nightLamp && on ? keep * keep : 0.0f;
 			u.castsShadow[i] = on && weight > 0.0f && l.ShadowStrength() > 0.0f && (l.intensity > 0.0f || l.baked);
 			//the look: only the lamps that are in the painting. Their own colour (no intensity: that is the added light) for
 			//the highlights dial, and how much of them is on for the relight dial
@@ -1280,7 +1308,7 @@ void main()
 		const LightUniforms& lights = Lights();
 		//the glows: by day nothing (the painting has them); at night they stay lit as the room goes dark
 		const fieldpbr::Emissive& e = current.lights.emissive;
-		glUniform4f(p.emissive, e.hue / 360.0f, e.strength, 0.0f, std::max(lights.night[0], e.day)); //by day: as much as "day" says
+		glUniform4f(p.emissive, e.hue / 360.0f, e.strength, 0.0f, std::max(lights.night[3], e.day)); //by day: as much as "day" says
 		glUniform4f(p.emissiveTint, e.tint[0], e.tint[1], e.tint[2], 0.0f);
 		glUniform4fv(p.night, 1, lights.night);
 		glUniform4fv(p.nightTint, 1, lights.nightTint);
@@ -1567,7 +1595,7 @@ bool fieldrt::PbrBeforeDraw(const GLuint boundTexture, const GLint program, cons
 	const bool charDepth = FIELD_PBR_DEPTH && charsSet && chars.depth != 0;
 	const GLuint textures[UNIT_LAST + 1] = { 0, page.map[fieldpbr::LIGHTMAP], page.map[fieldpbr::NORMAL_DEPTH], page.map[fieldpbr::ORME],
 		page.cells, current.room, capture ? chars.capture : 0, shadows ? chars.shadowMap : 0, charDepth ? chars.depth : 0,
-		page.map[fieldpbr::EMISSIVE] };
+		page.map[fieldpbr::EMISSIVE], page.map[fieldpbr::NIGHT] };
 	for (int unit = UNIT_FIRST; unit <= UNIT_LAST; unit++)
 	{
 		savedBinding[unit] = static_cast<GLint>(glstate::Texture(GL_TEXTURE_2D, unit));

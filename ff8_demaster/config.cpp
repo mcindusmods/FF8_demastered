@@ -77,13 +77,14 @@ void ReadConfigFile()
     FIELD_PBR_AO = conf.GetReal("", "FIELD_PBR_AO", 0.5);
     FIELD_MOVING_LIGHTS = conf.GetInteger("", "FIELD_MOVING_LIGHTS", 1);
     FIELD_SUN = conf.GetReal("", "FIELD_SUN", 1.0);
-    FIELD_PARTY_LIGHT = conf.GetInteger("", "FIELD_PARTY_LIGHT", 1);
+    FIELD_PARTY_LIGHT = conf.GetInteger("", "FIELD_PARTY_LIGHT", 0);
     FIELD_PARTY_LIGHT_STRENGTH = conf.GetReal("", "FIELD_PARTY_LIGHT_STRENGTH", 1.0);
     DAY_NIGHT = conf.GetInteger("", "DAY_NIGHT", 1);
     DAY_NIGHT_DAY = conf.GetReal("", "DAY_NIGHT_DAY", 480);
     DAY_NIGHT_NIGHT = conf.GetReal("", "DAY_NIGHT_NIGHT", 240);
     DAY_NIGHT_FADE = conf.GetReal("", "DAY_NIGHT_FADE", 40);
     DAY_NIGHT_BATTLE = conf.GetReal("", "DAY_NIGHT_BATTLE", 3);
+    DAY_NIGHT_EVENING = conf.GetReal("", "DAY_NIGHT_EVENING", 0.9);
     DAY_NIGHT_KEYS = conf.GetInteger("", "DAY_NIGHT_KEYS", 1);
     DAY_NIGHT_BAR = conf.GetInteger("", "DAY_NIGHT_BAR", 1);
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);

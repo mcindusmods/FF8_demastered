@@ -35,8 +35,10 @@ namespace fieldpbr
 {
 	//--- names
 
-	enum Kind { ALBEDO, LIGHTMAP, NORMAL_DEPTH, ORME, EMISSIVE, KIND_COUNT };
-	const char* KindSuffix(Kind kind); //"_A", "_LF", "_ND", "_ORME", "_EC"
+	//NIGHT: a layer's night picture (_nt_A; "nt" so it isn't taken for _N): how the layer looks at night, shown as it is
+	//painted (the clock cross-fades to it; the glows and the lamps' added light still go on top)
+	enum Kind { ALBEDO, LIGHTMAP, NORMAL_DEPTH, ORME, EMISSIVE, NIGHT, KIND_COUNT };
+	const char* KindSuffix(Kind kind); //"_A", "_LF", "_ND", "_ORME", "_EC", "_nt_A"
 	//before v15.7 the ORM map was _ORMH, its alpha the height (nothing used it): still read, its alpha left out
 	constexpr const char* OLD_ORM_SUFFIX = "_ORMH";
 
@@ -46,9 +48,14 @@ namespace fieldpbr
 	std::string LayerStem(const std::string& folder, const std::string& field, const std::string& language, uint32_t pupu);
 	constexpr const char* SETTINGS_SUFFIX = "_pbr.txt";
 	constexpr const char* LIGHTS_SUFFIX = "_lights.txt";
-	constexpr int MAX_LIGHTS = 8; //on at a time (by day, or by night): fieldprep's large ones and yours
-	constexpr int MAX_FOUND_LIGHTS = 2; //fieldprep's large lights per time of day
-	constexpr int MAX_YOUR_LIGHTS = 6; //your own (marked in _LIGHTS.png or written into _lights.txt) per time of day
+	constexpr int MAX_LIGHTS = 8; //drawn at a time: the moving lights (the sun or moon, the party light) and the field's own
+	constexpr int MAX_FOUND_LIGHTS = 2; //fieldprep's large lights it finds per time of day
+	constexpr int MAX_YOUR_LIGHTS = 6; //your own (marked in _LIGHTS.png or written into _lights.txt) it keeps per time of day
+	//on at a time: by day two, the sun taking one place in a field that has it (so the sun and your light); by night six (the
+	//moon has the sun's place). 1 + 1 + 6 = MAX_LIGHTS, so no light drops out while day and night cross-fade. Within a time
+	//of day yours come first (in file order), then fieldprep's
+	constexpr int MAX_DAY_LIGHTS = 2;
+	constexpr int MAX_NIGHT_LIGHTS = 6;
 
 	//--- colour
 
@@ -239,6 +246,8 @@ namespace fieldpbr
 		float color[3] = { 1, 1, 1 }; //linear
 		float intensity = 0.0f; //light added on top of the painting (0: none)
 		float range = 64.0f; //native pixels at the light's depth
+		float nightRadius = -1.0f; //a night lamp: how far around it the painting keeps its light at night (native pixels); -1: range
+		float KeepRadius() const { return nightRadius > 0 ? nightRadius : range; }
 		bool baked = true; //in the painting already: flicker scales its painted light (the _LF mask)
 		Flicker flicker = Flicker::None;
 		float amount = 0.25f; //how deep the flicker goes (0-1)
@@ -309,9 +318,11 @@ namespace fieldpbr
 		bool hasParty = false; //the file has a [party] section
 	};
 	bool ParseLights(const std::string& text, Lights& out, std::string& warnings);
-	//only the lights that are on by day (time = day or both), at most MAX_FOUND_LIGHTS of fieldprep's and MAX_YOUR_LIGHTS
-	//of yours (the first in the file): the day's set (fieldprep's flicker mask and light grid are the day's)
-	void KeepDayLights(Lights& lights);
+	//only the day's set: the lights on by day (time = day or both), at most MAX_DAY_LIGHTS (yours first, then fieldprep's;
+	//places: fewer when the sun takes one). fieldprep's light grid is the day's
+	void KeepDayLights(Lights& lights, int places = MAX_DAY_LIGHTS);
+	//the lights in the day's set or the night's (each as ActiveLights picks them)
+	void KeepDayAndNightLights(Lights& lights);
 	//A light on now. weight: how much of it is on (fades with the time of day); nightLamp: on at night and painted, so the
 	//painting keeps its light around it at night
 	struct ActiveLight
@@ -320,12 +331,14 @@ namespace fieldpbr
 		float weight = 1.0f;
 		bool nightLamp = false;
 	};
-	//The lights on at `night` (0: day, 1: night, between: a fade). Each time of day has its set: at most MAX_FOUND_LIGHTS of
-	//fieldprep's and MAX_YOUR_LIGHTS of yours (the first in the file) among those on then (time = day or both, or night or
-	//both). The day's set is on at 1 - night, the night's at night; a light in both sets at 1. At most MAX_LIGHTS, in file
-	//order; more (only during a fade): the faintest are left out, `dropped` says how many.
+	//The lights on at `night` (0: day, 1: night, between: a fade). Each time of day has its set among the lights on then
+	//(time = day or both, or night or both): by day at most dayPlaces (MAX_DAY_LIGHTS, one fewer with the sun), by night
+	//MAX_NIGHT_LIGHTS; yours first (in file order), then fieldprep's. The night's set is on at `night`, the day's at dayOn
+	//(< 0: 1 - night; the clock's evening starts it going before the dusk), a light in both sets at 1. At most `limit`, in
+	//file order; more: the faintest are left out, `dropped` says how many.
 	//limit: fewer than MAX_LIGHTS when the moving lights need places among them.
-	std::vector<ActiveLight> ActiveLights(const Lights& lights, double night, size_t* dropped = nullptr, size_t limit = MAX_LIGHTS);
+	std::vector<ActiveLight> ActiveLights(const Lights& lights, double night, size_t* dropped = nullptr, size_t limit = MAX_LIGHTS,
+		double dayOn = -1.0, int dayPlaces = MAX_DAY_LIGHTS);
 
 	//--- the look (FIELD_PBR_LOOK in demaster.conf): how far the maps change the painting itself
 	//
@@ -376,12 +389,16 @@ namespace fieldpbr
 		double night = 240; //seconds of night (4 minutes)
 		double fade = 40; //seconds each fade takes
 		double battleSlower = 3; //battles run the clock this many times slower (24 + 12 minutes, 120 s fades)
+		double evening = 0.9; //the share of the day after which the day's own lights start going and the glows start coming on
 		double Length() const { return day + night; }
 		//no zero or negative lengths, fades no longer than the shorter of day and night
 		DayNightCycle Checked() const;
 	};
 	//how night it is at `time` seconds into the cycle: 0 day, 1 night, smooth across the fades
 	double NightAmount(const DayNightCycle& cycle, double time);
+	//the evening: like NightAmount, but its dusk starts at `evening` of the day (the day's own lights go 1 - this, the glows
+	//come on with it) and ends with the dusk's fade; the dawn is NightAmount's
+	double EveningAmount(const DayNightCycle& cycle, double time);
 	//the clock after `seconds` of play (in battle: battleSlower times slower), wrapped into the cycle
 	double AdvanceClock(const DayNightCycle& cycle, double time, double seconds, bool battle);
 	//mostly day now: the start of the full night; mostly night: the start of the full day

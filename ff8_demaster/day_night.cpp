@@ -66,6 +66,7 @@ namespace
 		c.night = DAY_NIGHT_NIGHT;
 		c.fade = DAY_NIGHT_FADE;
 		c.battleSlower = DAY_NIGHT_BATTLE;
+		c.evening = DAY_NIGHT_EVENING;
 		cycle = c.Checked();
 		clockTime = cycle.fade / 2; //a new game: the morning
 		bool fromFile = false;
@@ -330,6 +331,25 @@ double DayNightClockAmount()
 		return 0.0;
 	Start();
 	return fieldpbr::NightAmount(cycle, clockTime);
+}
+
+double DayNightClockEvening()
+{
+	if (!DAY_NIGHT)
+		return 0.0;
+	Start();
+	return fieldpbr::EveningAmount(cycle, clockTime);
+}
+
+double DayNightEvening(const fieldpbr::FieldTime time)
+{
+	if (!DAY_NIGHT)
+		return 0.0;
+	if (time == fieldpbr::FieldTime::Day)
+		return 0.0;
+	if (time == fieldpbr::FieldTime::Night)
+		return 1.0;
+	return DayNightClockEvening();
 }
 
 fieldpbr::SkyTime DayNightSky()

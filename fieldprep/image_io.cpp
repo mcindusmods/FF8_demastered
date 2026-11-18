@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -230,6 +231,70 @@ namespace fieldprep
 			return false;
 		}
 		return true;
+	}
+
+	bool SavePngNoted(const std::string& path, const Image& image, const char* keyword, const char* text, std::string& error)
+	{
+		lodepng::State state;
+		state.info_raw.colortype = LCT_RGBA;
+		state.info_raw.bitdepth = 8;
+		state.info_png.color.colortype = LCT_RGBA;
+		state.info_png.color.bitdepth = 8;
+		state.encoder.auto_convert = 0;
+		state.encoder.text_compression = 0; //a plain tEXt chunk (PngNote reads those)
+		lodepng_add_text(&state.info_png, keyword, text);
+		std::vector<unsigned char> png;
+		unsigned result = lodepng::encode(png, image.rgba, static_cast<unsigned>(image.width), static_cast<unsigned>(image.height), state);
+		if (result == 0)
+			result = lodepng::save_file(png, path);
+		if (result != 0)
+		{
+			error = lodepng_error_text(result);
+			return false;
+		}
+		return true;
+	}
+
+	std::string PngNote(const std::string& path, const char* keyword)
+	{
+		FILE* file = fopen(path.c_str(), "rb");
+		if (file == nullptr)
+			return "";
+		std::string found;
+		unsigned char head[8];
+		if (fread(head, 1, 8, file) == 8 && memcmp(head, "\x89PNG\r\n\x1a\n", 8) == 0)
+		{
+			const std::string want = keyword;
+			//the chunks: length (big-endian), type, data, CRC; lodepng writes its notes after the picture's data, so every
+			//chunk is passed over (by seeking: the picture isn't read) up to the end
+			for (int chunks = 0; chunks < 100000; chunks++)
+			{
+				unsigned char c[8];
+				if (fread(c, 1, 8, file) != 8)
+					break;
+				const uint32_t length = static_cast<uint32_t>(c[0]) << 24 | c[1] << 16 | c[2] << 8 | c[3];
+				const std::string type(reinterpret_cast<const char*>(c + 4), 4);
+				if (type == "IEND" || length > (1u << 30))
+					break;
+				if (type != "tEXt" || length > (1u << 20))
+				{
+					if (fseek(file, static_cast<long>(length) + 4, SEEK_CUR) != 0)
+						break;
+					continue;
+				}
+				std::string data(length, '\0');
+				if (fread(data.data(), 1, length, file) != length || fseek(file, 4, SEEK_CUR) != 0)
+					break;
+				const size_t zero = data.find('\0');
+				if (zero != std::string::npos && data.compare(0, zero, want) == 0 && zero == want.size())
+				{
+					found = data.substr(zero + 1);
+					break;
+				}
+			}
+		}
+		fclose(file);
+		return found;
 	}
 
 	bool SaveGrayPng(const std::string& path, const Gray& image, const bool sixteen, std::string& error)

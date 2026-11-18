@@ -161,7 +161,7 @@ static void TestLights()
 		light.specular = 0.5f;
 		light.note = "found";
 		light.source = i == 0 ? LightSource::Found : i == 1 ? LightSource::Mark : LightSource::Yours;
-		light.time = i == 0 ? LightTime::Day : LightTime::Both;
+		light.time = i == 0 ? LightTime::Day : i == 1 ? LightTime::Both : LightTime::Night; //two by day, two by night: no warning
 		l.lights.push_back(light);
 	}
 	l.emissive.hue = -40.5f;
@@ -216,12 +216,15 @@ static void TestLights()
 	CHECK(r.lights[3].name == "light 4");
 	CHECK(warnings.find("can't read flicker") != std::string::npos);
 	CHECK(warnings.find("can't read range") != std::string::npos);
-	CHECK(warnings.find("more than 6 of your own lights on by day") != std::string::npos);
-	CHECK(warnings.find("of fieldprep's lights") == std::string::npos);
+	CHECK(warnings.find("20 lights on by day: DEMASTER uses 2") != std::string::npos);
+	CHECK(warnings.find("20 lights on by night: DEMASTER uses 6") != std::string::npos);
 	{
 		Lights day = r;
 		KeepDayLights(day);
-		CHECK(day.lights.size() == static_cast<size_t>(MAX_YOUR_LIGHTS));
+		CHECK(day.lights.size() == static_cast<size_t>(MAX_DAY_LIGHTS));
+		day = r;
+		KeepDayLights(day, 1); //the sun has the other place
+		CHECK(day.lights.size() == 1 && day.lights[0].name == "light 1");
 	}
 	//per time of day: 2 of fieldprep's and 6 of yours (marks count as yours); 6 + 6 of yours and 2 + 2 found, day and
 	//night, is fine; a third found light by night warns; more than 32 aren't read
@@ -234,17 +237,27 @@ static void TestLights()
 		Lights h;
 		std::string w;
 		ParseLights(halves, h, w);
-		CHECK(h.lights.size() == 16 && w.empty());
+		CHECK(h.lights.size() == 16);
+		CHECK(w.find("8 lights on by day: DEMASTER uses 2") != std::string::npos && w.find("8 lights on by night: DEMASTER uses 6") != std::string::npos);
 		CHECK(h.lights[0].source == LightSource::Mark && h.lights[1].source == LightSource::Yours && h.lights[12].source == LightSource::Found);
+		//by day: yours first (the first two in the file), fieldprep's left out
 		Lights day = h;
 		KeepDayLights(day);
-		CHECK(day.lights.size() == 8);
-		ParseLights(halves + "[light]\nposition = 1 2 0.5\nsource = found\n", h, w);
-		CHECK(w.find("more than 2 of fieldprep's lights on by night: only the first 2 are used") != std::string::npos);
-		CHECK(w.find("more than 2 of fieldprep's lights on by day") != std::string::npos); //time left out: both
+		CHECK(day.lights.size() == 2 && day.lights[0].source != LightSource::Found && day.lights[1].source != LightSource::Found);
+		//day and night sets together: 2 + 6, all yours
+		Lights both = h;
+		KeepDayAndNightLights(both);
+		CHECK(both.lights.size() == 8 && std::none_of(both.lights.begin(), both.lights.end(), [](const Light& l) { return l.source == LightSource::Found; }));
+		//only fieldprep's: they fill the places
+		std::string found;
+		for (int i = 0; i < 4; i++)
+			found += std::string("[light]\nposition = 1 2 0.5\nsource = found\ntime = ") + (i < 2 ? "day" : "night") + "\n";
+		w.clear();
+		ParseLights(found, h, w);
+		CHECK(w.empty());
 		day = h;
-		KeepDayLights(day); //the third found one isn't used
-		CHECK(day.lights.size() == 8 && std::count_if(day.lights.begin(), day.lights.end(), [](const Light& l) { return l.source == LightSource::Found; }) == 2);
+		KeepDayLights(day);
+		CHECK(day.lights.size() == 2 && day.lights[0].source == LightSource::Found);
 		CHECK(!ParseLights("[light]\nsource = someone\n", h, w) || w.find("can't read source") != std::string::npos);
 		std::string lots;
 		for (int i = 0; i < 40; i++)
@@ -1286,12 +1299,16 @@ static void TestDayNight()
 					return a.weight;
 			return 0.0;
 		};
+		//by day two: yours (4) first, then fieldprep's first (0); 1 (fieldprep's second) is left out by day
 		std::vector<ActiveLight> day = ActiveLights(l, 0.0);
-		CHECK(day.size() == 3);
-		NEAR(weightOf(day, 0), 1.0, 1e-6);
-		NEAR(weightOf(day, 1), 1.0, 1e-6);
+		CHECK(day.size() == 2);
 		NEAR(weightOf(day, 4), 1.0, 1e-6);
+		NEAR(weightOf(day, 0), 1.0, 1e-6);
+		NEAR(weightOf(day, 1), 0.0, 1e-6);
 		NEAR(weightOf(day, 2), 0.0, 1e-6);
+		//with the sun out only yours
+		std::vector<ActiveLight> sunny = ActiveLights(l, 0.0, nullptr, MAX_LIGHTS, -1.0, 1);
+		CHECK(sunny.size() == 1 && sunny[0].index == 4);
 		std::vector<ActiveLight> night = ActiveLights(l, 1.0);
 		CHECK(night.size() == 3);
 		NEAR(weightOf(night, 1), 1.0, 1e-6);
@@ -1300,45 +1317,84 @@ static void TestDayNight()
 		for (const ActiveLight& a : night)
 			CHECK(a.nightLamp == (a.index == 1 || a.index == 2)); //on at night and painted (3 is a new light)
 		for (const ActiveLight& a : day)
-			CHECK(a.nightLamp == (a.index == 1));
+			CHECK(!a.nightLamp);
 		std::vector<ActiveLight> fade = ActiveLights(l, 0.25);
 		CHECK(fade.size() == 5);
 		NEAR(weightOf(fade, 0), 0.75, 1e-6);
-		NEAR(weightOf(fade, 1), 1.0, 1e-6);
+		NEAR(weightOf(fade, 1), 0.25, 1e-6); //in the night's set only (the day's two places are taken)
 		NEAR(weightOf(fade, 2), 0.25, 1e-6);
+		//the evening: the day's lights go with dayOn, the night's with the night; a light in both sets stays at 1
+		std::vector<ActiveLight> evening = ActiveLights(l, 0.1, nullptr, MAX_LIGHTS, 0.6);
+		NEAR(weightOf(evening, 4), 0.6, 1e-6);
+		NEAR(weightOf(evening, 2), 0.1, 1e-6);
 		bool inOrder = true;
 		for (size_t i = 1; i < fade.size(); i++)
 			inOrder = inOrder && fade[i - 1].index < fade[i].index;
 		CHECK(inOrder);
-		//a third found light at night isn't used, as the file's warning says
-		add(LightTime::Night, LightSource::Found); //5
-		NEAR(weightOf(ActiveLights(l, 1.0), 5), 0.0, 1e-6);
+		//by night six: more are left out (yours first)
+		for (int i = 0; i < 4; i++)
+			add(LightTime::Night, LightSource::Yours); //5-8
+		std::vector<ActiveLight> full = ActiveLights(l, 1.0);
+		CHECK(full.size() == 6);
+		NEAR(weightOf(full, 1), 1.0, 1e-6); //five of yours, then fieldprep's first one on at night (1, on day and night)
+		NEAR(weightOf(full, 2), 0.0, 1e-6); //fieldprep's second: no place left
 		//the day set is the same as KeepDayLights
 		Lights kept = l;
 		KeepDayLights(kept);
 		CHECK(kept.lights.size() == ActiveLights(l, 0.0).size());
 	}
-	//16 lights in a fade: the 8 brightest stay
+	//16 lights: the day's 2 and the night's 6 fit MAX_LIGHTS in a fade, so none drops out; with two moving lights the faintest go
 	{
 		Lights l;
 		for (int i = 0; i < 16; i++)
 		{
 			Light light;
-			light.time = i < 8 ? (i < 2 ? LightTime::Day : LightTime::Day) : LightTime::Night;
+			light.time = i < 8 ? LightTime::Day : LightTime::Night;
 			light.source = i % 8 < 2 ? LightSource::Found : LightSource::Yours;
 			light.name = "l" + std::to_string(i);
 			l.lights.push_back(light);
 		}
 		size_t dropped = 0;
 		std::vector<ActiveLight> on = ActiveLights(l, 0.3, &dropped);
-		CHECK(on.size() == static_cast<size_t>(MAX_LIGHTS) && dropped == 8);
+		CHECK(on.size() == static_cast<size_t>(MAX_DAY_LIGHTS + MAX_NIGHT_LIGHTS) && dropped == 0);
+		on = ActiveLights(l, 0.3, &dropped, MAX_LIGHTS - 2);
+		CHECK(on.size() == static_cast<size_t>(MAX_LIGHTS - 2) && dropped == 2);
 		for (const ActiveLight& a : on)
-			CHECK(a.index < 8); //the day's, at 0.7
-		on = ActiveLights(l, 0.8, &dropped);
-		for (const ActiveLight& a : on)
-			CHECK(a.index >= 8);
+			CHECK(a.index < 8 || a.weight >= 0.3f - 1e-6f);
 		on = ActiveLights(l, 1.0, &dropped);
-		CHECK(on.size() == 8 && dropped == 0);
+		CHECK(on.size() == static_cast<size_t>(MAX_NIGHT_LIGHTS) && dropped == 0);
+		for (const ActiveLight& a : on)
+			CHECK(a.index >= 10); //yours (10-15); fieldprep's 8 and 9 come after them
+	}
+	//the evening (DAY_NIGHT_EVENING): starts at 0.9 of the day, done with the dusk's fade, the dawn as the night's
+	{
+		DayNightCycle c; //480 + 240, 40 s fades
+		NEAR(EveningAmount(c, 400), 0.0, 1e-9);
+		NEAR(EveningAmount(c, 432), 0.0, 1e-9);
+		CHECK(EveningAmount(c, 450) > 0.05 && NightAmount(c, 450) == 0.0);
+		CHECK(EveningAmount(c, 470) > NightAmount(c, 470));
+		NEAR(EveningAmount(c, 500), 1.0, 1e-9);
+		NEAR(EveningAmount(c, 600), 1.0, 1e-9);
+		NEAR(EveningAmount(c, 715), NightAmount(c, 715), 1e-9);
+		NEAR(EveningAmount(c, 10), NightAmount(c, 10), 1e-9);
+		c.evening = 1.0; //with the fade itself: the night's
+		for (double t = 0; t < 720; t += 7)
+			NEAR(EveningAmount(c, t), NightAmount(c, t), 1e-9);
+	}
+	//night_radius: read, written, and what the keep window reaches
+	{
+		Lights l;
+		std::string w;
+		CHECK(ParseLights("[light]\nposition = 1 2 0.5\nrange = 40\nnight_radius = 90\ntime = night\n[light]\nposition = 3 4 0.5\n", l, w));
+		CHECK(w.empty() && l.lights.size() == 2);
+		NEAR(l.lights[0].KeepRadius(), 90.0f, 1e-6f);
+		NEAR(l.lights[1].KeepRadius(), l.lights[1].range, 1e-6f);
+		const std::string text = WriteLights(l, "f", "");
+		CHECK(text.find("night_radius = 90.0") != std::string::npos);
+		Lights again;
+		ParseLights(text, again, w);
+		NEAR(again.lights[0].nightRadius, 90.0f, 1e-6f);
+		CHECK(again.lights[1].nightRadius < 0);
 	}
 	//[night]: read, written, defaults, nonsense
 	{
@@ -1736,12 +1792,13 @@ static void TestMovingLights()
 		{
 			Light l;
 			l.source = i < 2 ? LightSource::Found : LightSource::Yours;
+			l.time = LightTime::Night;
 			lights.lights.push_back(l);
 		}
 		size_t dropped = 0;
-		CHECK(ActiveLights(lights, 0.0, &dropped).size() == 8 && dropped == 0);
-		CHECK(ActiveLights(lights, 0.0, &dropped, 6).size() == 6 && dropped == 2);
-		CHECK(ActiveLights(lights, 0.0, &dropped, 100).size() == 8);
+		CHECK(ActiveLights(lights, 1.0, &dropped).size() == static_cast<size_t>(MAX_NIGHT_LIGHTS) && dropped == 0);
+		CHECK(ActiveLights(lights, 1.0, &dropped, 4).size() == 4 && dropped == 2);
+		CHECK(ActiveLights(lights, 1.0, &dropped, 100).size() == static_cast<size_t>(MAX_NIGHT_LIGHTS));
 	}
 }
 
@@ -1789,7 +1846,7 @@ static void TestEmissivePicture()
 	Lights bad;
 	ParseLights("[emissive]\nday = 3\n", bad, warnings);
 	CHECK(bad.emissive.day == 0.0f && warnings.find("day") != std::string::npos);
-	CHECK(std::string(KindSuffix(EMISSIVE)) == "_EC" && KIND_COUNT == 5);
+	CHECK(std::string(KindSuffix(EMISSIVE)) == "_EC" && std::string(KindSuffix(NIGHT)) == "_nt_A" && KIND_COUNT == 6);
 }
 
 //SCENE_LIGHT's rules (scene_light.h): battles and the world map
@@ -1801,10 +1858,15 @@ static void TestSceneLight()
 	using scenelight::NightHere;
 	scenelight::Settings s;
 	std::string w;
-	//the file DEMASTER writes is understood without a warning and holds the defaults and the Lunar Cry's rule
+	//the file DEMASTER writes is understood without a warning and holds the defaults; the Lunar Cry's rule is there but off
 	scenelight::Parse(scenelight::DefaultText(), s, w);
 	CHECK(w.empty());
 	CHECK(s.battle.night == -1 && s.battle.time == Time::Cycle && s.world.nightLevel == 0.3f && s.battle.ao == 0.5f);
+	CHECK(s.rules.empty());
+	CHECK(scenelight::DefaultText().find(";[rule lunar cry]") != std::string::npos);
+	//the rule as it was written before, taken away again, for the checks below
+	s = {};
+	scenelight::Parse("[rule lunar cry]\nwhere = both\nmoment = 3000-65535\nday_tint = 1 0.94 0.92\nnight_tint = 1 0.5 0.45\n", s, w);
 	CHECK(s.rules.size() == 1 && s.rules[0].name == "lunar cry" && s.rules[0].momentFrom == 3000 && s.rules[0].momentTo == 65535);
 	CHECK(s.rules[0].hasNightTint && s.rules[0].hasDayTint && !s.rules[0].hasNightLevel && !s.rules[0].hasNight);
 	//before the Lunar Cry: the place's own; after: the rule's tints over it, the rest untouched; unknown moment: not applied
@@ -1949,7 +2011,7 @@ static void TestSceneCamera()
 		CHECK(w.find(part) != std::string::npos);
 	w.clear();
 	scenelight::Parse(scenelight::DefaultText(), s, w);
-	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.size() == 1);
+	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.empty());
 }
 
 int main(int argc, char** argv)

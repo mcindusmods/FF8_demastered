@@ -28,6 +28,10 @@ double DayNightClockAmount();
 fieldpbr::FieldTime DayNightPlaceTime();
 //for a field with this time setting: its own (day 0, night 1) or the clock's
 double DayNightAmount(fieldpbr::FieldTime time);
+//the evening (DAY_NIGHT_EVENING): like the night amount, but its dusk starts earlier. The day's own lights go out with
+//1 - this and the glows come on with it. The clock's, or a field's fixed time
+double DayNightClockEvening();
+double DayNightEvening(fieldpbr::FieldTime time);
 //where the clock is on the sun's arc (by day) or the moon's (by night), for the moving lights. With DAY_NIGHT off: the day,
 //mid-morning. Renderer thread
 fieldpbr::SkyTime DayNightSky();

@@ -85,7 +85,7 @@ namespace scenelight
 
 	//warnings: one line each ("line 12: ..."), empty when all was understood. Unknown keys are skipped
 	void Parse(const std::string& text, Settings& settings, std::string& warnings);
-	//the file DEMASTER writes when there is none: the defaults, explained, with a rule for the Lunar Cry
+	//the file DEMASTER writes when there is none: the defaults, explained, with a rule for the Lunar Cry (left off: ; before it)
 	std::string DefaultText();
 
 	//The look in effect. stage: the battle stage (-1: not known); moment: the story's progress (-1: not known: rules with

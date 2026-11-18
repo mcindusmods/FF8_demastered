@@ -49,7 +49,10 @@ namespace fieldrt
 			std::array<std::string, fieldpbr::KIND_COUNT> stem; //no extension; empty: none
 			std::array<std::string, fieldpbr::KIND_COUNT> path; //file in use
 			bool ownLightmap = false; //<field>_<pupu>_LF (else the field's)
-		bool emissive = false; //its ORM map is an _ORME (alpha: emissive); an older _ORMH's alpha (height) isn't used
+			bool emissive = false; //its ORM map is an _ORME (alpha: emissive); an older _ORMH's alpha (height) isn't used
+			//a picture of an animation state without an _A of its own (its state's first picture has one): its painting is
+			//drawn, and the shader takes the albedo out of it (painting / lightmap), so the frame is lit like the rest
+			bool painted = false;
 		};
 		std::unordered_map<uint32_t, Layer> layers; //PBR layers only
 		std::string roomStem; //<field>_ND (the whole field on the canvas: the room's depth); empty: none
@@ -174,6 +177,8 @@ namespace fieldrt
 	//the character module, once per frame before anything asks for the lights: the characters it drew this frame, and the
 	//"playable character" byte most of the field's script entities have (-1: not known)
 	void MovingLightsCharacters(uint64_t entry, const std::vector<fieldpbr::LeaderCandidate>& drawn, int pcOfMost, int controlled);
+	//the sun (the moon by night) is out in this field: it takes one of the day's MAX_DAY_LIGHTS places
+	bool MovingSunOut(const fieldpbr::Settings& settings, const fieldpbr::Lights& lights);
 	//how many places among the field's lights they need now (0 to MAX_MOVING_LIGHTS)
 	int MovingLightsWanted(const fieldpbr::Settings& settings, const fieldpbr::Lights& lights, double night);
 	//the moving lights that are on now, into out (MAX_MOVING_LIGHTS of them); how many

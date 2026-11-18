@@ -473,8 +473,11 @@ namespace
 					{
 						next.paintingPath[pupu] = path;
 						next.paintingStem[pupu] = stem;
-						path = layer->second.path[fieldpbr::ALBEDO];
-						stem = layer->second.stem[fieldpbr::ALBEDO];
+						if (!layer->second.painted) //a frame without an _A keeps its painting (the shader takes the albedo out)
+						{
+							path = layer->second.path[fieldpbr::ALBEDO];
+							stem = layer->second.stem[fieldpbr::ALBEDO];
+						}
 					}
 				it = next.imagePath.emplace(pupu, path).first;
 				if (it->second.empty())

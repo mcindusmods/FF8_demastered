@@ -48,13 +48,13 @@ night_level = 0.3
 ;            floor; r g b: its colour (linear, may be above 1); range: how far it reaches; night or day: only then
 ; Later rules go over earlier ones.
 
-; After the Lunar Cry (the counter is 3000 once the Ragnarok is yours): the night is red instead of blue.
-; Change the colours to taste, or delete the rule.
-[rule lunar cry]
-where = both
-moment = 3000-65535
-day_tint = 1 0.94 0.92
-night_tint = 1 0.5 0.45
+; The Lunar Cry: off until the story counter's value there is known (from the game's code). Then take the ; away
+; and set its moment; the tints make the night red instead of blue.
+;[rule lunar cry]
+;where = both
+;moment = 3000-65535
+;day_tint = 1 0.94 0.92
+;night_tint = 1 0.5 0.45
 
 ; Examples (take the ; away):
 ;[rule a cave]

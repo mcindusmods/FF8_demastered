@@ -64,6 +64,7 @@ inline double DAY_NIGHT_DAY;          //seconds of day in fields, the world map 
 inline double DAY_NIGHT_NIGHT;        //seconds of night (240)
 inline double DAY_NIGHT_FADE;         //seconds a fade between them takes (40)
 inline double DAY_NIGHT_BATTLE;       //battles run the clock this many times slower (3)
+inline double DAY_NIGHT_EVENING;      //the share of the day after which the day's lights start going, the glows coming (0.9)
 inline int DAY_NIGHT_KEYS;            //Ctrl+F7 swap, Ctrl+F8 pause, Ctrl+F9 speed (1x, 10x, 60x), Ctrl+F6 to just before the next fade
 inline int DAY_NIGHT_BAR;             //a thin bar across the top while the clock is paused or sped up (and after a key)
 inline double FIELD_PBR_LOOK;         //the look's master dial: how far the maps change the painting itself (0: not at all; 1; up to 2)

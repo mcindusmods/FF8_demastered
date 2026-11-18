@@ -99,6 +99,7 @@ namespace
 		int mode = -1, stage = -1;
 		float multiplier[3] = { 1, 1, 1 };
 		float night = 0, ao = 0, glow = 1;
+		float evening = 0; //the glows and the day-only lights go with this (DAY_NIGHT_EVENING: earlier than the night)
 		bool on = false;
 		bool sunByClock = false; //the night comes here: the sun and the moon go by the clock (else they stand at their highest)
 	} now;
@@ -174,25 +175,29 @@ namespace
 		const int moment = Moment();
 		const scenelight::Look look = scenelight::Resolve(settings, battle ? scenelight::Where::Battle : scenelight::Where::World,
 			currentStage, moment);
-		//the clock, or the time of the place the battle started in when that is fixed (a field with time = day or night)
+		//the clock; a battle started in a field with a fixed time (time = day or night in its _pbr.txt: an inside place, a
+		//story scene) is fought by day: the field's time is for its own lights, the stage has its own
 		const fieldpbr::FieldTime place = DayNightPlaceTime();
-		const bool outdoors = !battle || fromWorld || fieldSky || place == fieldpbr::FieldTime::Night;
-		const double night = scenelight::NightHere(look, battle ? DayNightAmount(place) : DayNightClockAmount(), outdoors);
+		const bool fixedPlace = battle && !fromWorld && place != fieldpbr::FieldTime::Cycle;
+		const bool outdoors = !battle || fromWorld || fieldSky;
+		const double night = scenelight::NightHere(look, fixedPlace ? 0.0 : DayNightClockAmount(), outdoors);
+		const double evening = scenelight::NightHere(look, fixedPlace ? 0.0 : DayNightClockEvening(), outdoors);
 		if (SCENE_DEBUG && (now.mode != mode || now.stage != currentStage))
 			OutputDebug("SCENE_LIGHT: %s%s, the story's counter is %d; the night %s here (%s), now %.2f\n", battle ? "battle, stage " : "the world map",
 				battle ? std::to_string(currentStage).c_str() : "", moment, look.time != scenelight::Time::Cycle ? "is fixed" : look.night == 0
 				? "doesn't come" : look.night > 0 || outdoors ? "comes" : "doesn't come", battle ? (fromWorld ? "started on the world map"
-				: fieldSky ? "started in a field open to the sky" : place == fieldpbr::FieldTime::Night ? "started in a field that is always night"
+				: fixedPlace ? "started in a field with a fixed time: fought by day" : fieldSky ? "started in a field open to the sky"
 				: "started in a field that isn't open to the sky") : "the world map", night);
 		now.at = tick;
 		now.mode = mode;
 		now.stage = currentStage;
 		scenelight::Multiplier(look, night, now.multiplier);
 		now.night = static_cast<float>(night);
+		now.evening = static_cast<float>(evening);
 		now.ao = look.ao;
 		now.glow = look.glow;
 		now.on = true;
-		now.sunByClock = look.time == scenelight::Time::Cycle && scenelight::NightHere(look, 1.0, outdoors) > 0.0;
+		now.sunByClock = !fixedPlace && look.time == scenelight::Time::Cycle && scenelight::NightHere(look, 1.0, outdoors) > 0.0;
 		if (battle)
 			battleLook = look;
 	}
@@ -247,7 +252,7 @@ namespace
 			size_t count = 0;
 			for (const scenelight::Light& light : battleLook.lights)
 			{
-				const float on = light.when == 1 ? now.night : light.when == 2 ? 1.0f - now.night : 1.0f;
+				const float on = light.when == 1 ? now.night : light.when == 2 ? 1.0f - now.evening : 1.0f;
 				if (on <= 0.0f || count >= scenelight::MAX_LIGHTS)
 					continue;
 				const double place[3] = { light.x, -light.up, light.z }; //the stage's y runs down
@@ -572,7 +577,7 @@ void SceneLightBeforeDraw(const int count)
 				if (glstate::ActiveTexture() != active)
 					glActiveTexture(active);
 				mapsValue[0] = t.glows != 0 ? 1.0f : 0.0f;
-				mapsValue[1] = now.night;
+				mapsValue[1] = now.evening;
 				mapsValue[2] = now.glow;
 				mapsValue[3] = t.orm != 0 ? now.ao : 0.0f;
 			}

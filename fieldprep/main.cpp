@@ -440,6 +440,21 @@ namespace
 		}
 		for (const int64_t t : set.tile)
 			tilesWithout += t < 0;
+		//the whole field (<field>.png) is put together from the opaque tiles: a tile there without a picture would leave a
+		//hole in it, and everything made from it (albedo, lightmap, lights) would be wrong without saying so. Stop instead
+		std::set<std::string> missing;
+		for (const size_t i : CompositeTiles(f.tiles))
+			if (i < set.tile.size() && set.tile[i] < 0)
+				missing.insert(f.stem + "_" + fieldlayers::PupuHex(pupuNames.name[i]) + ".png (FME: " + f.stem + "_" +
+					fieldlayers::PupuHex(f.fme.pupu[i]) + ".png)");
+		if (!missing.empty())
+		{
+			Say("  ERROR: %zu opaque layer image(s) the whole field needs are missing (or were skipped above), so nothing was written:\n", missing.size());
+			for (const std::string& name : missing)
+				Say("    %s\n", name.c_str());
+			Say("  Put them next to the others (either name works) and run fieldprep again.\n");
+			return false;
+		}
 		std::map<std::pair<int, int>, std::vector<fieldlayers::Frame>> bySize;
 		for (size_t i = 0; i < f.tiles.size(); i++)
 			if (f.tiles[i].blend == 4 && set.tile[i] >= 0)
@@ -460,12 +475,20 @@ namespace
 		return true;
 	}
 
+	//the note in the <field>.png fieldprep writes, so a later run can tell it from yours
+	constexpr const char* COMPOSITE_NOTE = "DEMASTER fieldprep (put together from the layer images)";
+
 	//<field>.png: the opaque layers put together (yours if it's there)
 	bool LoadComposite(FieldInput& f, const Options& o, const bool write)
 	{
 		const std::string path = NewestImage(f.folder + f.stem);
 		std::string error;
-		if (!path.empty() && !(write && o.force))
+		//fieldprep's own <field>.png from an earlier run is put together again (the layers may have changed since); only one
+		//you made or painted over (no fieldprep note in it) is used as it is
+		const bool ours = !path.empty() && PngNote(path, "Software").rfind(COMPOSITE_NOTE, 0) == 0;
+		if (ours)
+			Say("  %s: fieldprep's own from an earlier run, put together again\n", Name(path).c_str());
+		if (!path.empty() && !ours && !(write && o.force))
 		{
 			if (LoadRgba(path, f.composite, error))
 			{
@@ -484,7 +507,7 @@ namespace
 		size_t holes = 0;
 		for (size_t i = 3; i < f.composite.rgba.size(); i += 4)
 			holes += f.composite.rgba[i] == 0;
-		if (!SavePng(f.folder + f.stem + ".png", f.composite, error))
+		if (!SavePngNoted(f.folder + f.stem + ".png", f.composite, "Software", COMPOSITE_NOTE, error))
 			Say("  ERROR writing %s.png: %s\n", f.stem.c_str(), error.c_str());
 		else
 			Say("  the whole field: %s.png, put together from the opaque layers (first animation states)%s\n", f.stem.c_str(),
@@ -622,6 +645,15 @@ namespace
 		settings.lightmapScale = field.scale;
 		Say("  lightmap: up to %.2f x the albedo%s%s\n", field.scale, tint.IsValid() ? ", the bounced light's tint moved into it" : "",
 			field.raised ? (", albedo raised in " + std::to_string(field.raised) + " pixels so the painting fits").c_str() : "");
+		//an albedo much darker than the painting: the split puts the difference into the lightmap, so the field's light is
+		//brighter than any lamp could make it; at night (when DEMASTER dims the painted light) and with the look's relight it
+		//shows as the wrong colours. Usually the albedo picture is from another source or another version of the painting
+		const double share = static_cast<double>(field.raised) / std::max<size_t>(1, static_cast<size_t>(width) * height);
+		if (field.scale >= 6.0f || field.typical >= 2.0f || share > 0.05)
+			Say("  WARNING: the albedo is much darker than the painting (the light is %.1f x the albedo on most of the field, up to "
+				"%.1f x%s). Check the albedo picture: is it made from this painting (same version, same layers)? A lightmap this "
+				"strong turns grey or too dark at night and when the look relights the field\n", field.typical, field.scale,
+				share > 0.05 ? (", raised in " + std::to_string(static_cast<int>(100.0 * share + 0.5)) + "% of it").c_str() : "");
 		Image fieldAlbedoDecoded;
 		if (o.dds)
 			fieldAlbedoDecoded = DecodeBc7(EncodeBc7(field.albedo, true, o.threads), width, height);
@@ -752,7 +784,8 @@ namespace
 			const std::string written = fieldpbr::WriteLights(lights, f.stem, "Lights fieldprep found by inverse lighting: the large lamps whose "
 				"light best explains the painting's (the\nday) and _RESM's glows (the night), at most " + std::to_string(fieldpbr::MAX_FOUND_LIGHTS)
 				+ " each; the same lamp in both is on day and night (time = both).\nSmall lights are for the emissive texture and for your own: "
-				"add up to " + std::to_string(fieldpbr::MAX_YOUR_LIGHTS) + " per time of day here (source =\nyours, or leave source out; "
+				"by day " + std::to_string(fieldpbr::MAX_DAY_LIGHTS) + " are on (the sun is one where it is out), by night "
+				+ std::to_string(fieldpbr::MAX_NIGHT_LIGHTS) + ", yours before fieldprep's.\nAdd yours here (source = yours, or leave source out; "
 				"fieldprep keeps them when it finds the lights again) or mark them in " + f.stem + "_LIGHTS.png\n(on black: green a day lamp, "
 				"blue a night lamp, cyan both, red keeps lamps away). Day and night lights cross-fade with\nDEMASTER's day/night clock. None flicker yet: set flicker on the ones "
 				"that should, then run fieldprep again (the flicker mask goes into _LF).");
@@ -772,13 +805,31 @@ namespace
 				}
 			}
 		}
-		//the day's lights for the flicker mask and the light grid: the painting is the day (at night DEMASTER dims it and keeps
-		//the painted light around the night's lamps)
-		fieldpbr::Lights dayLights = lights;
+		//the flicker mask: around the day's lamps from the bounced light (else the lightmap), around the night's from what
+		//_RESM's glows give off; each pixel goes with the stronger. DEMASTER flickers a pixel with the lamp that is on and
+		//reaches it, so a night lamp's part only moves at night. The light grid is the day's (the painting is the day)
+		fieldpbr::Lights dayLights = lights, nightLights = lights;
 		fieldpbr::KeepDayLights(dayLights);
-		const Gray mask = FlickerMask(dayLights, field.light, depth, normal, settings.space, scale);
+		fieldpbr::KeepDayAndNightLights(nightLights);
+		{
+			std::vector<fieldpbr::Light> onlyNight;
+			for (const fieldpbr::Light& l : nightLights.lights)
+				if (l.time == fieldpbr::LightTime::Night)
+					onlyNight.push_back(l);
+			nightLights.lights = std::move(onlyNight);
+		}
+		Gray mask = FlickerMask(dayLights, haveBounced && bounced.width == width ? bounced : field.light, depth, normal, settings.space, scale);
+		if (haveResidual && residual.width == width && !nightLights.lights.empty())
+		{
+			const Gray night = FlickerMask(nightLights, residual, depth, normal, settings.space, scale);
+			if (night.IsValid() && night.v.size() == mask.v.size())
+				for (size_t i = 0; i < mask.v.size(); i++)
+					mask.v[i] = std::max(mask.v[i], night.v[i]);
+		}
 		size_t flickering = 0;
 		for (const fieldpbr::Light& l : dayLights.lights)
+			flickering += l.OwnsMask();
+		for (const fieldpbr::Light& l : nightLights.lights)
 			flickering += l.OwnsMask();
 
 		//for the characters: where the foreground tiles really are, the game's depth scale, the camera, the sky, the light grid
@@ -1182,7 +1233,20 @@ namespace
 		if (!o.dds)
 			return;
 		size_t written = 0, upToDate = 0;
+		//the layer images, and the night pictures you made for them (<layer>_nt_A.png, or the whole field's <field>_nt_A.png)
+		std::vector<std::string> pictures;
 		for (const auto& [pupu, path] : f.layerPath)
+			pictures.push_back(path);
+		std::vector<std::string> nightStems{ f.folder + f.stem };
+		for (const auto& [pupu, layerStem] : f.layerStem)
+			nightStems.push_back(layerStem);
+		for (const std::string& stem : nightStems)
+		{
+			std::error_code error;
+			if (fs::exists(stem + "_nt_A.png", error))
+				pictures.push_back(stem + "_nt_A.png");
+		}
+		for (const std::string& path : pictures)
 		{
 			if (path.size() < 4 || Lower(path.substr(path.size() - 4)) != ".png")
 				continue; //only a DDS (you moved the PNG away): nothing to make it from
@@ -1298,6 +1362,8 @@ namespace
 			"  <field>_<pupu>_AM.png (and _N, _DEPTH, _O, _R, _M, _E)   one layer's own, where it differs\n"
 			"  <field>_LIGHTS.png   your light marks on black: pure green (0,255,0) dots add a day lamp each, blue (0,0,255) a night\n"
 			"                       lamp, cyan (0,255,255) one on day and night; pure red (255,0,0) keeps lamps away from what it covers\n"
+			"  <field>_<pupu>_nt_A.png   a layer's night picture (a night sky, night water): DEMASTER shows it as painted at\n"
+			"                       night (alpha: how much of it). fieldprep only makes its DDS; <field>_nt_A.png covers the canvas\n"
 			"The field's .map, camera and walkmesh come from <field>.map/.ca/.id in the folder, else DEMASTER_EXP\\data\\field.fs,\n"
 			"else the game's main.zzz.\n"
 			"\n"

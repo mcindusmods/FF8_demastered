@@ -42,6 +42,8 @@ namespace fieldprep
 	//the same z on top, each animation in its first state. layers: pupu -> image (canvas x scale)
 	Image ComposeOpaque(const std::vector<fieldlayers::Tile>& tiles, const fieldlayers::Layout& layout,
 		const std::map<uint32_t, const Image*>& layers, int scale);
+	//the tiles ComposeOpaque puts together (opaque, each animation's first state), in the order it draws them
+	std::vector<size_t> CompositeTiles(const std::vector<fieldlayers::Tile>& tiles);
 	//The glow layers (blend 1 and 3): how much light they add, per pixel (luminance x coverage)
 	Gray GlowLayers(const std::vector<fieldlayers::Tile>& tiles, const fieldlayers::Layout& layout,
 		const std::map<uint32_t, const Image*>& layers, int scale);
@@ -92,7 +94,8 @@ namespace fieldprep
 		Image albedo; //sRGB, alpha from coverage
 		Rgb light; //linear, albedo x light = painting
 		float scale = 1.0f; //the brightest light kept (what 255 in _LF means)
-		size_t raised = 0; //pixels whose albedo was raised so the light fits under the scale
+		size_t raised = 0; //pixels whose albedo was raised (by more than 2 steps of 255) so the light fits under the scale
+		float typical = 0.0f; //the median of painting / albedo (when the scale was picked): about 1-2 when the two match
 	};
 	//albedo: the albedo wanted (linear; it is raised where the painting is brighter than it can hold), painting: sRGB with
 	//coverage in alpha. The albedo is rounded to 8 bits first and the light worked out from that, so the two multiply back

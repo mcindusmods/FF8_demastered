@@ -104,6 +104,11 @@ void fieldrt::MovingLightsCharacters(const uint64_t entry, const std::vector<fie
 	}
 }
 
+bool fieldrt::MovingSunOut(const fieldpbr::Settings& settings, const fieldpbr::Lights& lights)
+{
+	return FIELD_MOVING_LIGHTS && FIELD_PBR && SunWanted(settings, lights);
+}
+
 int fieldrt::MovingLightsWanted(const fieldpbr::Settings& settings, const fieldpbr::Lights& lights, const double night)
 {
 	if (!FIELD_MOVING_LIGHTS || !FIELD_PBR)

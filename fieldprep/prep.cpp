@@ -286,6 +286,15 @@ namespace fieldprep
 		}
 	}
 
+	std::vector<size_t> CompositeTiles(const std::vector<Tile>& tiles)
+	{
+		std::vector<size_t> out;
+		for (const size_t i : DrawOrder(tiles))
+			if (tiles[i].blend == 4)
+				out.push_back(i);
+		return out;
+	}
+
 	Image ComposeOpaque(const std::vector<Tile>& tiles, const Layout& layout, const std::map<uint32_t, const Image*>& layers, const int scale)
 	{
 		Image out;
@@ -644,6 +653,7 @@ namespace fieldprep
 			}
 			scale = static_cast<float>(std::ceil(Percentile(values, 0.999) * 20.0) / 20.0);
 			scale = std::clamp(scale, 1.0f, 16.0f);
+			out.typical = static_cast<float>(Percentile(values, 0.5));
 		}
 		out.scale = scale;
 		out.albedo.width = painting.width;
@@ -666,8 +676,9 @@ namespace fieldprep
 				float a = std::clamp(albedo.v[i * 3 + c], 0.0f, 1.0f);
 				if (a < lowest)
 				{
+					//counted when it shows: more than two steps of the 8-bit sRGB code
+					raised = raised || fieldpbr::LinearToSrgb8(lowest) > fieldpbr::LinearToSrgb8(a) + 2;
 					a = lowest;
-					raised = true;
 				}
 				int code = fieldpbr::LinearToSrgb8(a);
 				while (code < 255 && table[code] < lowest)

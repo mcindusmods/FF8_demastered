@@ -1,5 +1,54 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
+-----------------------------------------------------------------------------------------------------------------------
+Built in steps; this is the first (fields, fieldprep, battles fought by day from fixed-time fields). Tested on Linux
+(the light rules, the evening and the lights file in field_pbr_test, fieldprep on bdifrit1 with a layer taken out, the
+field shader strictly with glslang and drawn through Mesa); the Windows-only files are type-checked. Not run in the game.
+Lights on at a time: 2 by day, 6 by night (was 2 of fieldprep's and 6 of yours, each time of day)
+  - By day the sun takes one of the two places in a field that has it, so the day is the sun and your one light;
+    without the sun, two. By night six; the moon has the sun's place. 1 + 1 + 6 is the 8 the shader draws, so no light
+    drops out while day and night cross-fade any more. Within a time of day yours come first (file order), then
+    fieldprep's. The lights file and the log say when there are more than that.
+  - A light on day and night stays fully on through the evening (it used to dip when its day and night shares were added).
+The evening (new: DAY_NIGHT_EVENING=0.9)
+  - The day's own lights start going, and the glows start coming on, at 90% of the day, before the dusk's fade; both are
+    done when the fade ends. In fields, and on battle stages (their glows and their day-only lights). Dawn is unchanged.
+    1 puts them back on the fade.
+Night lamps: night_radius (new in _lights.txt)
+  - How far around a lamp that is on at night the painting keeps its light at night, in native pixels. Left out: its
+    range, as before.
+The flicker mask from the day's lamps and the night's
+  - fieldprep works it out from the day's lamps against the bounced light (_BL, else the lightmap) and from the night's
+    (time = night) against _RESM, each pixel taking the stronger, so a lamp that only burns at night flickers too.
+  - DEMASTER flickers a pixel with the nearest flickering lamp that is on and reaches it, so a night lamp's part stays
+    still by day and one lamp's flicker doesn't spill onto another's.
+The party light is off by default (FIELD_PARTY_LIGHT=0)
+  - It took one of the 8 places. A field can still turn it on ([party] on = 1); it then has 5 night lights.
+Night pictures: <field>_<pupu>_nt_A (new)
+  - A layer that looks different at night (the sky, water) can have its night picture, painted as it should look (not
+    an albedo). At night the layer is that picture, cross-faded by the clock, its alpha saying how much of it; the glows
+    and the lamps' added light still go on top. <field>_nt_A at the canvas's size does every layer. An animation frame's
+    night picture is its own. fieldprep makes their DDS with the layer images.
+Animation frames don't need an _A of their own
+  - A picture of an animation state without an _A, whose state's first picture has one, is drawn from its painting and
+    lit like the rest: the shader takes the albedo out of the painting with the lightmap. fieldprep still writes an _A
+    for every opaque picture: delete a frame's to have it drawn from its painting, keep (or paint) one to override.
+fieldprep
+  - It stops when opaque layer images the whole field needs are missing, lists them by both names (PuPu's and FME's)
+    and writes nothing. It used to put <field>.png together with holes and go on.
+  - The <field>.png it puts together carries a note saying so, and the next run puts it together again instead of
+    taking it as yours (the trap bdifrit1 fell into). One without the note (yours, or older) is used as it is.
+  - A warning when the albedo is much darker than the painting (the light more than 2x the albedo on most of the
+    field, or 6x somewhere): the albedo is probably from another version of the painting. "albedo raised in N pixels"
+    now counts only pixels raised by more than 2 steps of 255.
+Battles
+  - A battle started in a field with a fixed time (time = day or night in its _pbr.txt: an inside place, a boss) is
+    fought by day, the sun at its highest. The field keeps its own time.
+  - The Lunar Cry's rule is off (commented out in scene_light.txt) until its story counter is known from the game's code.
+    An existing DEMASTER_EXP\scene_light.txt still has it on: delete the file (DEMASTER writes the new one) or put ; in
+    front of its five lines.
+
 v15.13 (in the source; not packaged yet) - battles and the world map: day and night, the sun over the stage, stage lights
 -----------------------------------------------------------------------------------------------------------------------
 Built in two steps. The first (day and night, the rules, glows and AO) ran in the game: the log and six frame logs came

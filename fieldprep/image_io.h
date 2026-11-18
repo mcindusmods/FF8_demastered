@@ -28,6 +28,10 @@ namespace fieldprep
 	bool LoadGray(const std::string& path, Gray& out, std::string& error);
 
 	bool SavePng(const std::string& path, const Image& image, std::string& error);
+	//the same with a text note in the file (a tEXt chunk: keyword, then text), e.g. who wrote it
+	bool SavePngNoted(const std::string& path, const Image& image, const char* keyword, const char* text, std::string& error);
+	//a PNG's tEXt note under this keyword (read from the chunks, the picture isn't decoded); "" when it has none
+	std::string PngNote(const std::string& path, const char* keyword);
 	bool SaveGrayPng(const std::string& path, const Gray& image, bool sixteen, std::string& error);
 
 	//BC7 (4x4 blocks; other sizes are padded). perceptual: colour (weights for the eye), else data (every channel the same).

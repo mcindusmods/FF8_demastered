@@ -22,6 +22,7 @@ namespace fieldpbr
 		case NORMAL_DEPTH: return "_ND";
 		case ORME: return "_ORME";
 		case EMISSIVE: return "_EC";
+		case NIGHT: return "_nt_A";
 		default: return "";
 		}
 	}
@@ -927,6 +928,12 @@ namespace fieldpbr
 				if (ok)
 					light->range = static_cast<float>(v[0]);
 			}
+			else if (kv.key == "night_radius")
+			{
+				ok = Number(kv.value, v[0]) && v[0] >= 0;
+				if (ok)
+					light->nightRadius = v[0] > 0 ? static_cast<float>(v[0]) : -1.0f;
+			}
 			else if (kv.key == "baked")
 				ok = Bool(kv.value, light->baked);
 			else if (kv.key == "flicker")
@@ -1033,39 +1040,59 @@ namespace fieldpbr
 				+ " are read\n";
 			result.lights.resize(MAX_LIGHTS_IN_FILE);
 		}
-		//per time of day: at most MAX_FOUND_LIGHTS of fieldprep's, MAX_YOUR_LIGHTS of yours (marks count as yours)
+		//per time of day: MAX_DAY_LIGHTS by day (one fewer where the sun is out), MAX_NIGHT_LIGHTS by night; yours first
 		for (const LightTime time : { LightTime::Day, LightTime::Night })
 		{
-			size_t found = 0, yours = 0;
+			size_t on = 0;
 			for (const Light& l : result.lights)
-				if (l.time == time || l.time == LightTime::Both)
-					(l.source == LightSource::Found ? found : yours)++;
-			const char* when = time == LightTime::Day ? "by day" : "by night";
-			if (found > static_cast<size_t>(MAX_FOUND_LIGHTS))
-				warnings += "more than " + std::to_string(MAX_FOUND_LIGHTS) + " of fieldprep's lights on " + when + ": only the first "
-					+ std::to_string(MAX_FOUND_LIGHTS) + " are used\n";
-			if (yours > static_cast<size_t>(MAX_YOUR_LIGHTS))
-				warnings += "more than " + std::to_string(MAX_YOUR_LIGHTS) + " of your own lights on " + when + " (marks count too): only the "
-					"first " + std::to_string(MAX_YOUR_LIGHTS) + " are used\n";
+				on += l.time == time || l.time == LightTime::Both;
+			const int most = time == LightTime::Day ? MAX_DAY_LIGHTS : MAX_NIGHT_LIGHTS;
+			if (on > static_cast<size_t>(most))
+				warnings += Format("%zu lights on %s: DEMASTER uses %d (%s), yours first in file order, then fieldprep's\n", on,
+					time == LightTime::Day ? "by day" : "by night", most, time == LightTime::Day ? "the sun takes one of them where it is out"
+					: "the moon shares the sun's place");
 		}
 		out = result;
 		return any || !result.lights.empty();
 	}
 
-	void KeepDayLights(Lights& lights)
+	namespace
 	{
-		std::vector<Light> kept;
-		int found = 0, yours = 0;
-		for (const Light& l : lights.lights)
+		//which lights are in a time of day's set: on then, yours first (file order), then fieldprep's, at most `places`
+		std::vector<bool> TimeSet(const Lights& lights, const LightTime time, const int places)
 		{
-			if (l.time == LightTime::Night)
-				continue;
-			int& count = l.source == LightSource::Found ? found : yours;
-			if (count >= (l.source == LightSource::Found ? MAX_FOUND_LIGHTS : MAX_YOUR_LIGHTS))
-				continue;
-			count++;
-			kept.push_back(l);
+			std::vector<bool> in(lights.lights.size(), false);
+			int taken = 0;
+			for (const bool found : { false, true })
+				for (size_t i = 0; i < lights.lights.size() && taken < places; i++)
+				{
+					const Light& l = lights.lights[i];
+					if ((l.time != time && l.time != LightTime::Both) || (l.source == LightSource::Found) != found)
+						continue;
+					in[i] = true;
+					taken++;
+				}
+			return in;
 		}
+	}
+
+	void KeepDayLights(Lights& lights, const int places)
+	{
+		const std::vector<bool> in = TimeSet(lights, LightTime::Day, std::max(0, places));
+		std::vector<Light> kept;
+		for (size_t i = 0; i < lights.lights.size(); i++)
+			if (in[i])
+				kept.push_back(lights.lights[i]);
+		lights.lights = std::move(kept);
+	}
+
+	void KeepDayAndNightLights(Lights& lights)
+	{
+		const std::vector<bool> day = TimeSet(lights, LightTime::Day, MAX_DAY_LIGHTS), night = TimeSet(lights, LightTime::Night, MAX_NIGHT_LIGHTS);
+		std::vector<Light> kept;
+		for (size_t i = 0; i < lights.lights.size(); i++)
+			if (day[i] || night[i])
+				kept.push_back(lights.lights[i]);
 		lights.lights = std::move(kept);
 	}
 
@@ -1125,33 +1152,19 @@ namespace fieldpbr
 		return std::clamp((static_cast<double>(n) - rest) / shaded, 0.75, 4.0);
 	}
 
-	std::vector<ActiveLight> ActiveLights(const Lights& lights, const double night, size_t* dropped, const size_t limit)
+	std::vector<ActiveLight> ActiveLights(const Lights& lights, const double night, size_t* dropped, const size_t limit, const double dayOn,
+		const int dayPlaces)
 	{
 		const size_t most = std::min<size_t>(limit, MAX_LIGHTS);
 		const double n = std::clamp(std::isfinite(night) ? night : 0.0, 0.0, 1.0);
-		//each time of day's set: the first MAX_FOUND_LIGHTS of fieldprep's and MAX_YOUR_LIGHTS of yours on then
-		const auto set = [&](const LightTime time)
-		{
-			std::vector<bool> in(lights.lights.size(), false);
-			int found = 0, yours = 0;
-			for (size_t i = 0; i < lights.lights.size(); i++)
-			{
-				const Light& l = lights.lights[i];
-				if (l.time != time && l.time != LightTime::Both)
-					continue;
-				int& count = l.source == LightSource::Found ? found : yours;
-				if (count >= (l.source == LightSource::Found ? MAX_FOUND_LIGHTS : MAX_YOUR_LIGHTS))
-					continue;
-				count++;
-				in[i] = true;
-			}
-			return in;
-		};
-		const std::vector<bool> byDay = set(LightTime::Day), byNight = set(LightTime::Night);
+		const double d = dayOn >= 0 && std::isfinite(dayOn) ? std::clamp(dayOn, 0.0, 1.0) : 1.0 - n;
+		const std::vector<bool> byDay = TimeSet(lights, LightTime::Day, std::clamp(dayPlaces, 0, MAX_DAY_LIGHTS)),
+			byNight = TimeSet(lights, LightTime::Night, MAX_NIGHT_LIGHTS);
 		std::vector<ActiveLight> on;
 		for (size_t i = 0; i < lights.lights.size(); i++)
 		{
-			const double weight = (byDay[i] ? 1.0 - n : 0.0) + (byNight[i] ? n : 0.0);
+			//in both sets: on all the time (a light on day and night doesn't dip in the evening)
+			const double weight = byDay[i] && byNight[i] ? 1.0 : byDay[i] ? d : byNight[i] ? n : 0.0;
 			if (weight <= 0.0)
 				continue;
 			on.push_back({ i, static_cast<float>(std::min(weight, 1.0)), byNight[i] && lights.lights[i].baked });
@@ -1208,8 +1221,10 @@ namespace fieldpbr
 		out += ";             day/night clock (DAY_NIGHT)\n";
 		out += "; source    = found: one of fieldprep's large lights; mark: your mark in _LIGHTS.png (both written again whenever\n";
 		out += ";             fieldprep finds the lights again); yours (or left out): one you wrote here, which fieldprep keeps\n";
-		out += "; Per time of day DEMASTER uses at most " + std::to_string(MAX_FOUND_LIGHTS) + " of fieldprep's and " + std::to_string(MAX_YOUR_LIGHTS)
-			+ " of yours (marks count as yours). Changing which lights flicker or follow a group needs fieldprep\n; run again";
+		out += "; DEMASTER uses " + std::to_string(MAX_DAY_LIGHTS) + " lights by day (the sun takes one where it is out) and "
+			+ std::to_string(MAX_NIGHT_LIGHTS) + " by night, yours first (marks count as yours), then fieldprep's. A night lamp\n"
+			"; keeps the painting's light out to night_radius (left out: its range). Changing which lights flicker or follow a group\n"
+			"; needs fieldprep run again";
 		out += " (the mask is in _LF).\n\n";
 		out += Format("ambient = %.4f %.4f %.4f\n", lights.ambient[0], lights.ambient[1], lights.ambient[2]);
 		//the glows (kept when fieldprep finds the lights again)
@@ -1286,6 +1301,8 @@ namespace fieldpbr
 			out += Format("baked = %d\n", l.baked ? 1 : 0);
 			out += Format("intensity = %.3f\n", l.intensity);
 			out += Format("range = %.1f\n", l.range);
+			if (l.nightRadius > 0)
+				out += Format("night_radius = %.1f\n", l.nightRadius);
 			out += std::string("flicker = ") + FlickerName(l.flicker) + "\n";
 			out += Format("amount = %.3f\n", l.amount);
 			out += Format("speed = %.3f\n", l.speed);
@@ -1533,6 +1550,7 @@ namespace fieldpbr
 		c.night = ok(night, 240);
 		c.fade = std::min(std::isfinite(fade) && fade >= 0 ? fade : 40.0, std::min(c.day, c.night));
 		c.battleSlower = ok(battleSlower, 3);
+		c.evening = std::isfinite(evening) ? std::clamp(evening, 0.5, 1.0) : 0.9;
 		return c;
 	}
 
@@ -1570,6 +1588,16 @@ namespace fieldpbr
 		if (t < c.Length() - half)
 			return 1.0;
 		return 1.0 - Smooth((t - (c.Length() - half)) / c.fade); //the start of dawn's fade
+	}
+
+	double EveningAmount(const DayNightCycle& cycle, const double time)
+	{
+		const DayNightCycle c = cycle.Checked();
+		const double t = Wrap(time, c.Length()), half = c.fade / 2;
+		const double from = std::min(c.day * std::clamp(c.evening, 0.0, 1.0), c.day - half), to = c.day + half;
+		if (t >= from && t < to && to > from)
+			return Smooth((t - from) / (to - from));
+		return NightAmount(c, t);
 	}
 
 	double AdvanceClock(const DayNightCycle& cycle, const double time, const double seconds, const bool battle)

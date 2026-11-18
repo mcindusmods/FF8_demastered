@@ -31,6 +31,7 @@ uniform vec4 demasterSpace;            // zoom, canvas x and y of the camera axi
 uniform vec4 demasterDepth;            // a, b (distance = a + b * value, or 1 / (a + b * value)), nearest distance
 uniform vec4 demasterAmbient;          // rgb: light added everywhere
 uniform sampler2D demasterEC;
+uniform sampler2D demasterNT; // the layers' night pictures (_nt_A): how they look at night, shown as painted (alpha: how much)
 uniform vec4 demasterEmissive;         // the glows (_lights.txt [emissive]): x hue turn (turns), y strength; w how much shows (how night it is, or the file's "day" if that is more: 0 = none, the painting has them)
 uniform vec4 demasterEmissiveTint;     // rgb: the glows times this (linear)
 uniform vec4 demasterNight;            // DAY_NIGHT: x how night it is (0 day, 1 night); y the painted light left away from the night's lamps; z how much the lamps keep ([night] level, lamps)
@@ -38,7 +39,7 @@ uniform vec4 demasterNightTint;        // rgb: what's left times this ([night] t
 uniform int demasterLightCount;
 uniform vec4 demasterLightPos[8];      // view x, y, z; w: range
 uniform vec4 demasterLightColor[8];    // rgb: light added now (colour x intensity x flicker x its group); a: specular strength
-uniform vec4 demasterLightFlicker[8];  // x: how much its painted light changes now; y: 1 when it owns the steady mask; z: shadow strength; w: 1 = a lamp on at night (the painting keeps its light around it)
+uniform vec4 demasterLightFlicker[8];  // x: how much its painted light changes now; y: 1 when it owns the steady mask; z: shadow strength; w: a lamp on at night (the painting keeps its light around it): (range / night radius)^2, 0 = none
 uniform vec4 demasterLightPaint[8];    // the look: rgb the lamp's own colour now, for the highlights dial; a: its weight in the relight dial (0: none; negative: a moving light, whose share is also kept out by the room)
 uniform vec4 demasterLook;             // the look (FIELD_PBR_LOOK): x relight, y highlights, z AO on the painting (all 0: the painting as it is); w: the relight's scale, which keeps the field's average brightness (fieldpbr::RelightScale)
 uniform sampler2D demasterLF;
@@ -309,6 +310,14 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		return false;
 	vec4 cellMore = texture2D(demasterCells, (cellIndex + vec2(0.5, 0.5 + cells.y)) / vec2(cells.x, cells.y * 2.0));
 	float flags = cell.z;
+	// 64: a picture of an animation state without an _A of its own: the albedo is its painting over the lightmap
+	bool fromPainting = flags > 63.5;
+	if (fromPainting)
+		flags -= 64.0;
+	// 32: the layer has a night picture (_nt_A)
+	bool hasNightPicture = flags > 31.5;
+	if (hasNightPicture)
+		flags -= 32.0;
 	bool hasGlows = flags > 15.5;
 	if (hasGlows)
 		flags -= 16.0;
@@ -361,6 +370,8 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 
 	vec3 base = demasterToLinear(albedo.rgb);
 	vec3 baked = demasterToLinear(light.rgb) * cell.w;
+	if (fromPainting)
+		base = clamp(base / max(baked, vec3(0.02)), 0.0, 1.0); // painting = albedo x light, as fieldprep splits it
 	float mask = 1.0 - light.a;
 	float ao = orme.r;
 	float roughness = clamp(orme.g, 0.045, 1.0);
@@ -423,7 +434,7 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		vec3 toLight = lightPos.xyz - position;
 		float dd = dot(toLight, toLight);
 		float x2 = dd / (lightPos.w * lightPos.w); // (distance / range) squared
-		if (flicker.y > 0.5 && dd < nearest)
+		if (flicker.y > 0.5 && dd < nearest && x2 < 1.0) // only a lamp whose light reaches here: another's flicker stays its own
 		{
 			nearest = dd;
 			change = flicker.x;
@@ -431,8 +442,11 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		float window = clamp(1.0 - x2, 0.0, 1.0);
 		if (lightShadow[i] < 1.0)
 			paintedShadow *= 1.0 - (1.0 - lightShadow[i]) * flicker.z * window;
-		if (flicker.w > 0.0)
-			nightKeep = max(nightKeep, window * window);
+		if (flicker.w > 0.0) // a night lamp: the painting keeps its light out to the lamp's night radius (w: (range / radius)^2)
+		{
+			float keep = clamp(1.0 - x2 * flicker.w, 0.0, 1.0);
+			nightKeep = max(nightKeep, keep * keep);
+		}
 		if (sky || x2 >= 1.0)
 			continue;
 		vec4 colour = demasterLightColor[i];
@@ -496,6 +510,13 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 	// the painting has the glow in it already, and adding it again burnt lamps out to white)
 	// A picture of the glows: its colour already holds its coverage, so a lit window (coverage 1) takes the painting's place
 	// and a soft halo (coverage 0) only adds its light
+	// a night picture: at night the layer is that picture as it is painted (the clock cross-fades to it); the glows and
+	// the lamps' added light still go on top
+	if (hasNightPicture && demasterNight.x > 0.0)
+	{
+		vec4 night = texture2D(demasterNT, uv);
+		painted = mix(painted, demasterToLinear(night.rgb), clamp(demasterNight.x * night.a, 0.0, 1.0));
+	}
 	float showing = clamp(demasterEmissive.w, 0.0, 1.0);
 	if (hasGlows)
 		painted = painted * (1.0 - emissive * showing) + glow * showing;
