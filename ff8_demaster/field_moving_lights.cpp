@@ -131,7 +131,8 @@ namespace fieldpbr
 		return light;
 	}
 
-	int ChooseLeader(const std::vector<LeaderCandidate>& candidates, const int follow, const int pcOfMost, const double now, LeaderTrack& track)
+	int ChooseLeader(const std::vector<LeaderCandidate>& candidates, const int follow, const int pcOfMost, const double now, LeaderTrack& track,
+		const int controlled)
 	{
 		//who moved since the last frame (more than a hair: standing animations sway)
 		std::vector<LeaderTrack::Seen> seen;
@@ -165,6 +166,15 @@ namespace fieldpbr
 				}
 			return -1;
 		}
+		//the one the player moves (the followers move too, and after it: "who moved last" picked them)
+		if (controlled >= 0)
+			for (size_t i = 0; i < candidates.size(); i++)
+				if (candidates[i].entity == controlled)
+				{
+					track.current = candidates[i].key;
+					track.has = true;
+					return static_cast<int>(i);
+				}
 		//the playable ones: their pc byte isn't what the field's other entities have
 		std::vector<size_t> pool;
 		for (size_t i = 0; i < candidates.size(); i++)

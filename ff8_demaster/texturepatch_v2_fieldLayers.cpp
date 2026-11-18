@@ -960,6 +960,34 @@ namespace
 	};
 	std::unordered_map<GLuint, FieldPage> fieldPages;
 	uint64_t fieldPagesEntry = 0;
+	//Pages taken off the list while the game gave their texture nothing new (the field's .map was read again, or the
+	//texture could not be checked): the picture in the texture is still DEMASTER's, so the page is taken back the next time
+	//it is drawn (TakeBack) instead of being drawn unlit by the game's program. A new upload by the game forgets it.
+	std::unordered_map<GLuint, FieldPage> parkedPages;
+
+	//Every page that leaves the list, with the reason (FIELD_DEBUG). Up to 400 lines a session.
+	void LogDrop(const GLuint texture, const FieldPage& page, const char* why)
+	{
+		static int lines = 0;
+		if (!FIELD_DEBUG || lines >= 400)
+			return;
+		lines++;
+		Log("FIELD_LAYERS: %s page %u .map palette %d (texture %u, palette slot %d) is off DEMASTER's list: %s%s\n",
+			page.job.name.c_str(), page.job.tPage - 16, page.job.palette, texture, page.job.slot, why,
+			lines == 400 ? " (no more of these lines this session)" : "");
+	}
+
+	//A .map was read (the next field's, or this field's again): the list is for the new entry
+	void ParkAll()
+	{
+		parkedPages.clear(); //only the pages of the last list are kept
+		if (FIELD_DEBUG && !fieldPages.empty())
+			Log("FIELD_LAYERS: %s: a .map was read, its %zu page(s) are off DEMASTER's list until the game uploads them again "
+				"(or draws them as they are: then they are taken back)\n", fieldPages.begin()->second.job.name.c_str(), fieldPages.size());
+		for (auto& [texture, page] : fieldPages)
+			parkedPages.emplace(texture, std::move(page));
+		fieldPages.clear();
+	}
 
 	//the pending page (_fbgCheck -> FbgGl)
 	PageJob pending;
@@ -1572,11 +1600,12 @@ bool FieldLayersUploadPending()
 		const GLuint target = static_cast<GLuint>(bound);
 		if (fieldPagesEntry != pending.entry)
 		{
-			fieldPages.clear();
+			ParkAll();
 			PbrForgetAll();
 			fieldPagesEntry = pending.entry;
 		}
 		TrimLayers();
+		parkedPages.erase(target);
 		FieldPage& page = fieldPages[target];
 		page.job = std::move(pending);
 		if (PbrShaderMissing())
@@ -1619,9 +1648,64 @@ std::string FieldLayersFieldName()
 //The game re-specified a texture (glTexImage2D hook): if it was one of ours, it is not any more
 void FieldLayersForgetTexture(const unsigned int texture)
 {
-	if (!fieldPages.empty())
-		fieldPages.erase(static_cast<GLuint>(texture));
+	if (const auto it = fieldPages.find(static_cast<GLuint>(texture)); it != fieldPages.end())
+	{
+		LogDrop(it->first, it->second, "the game gave the texture a picture of its own (an upload DEMASTER did not recognise)");
+		fieldPages.erase(it);
+	}
+	parkedPages.erase(static_cast<GLuint>(texture));
 	PbrForget(static_cast<GLuint>(texture));
+}
+
+namespace
+{
+	//The width of a texture the game has bound for the draw, from the driver. false: the driver has another texture bound
+	//there than the one remembered (FIELD_GL_TRACK), so the answer would be about the wrong texture.
+	bool DriverWidth(const GLuint texture, GLint& width)
+	{
+		GLint real = 0;
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &real);
+		if (static_cast<GLuint>(real) != texture)
+			return false;
+		glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+		return true;
+	}
+
+	//A parked page is drawn: if its texture still has the size DEMASTER gave it and the field is the same, it is a page
+	//again (with its PBR maps). The game's own uploads go through glTexImage2D, which forgets a parked page, so a texture
+	//still parked here has had nothing new from the game.
+	bool TakeBack(const GLuint texture)
+	{
+		const auto parked = parkedPages.find(texture);
+		if (parked == parkedPages.end())
+			return false;
+		GLint width = 0;
+		if (!DriverWidth(texture, width))
+			return false; //asked again at its next draw
+		FieldPage page = std::move(parked->second);
+		parkedPages.erase(parked);
+		bool sameField = false;
+		{
+			std::lock_guard<std::mutex> lock(fieldMutex);
+			sameField = field.active && field.name == page.job.name && field.entry == fieldPagesEntry;
+			if (sameField)
+			{
+				page.job.entry = field.entry;
+				page.job.pbr = field.pbr;
+			}
+		}
+		if (!sameField || width != page.width)
+			return false;
+		page.checked = GetTickCount64();
+		FieldPage& back = fieldPages[texture];
+		back = std::move(page);
+		PbrPageBuilt(texture, back.job, SizeOf(back));
+		glBindTexture(GL_TEXTURE_2D, texture); //PbrPageBuilt binds its own
+		if (FIELD_DEBUG)
+			Log("FIELD_LAYERS: %s page %u .map palette %d (texture %u): taken back onto DEMASTER's list (the game drew it "
+				"without giving it a new picture)\n", back.job.name.c_str(), back.job.tPage - 16, back.job.palette, texture);
+		return true;
+	}
 }
 
 //glDrawElements hook, before the draw. FIELD_SMOOTH: smooth filtering inside each tile's cell while a page from layers is
@@ -1639,7 +1723,8 @@ void FieldLayersBeforeDraw(const int count, const unsigned int type, const void*
 	} timing;
 	if (const uint64_t entry = latestEntry; fieldPagesEntry != entry && !pendingSet)
 	{
-		fieldPages.clear(); //another field: its textures may reuse the names of the last one's pages
+		//another field (its textures get new uploads, which forget the parked pages), or this field's .map read again
+		ParkAll();
 		PbrForgetAll();
 		fieldPagesEntry = entry;
 	}
@@ -1671,6 +1756,13 @@ void FieldLayersBeforeDraw(const int count, const unsigned int type, const void*
 	const GLint bound = static_cast<GLint>(glstate::BoundTexture2D());
 	auto it = fieldPages.find(static_cast<GLuint>(bound));
 	bool ours = it != fieldPages.end();
+	//only main.frag draws pages; another program with a page bound (the round shadows) has nothing to do with it
+	const bool mainProgram = GameProgramOf(program).kind == ProgramKind::Main;
+	if (!ours && mainProgram && !parkedPages.empty())
+	{
+		ours = TakeBack(static_cast<GLuint>(bound));
+		it = fieldPages.find(static_cast<GLuint>(bound));
+	}
 	//the game giving the texture new content (glTexImage2D) forgets the page already; this catches other ways, twice a
 	//second (asking the driver about a texture waits for it)
 	const ULONGLONG now = ours ? GetTickCount64() : 0;
@@ -1678,16 +1770,17 @@ void FieldLayersBeforeDraw(const int count, const unsigned int type, const void*
 	{
 		it->second.checked = now;
 		GLint width = 0;
-		glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
-		if (width != it->second.width)
+		if (!DriverWidth(static_cast<GLuint>(bound), width))
+			LogOnce("page-unchecked-" + std::to_string(fieldPagesEntry), "FIELD_LAYERS: a page's texture (%d) is not the one the "
+				"driver has bound for this draw: its size is not checked now, and the page stays on DEMASTER's list\n", bound);
+		else if (width != it->second.width)
 		{
+			LogDrop(it->first, it->second, "its texture has another size now: the game uses it for something else");
 			PbrForget(it->first);
 			fieldPages.erase(it); //the game uses that texture for something else now
 			ours = false;
 		}
 	}
-	//only main.frag draws pages; another program with a page bound (the round shadows) has nothing to do with it
-	const bool mainProgram = GameProgramOf(program).kind == ProgramKind::Main;
 	float clamp[4] = { 0, 0, 0, 0 };
 	if (ours && FIELD_SMOOTH)
 	{

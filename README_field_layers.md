@@ -32,9 +32,19 @@ DEMASTER and fieldprep read layer images from PuPu as well as from FME, in the s
   - fieldprep writes it into `_pbr.txt` (`canvas = left top width height`) and DEMASTER reads it from there.
   - See `README_field_pbr.md`.
 
-## Smooth scroll and in-between pictures (v15.11, not yet run in the game)
+## Pages that stay pages (v15.12)
 
-Two things that only fields drawn from layer images can have, because the layer images' cells tell DEMASTER which layer every tile the game draws belongs to. Both are on by default in `demaster.conf` and each has its own switch.
+DEMASTER keeps a list of the game's textures it has built a page into. A page that is off that list is drawn by the game's own program: no tile filter, and with FIELD_PBR no lighting, shadows or night (a bright band of tiles in the picture). With `FIELD_DEBUG=1` the log now says every time a page leaves the list and why:
+
+- `...is off DEMASTER's list: the game gave the texture a picture of its own (an upload DEMASTER did not recognise)`: the game uploaded that page again and its palette matched none the `.map` uses there. The line `no palette the .map uses on that page matches` just before it has the numbers.
+- `...its texture has another size now`: the game uses that texture for something else.
+- `a .map was read, its N page(s) are off DEMASTER's list until the game uploads them again`: normal when you leave a field. If it was the same field's `.map` and the game goes on drawing a page without uploading it again, the next line is `...taken back onto DEMASTER's list`.
+
+If a field shows tiles that are unlit or from the wrong state, send that log.
+
+## Smooth scroll and in-between pictures (v15.11; in-between pictures off by default since v15.12)
+
+Two things that only fields drawn from layer images can have, because the layer images' cells tell DEMASTER which layer every tile the game draws belongs to. Each has its own switch in `demaster.conf`. Smooth scroll is on by default. In-between pictures are off: in the game they slowed fields down, and they are being rebuilt.
 
 **`FIELD_SMOOTH_SCROLL`.** The game scrolls a field in whole PlayStation pixels (8 screen pixels at 4x on a 1440p screen), and works out each layer's place from the scroll with whole-number arithmetic. So a slow scroll steps, and layers that move at another speed than the main one (parallax: a sky, a far wall) step at other moments than it does, which reads as shimmer between them. DEMASTER reads each layer's place off the tiles as the game draws them, turns the staircase of places back into the line it was rounded from, and draws the layer there. The characters get the main layer's difference, so they stay on the floor. Nothing is ever drawn more than 3/4 of a PlayStation pixel from where the game has it, and when the screen stands still the picture is exactly the game's.
 

@@ -1628,6 +1628,20 @@ static void TestMovingLights()
 		//[party] follow = 2
 		CHECK(ChooseLeader(drawn, 2, 255, 0.2, track) == 2);
 		CHECK(ChooseLeader(drawn, 7, 255, 0.3, track) == -1); //not drawn: no light
+		//the game says who the player moves: that one, whoever moved last (a follower walks after the leader stops)
+		{
+			LeaderTrack led;
+			std::vector<LeaderCandidate> party3 = { candidate(3, 0, -0.2), candidate(4, 1, 0.0), candidate(5, 2, 0.2) };
+			CHECK(ChooseLeader(party3, -1, 255, 0.0, led, 4) == 1);
+			party3[2].center.x += 0.05; //a follower moves, the leader stands
+			CHECK(ChooseLeader(party3, -1, 255, 1.0, led, 4) == 1);
+			party3[0].center.x += 0.05;
+			CHECK(ChooseLeader(party3, -1, 255, 2.0, led, 4) == 1);
+			CHECK(ChooseLeader(party3, 5, 255, 3.0, led, 4) == 2); //[party] follow still wins
+			CHECK(ChooseLeader(party3, -1, 255, 4.0, led, 9) >= 0); //the player's entity isn't drawn: as before, someone
+			party3[0].center.x += 0.05;
+			CHECK(ChooseLeader(party3, -1, 255, 6.0, led, 9) == 0); //...the one that moved last
+		}
 		//two playable ones (an event with the party on screen): the one that moved last, and it stays with it
 		LeaderTrack two;
 		std::vector<LeaderCandidate> party = { candidate(3, 0, -0.2), candidate(4, 1, 0.2), candidate(5, 255, 0.5) };
@@ -1730,8 +1744,56 @@ static void TestMovingLights()
 	}
 }
 
+//the glows' picture (_EC) and its "day" setting
+static void TestEmissivePicture()
+{
+	//the old mask (grey, no alpha) is not a picture; colour or an alpha of its own is
+	std::vector<uint8_t> mask(64 * 4, 255), colour, alpha;
+	for (size_t i = 0; i < 64; i++)
+		mask[i * 4] = mask[i * 4 + 1] = mask[i * 4 + 2] = static_cast<uint8_t>(i * 4);
+	mask[5 * 4 + 1] += 6; //an editor's noise
+	CHECK(!EmissiveIsPicture(mask.data(), 64) && !EmissiveHasAlpha(mask.data(), 64));
+	colour = mask;
+	colour[10 * 4 + 2] = 0; //one coloured pixel in 64
+	CHECK(EmissiveIsPicture(colour.data(), 64) && !EmissiveHasAlpha(colour.data(), 64));
+	alpha = mask;
+	alpha[20 * 4 + 3] = 0;
+	CHECK(EmissiveIsPicture(alpha.data(), 64) && EmissiveHasAlpha(alpha.data(), 64));
+	//on black, no alpha: the colour stays, coverage from the brightest channel (none below a fifth of "full", all from it up)
+	const uint8_t in[5 * 4] = { 0, 0, 0, 255,   20, 10, 0, 255,   128, 64, 0, 255,   255, 220, 90, 255,   76, 0, 0, 255 };
+	uint8_t out[5 * 4];
+	PackEmissive(in, 5, false, 0.5f, out);
+	for (int i = 0; i < 5; i++)
+		CHECK(out[i * 4] == in[i * 4] && out[i * 4 + 1] == in[i * 4 + 1] && out[i * 4 + 2] == in[i * 4 + 2]);
+	CHECK(out[3] == 0 && out[7] == 0); //black, and a dim halo (20/255 is under 0.1): adds only
+	CHECK(out[11] == 255 && out[15] == 255); //half bright and up: takes the painting's place
+	CHECK(out[19] > 100 && out[19] < 160); //0.3: halfway between 0.1 and 0.5
+	PackEmissive(in, 5, false, 1.0f, out);
+	CHECK(out[11] > 0 && out[11] < 128 && out[15] == 255);
+	//its own alpha: a layer over the painting. The colour is stored times its coverage, worked out in linear light
+	const uint8_t layer[3 * 4] = { 255, 200, 100, 255,   255, 200, 100, 128,   255, 200, 100, 0 };
+	PackEmissive(layer, 3, true, 0.5f, out);
+	CHECK(out[0] == 255 && out[1] == 200 && out[2] == 100 && out[3] == 255);
+	CHECK(out[7] == 128 && out[11] == 0 && out[8] == 0 && out[9] == 0 && out[10] == 0);
+	for (int c = 0; c < 3; c++)
+		NEAR(SrgbToLinear(out[4 + c] / 255.0f), SrgbToLinear(layer[4 + c] / 255.0f) * 128.0f / 255.0f, 0.004);
+	//[emissive] day
+	Lights lights;
+	std::string warnings;
+	ParseLights("[emissive]\nday = 0.5\nstrength = 2\n", lights, warnings);
+	CHECK(lights.hasEmissive && lights.emissive.day == 0.5f && lights.emissive.strength == 2.0f && warnings.empty());
+	Lights again;
+	ParseLights(WriteLights(lights, "test", ""), again, warnings);
+	CHECK(again.emissive.day == 0.5f && warnings.empty());
+	Lights bad;
+	ParseLights("[emissive]\nday = 3\n", bad, warnings);
+	CHECK(bad.emissive.day == 0.0f && warnings.find("day") != std::string::npos);
+	CHECK(std::string(KindSuffix(EMISSIVE)) == "_EC" && KIND_COUNT == 5);
+}
+
 int main(int argc, char** argv)
 {
+	TestEmissivePicture();
 	TestColour();
 	TestSpace();
 	TestSettings();

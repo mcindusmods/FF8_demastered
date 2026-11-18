@@ -172,7 +172,7 @@ namespace fieldrt
 	constexpr int MAX_MOVING_LIGHTS = 2;
 	//the character module, once per frame before anything asks for the lights: the characters it drew this frame, and the
 	//"playable character" byte most of the field's script entities have (-1: not known)
-	void MovingLightsCharacters(uint64_t entry, const std::vector<fieldpbr::LeaderCandidate>& drawn, int pcOfMost);
+	void MovingLightsCharacters(uint64_t entry, const std::vector<fieldpbr::LeaderCandidate>& drawn, int pcOfMost, int controlled);
 	//how many places among the field's lights they need now (0 to MAX_MOVING_LIGHTS)
 	int MovingLightsWanted(const fieldpbr::Settings& settings, const fieldpbr::Lights& lights, double night);
 	//the moving lights that are on now, into out (MAX_MOVING_LIGHTS of them); how many

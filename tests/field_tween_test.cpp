@@ -387,6 +387,88 @@ static void TestStick()
 		CHECK(off < 0.02);
 	}
 	CHECK(!FromPad(std::nan(""), 0, 0.25).active);
+	//the d-pad as a stick pushed all the way (up 0x1000, right 0x2000, down 0x4000, left 0x8000)
+	{
+		using analogmove::FromDpad;
+		CHECK(!FromDpad(0).active && !FromDpad(0x0FFF).active);
+		CHECK(!FromDpad(0x1000 | 0x4000).active && !FromDpad(0xF000).active); //opposites cancel
+		analogmove::Stick d = FromDpad(0x2000);
+		CHECK(d.active && d.x == 255 && d.y == 128);
+		d = FromDpad(0x1000);
+		CHECK(d.active && d.x == 128 && d.y == 1);
+		d = FromDpad(0x8000 | 0x4000 | 0x40); //left and down, with another button
+		CHECK(d.active && d.x == 38 && d.y == 218);
+		d = FromDpad(0x1000 | 0x4000 | 0x2000); //up and down cancel: right
+		CHECK(d.x == 255 && d.y == 128);
+	}
+	//the swing: the direction given turns towards the one held, the short way round, at the speed set
+	{
+		using analogmove::FromDpad;
+		const auto angle = [](const analogmove::Stick& s) { return std::atan2(s.y - 128.0, s.x - 128.0) * 180.0 / 3.14159265358979323846; };
+		const auto push = [](const analogmove::Stick& s) { return std::hypot(s.x - 128.0, s.y - 128.0); };
+		analogmove::Swing swing;
+		const double step = 1.0 / 30.0;
+		double now = 10.0;
+		//from rest: the first push goes straight where it points
+		analogmove::Stick s = swing.Turn(FromDpad(0x2000), 720.0, now);
+		CHECK(s.x == 255 && s.y == 128);
+		//right to up (90 degrees) at 720 a second: 24 degrees a step, there on the fourth step and exact from then on
+		double before = 0.0;
+		for (int i = 1; i <= 5; i++)
+		{
+			now += step;
+			s = swing.Turn(FromDpad(0x1000), 720.0, now);
+			CHECK(s.active);
+			NEAR(push(s), 127.0, 1.5);
+			if (i < 4)
+			{
+				NEAR(angle(s), -24.0 * i, 1.0);
+				CHECK(angle(s) < before);
+				before = angle(s);
+			}
+			else
+				CHECK(s.x == 128 && s.y == 1);
+		}
+		//up to down-left (135 degrees): the short way goes through left, never through right
+		for (int i = 0; i < 8; i++)
+		{
+			now += step;
+			s = swing.Turn(FromDpad(0x4000 | 0x8000), 720.0, now);
+			CHECK(s.x <= 128);
+		}
+		CHECK(s.x == 38 && s.y == 218);
+		//released, and pushed again within a moment: still swinging from where it was
+		now += step;
+		CHECK(!swing.Turn(FromDpad(0), 720.0, now).active);
+		now += step;
+		s = swing.Turn(FromDpad(0x2000), 720.0, now);
+		CHECK(s.active && !(s.x == 255 && s.y == 128));
+		//after a rest: straight where it points again
+		now += 1.0;
+		s = swing.Turn(FromDpad(0x8000), 720.0, now);
+		CHECK(s.x == 1 && s.y == 128);
+		//speed 0: no swing at all
+		now += step;
+		s = swing.Turn(FromDpad(0x2000), 0.0, now);
+		CHECK(s.x == 255 && s.y == 128);
+		//a half-pushed stick keeps its push while its direction swings
+		analogmove::Swing soft;
+		analogmove::Stick half;
+		half.x = 128 + 60;
+		half.y = 128;
+		half.active = true;
+		soft.Turn(half, 360.0, 20.0);
+		half.x = 128;
+		half.y = 128 + 60;
+		s = soft.Turn(half, 360.0, 20.0 + step);
+		NEAR(push(s), 60.0, 1.5);
+		NEAR(angle(s), 12.0, 1.5);
+		//a long gap between steps (a hitch) turns no more than a tenth of a second's worth
+		analogmove::Swing hitch;
+		hitch.Turn(FromDpad(0x2000), 100.0, 30.0);
+		s = hitch.Turn(FromDpad(0x8000), 100.0, 30.25);
+		NEAR(std::fabs(angle(s)), 10.0, 1.5);
+	}
 }
 
 int main()

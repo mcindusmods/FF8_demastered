@@ -1473,7 +1473,13 @@ namespace
 				c.halfHeight = ch.halfSize.y;
 				drawn.push_back(c);
 			}
-			MovingLightsCharacters(entry, drawn, f.entities.size() >= 2 ? pcOfMost : -1);
+			//the script entity the player moves (the game's own word: the field's movement code gives the pad to it)
+			int controlled = -1;
+			static const uint32_t playerAt = HasAddress(FIELD_PLAYER_ENTITY) ? GetAddress(FIELD_PLAYER_ENTITY) : 0;
+			int16_t player = -1;
+			if (playerAt != 0 && GuestRead(&player, playerAt, 2) && player >= 0 && player < 24)
+				controlled = player;
+			MovingLightsCharacters(entry, drawn, f.entities.size() >= 2 ? pcOfMost : -1, controlled);
 		}
 		//nearest first: the background program takes MAX_CHARACTERS
 		std::sort(f.characters.begin(), f.characters.end(), [](const Character& a, const Character& b) { return a.center.z < b.center.z; });

@@ -77,6 +77,8 @@ inline double FIELD_PARTY_LIGHT_STRENGTH;
 //Movement and motion (texturepatch_v2_analogMove.cpp, texturepatch_v2_fieldTween.cpp)
 inline int ANALOG_MOVEMENT;           //fields: the pad's left stick walks at any angle (the game's own analogue code, answered for it)
 inline double ANALOG_DEADZONE;        //how far the stick moves before it counts (0.05-0.9 of its throw)
+inline int ANALOG_WORLD_MAP;          //the world map: the left stick moves at any angle too
+inline double MOVE_TURN_SPEED;        //fields: degrees a second the walking direction swings towards the one held (d-pad, keys, stick); 0: at once, as the game does
 inline int FIELD_SMOOTH_SCROLL;       //field layers and characters at the scroll's unrounded place (no more whole-pixel steps)
 inline int FIELD_INTERPOLATION;       //an in-between frame after every field frame (60 pictures a second from the game's 30); 0: off
 inline int FIELD_GL_TRACK;            //1: remember the GL state as it is set instead of asking the driver around every draw (gl_state.h)

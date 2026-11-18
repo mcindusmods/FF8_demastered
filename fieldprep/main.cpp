@@ -43,6 +43,7 @@ namespace
 		AoSettings ao;
 		LightSearch lights;
 		float emissiveShare = 0.35f; //orme: the residual's part of the painting where a glow starts
+		float emissiveCover = 0.5f; //orme: a picture of the glows without alpha: the brightness that takes the painting's place
 		int threads = 4;
 		fieldprep::ModelOptions model; //model: the field models' textures
 	};
@@ -1024,7 +1025,36 @@ namespace
 		return true;
 	}
 
-	//<field>_ORME: AO, roughness, metallic and the emissive map (yours, _E, else from _RESM)
+	//Your <stem>_E as a picture of the glows (colour, or an alpha of its own): packed for _EC. false: none, or the grey mask
+	//from before v15.12 (that one goes into _ORME's alpha as it always did)
+	bool GlowPicture(const std::string& stem, const Framing& framing, const Options& o, Image& packed, std::string& how)
+	{
+		Image input;
+		std::string used;
+		if (!LoadInput(stem, { "_E" }, framing, input, used))
+			return false;
+		const size_t pixels = static_cast<size_t>(input.width) * input.height;
+		if (pixels == 0 || !fieldpbr::EmissiveIsPicture(input.rgba.data(), pixels))
+			return false;
+		const bool ownAlpha = fieldpbr::EmissiveHasAlpha(input.rgba.data(), pixels);
+		packed = input;
+		fieldpbr::PackEmissive(input.rgba.data(), pixels, ownAlpha, o.emissiveCover, packed.rgba.data());
+		size_t covering = 0, glowing = 0;
+		for (size_t i = 0; i < pixels; i++)
+		{
+			covering += packed.rgba[i * 4 + 3] >= 128;
+			glowing += std::max({ packed.rgba[i * 4], packed.rgba[i * 4 + 1], packed.rgba[i * 4 + 2] }) >= 8;
+		}
+		char text[320];
+		snprintf(text, sizeof(text), "from %s (%s; it glows on %.2f%% of the field and takes the painting's place on %.2f%%)", used.c_str(),
+			ownAlpha ? "its alpha is the coverage" : "no alpha: coverage from its brightness, --emissive-cover",
+			100.0 * static_cast<double>(glowing) / static_cast<double>(pixels), 100.0 * static_cast<double>(covering) / static_cast<double>(pixels));
+		how = text;
+		return true;
+	}
+
+	//<field>_ORME: AO, roughness, metallic and the emissive map (yours, _E, else from _RESM). <field>_EC: your _E when it is
+	//a picture of the glows (then _ORME's alpha is left plain white: BC7 keeps the other three better)
 	void Orme(FieldInput& f, const Options& o)
 	{
 		const int width = f.layout.width * f.scale, height = f.layout.height * f.scale;
@@ -1032,11 +1062,28 @@ namespace
 		Gray maps[4];
 		bool have[4] = {};
 		std::string used;
+		Image glows;
+		std::string glowsHow;
+		const bool picture = GlowPicture(stem, CanvasFraming(f), o, glows, glowsHow);
+		Gray plain; //with a picture of the glows nothing reads _ORME's alpha
+		if (picture)
+		{
+			plain.width = width;
+			plain.height = height;
+			plain.v.assign(static_cast<size_t>(width) * height, 1.0f);
+		}
 		const std::vector<std::string> names[4] = { { "_O" }, { "_R", "_RC", "_RM" }, { "_M", "_MC", "_MM" }, { "_E" } };
 		const char* what[4] = { "AO", "roughness", "metallic", "emissive" };
 		std::string list;
 		for (int k = 0; k < 4; k++)
 		{
+			if (k == 3 && picture)
+			{
+				maps[k] = plain;
+				have[k] = true;
+				list += ", alpha plain (the glows are in _EC)";
+				continue;
+			}
 			have[k] = LoadGrayInput(stem, names[k], CanvasFraming(f), maps[k], used);
 			std::string from = have[k] ? used : "default";
 			if (k == 3 && !have[k])
@@ -1055,6 +1102,14 @@ namespace
 		WriteMap(stem + "_ORME", PackOrme(width, height, have[0] ? &maps[0] : nullptr, have[1] ? &maps[1] : nullptr,
 			have[2] ? &maps[2] : nullptr, have[3] ? &maps[3] : nullptr), nullptr, false, o);
 		Say("  %s_ORME: %s\n", f.stem.c_str(), list.c_str());
+		if (picture)
+		{
+			WriteMap(stem + "_EC", glows, nullptr, true, o);
+			Say("  %s_EC: the glows as a picture, %s\n", f.stem.c_str(), glowsHow.c_str());
+		}
+		else if (!NewestImage(stem + "_EC").empty())
+			Say("  (%s_EC is still there but %s_E is not a picture of the glows any more: DEMASTER keeps reading _EC until you delete it)\n",
+				f.stem.c_str(), f.stem.c_str());
 		if (!NewestImage(stem + fieldpbr::OLD_ORM_SUFFIX).empty())
 			Say("  (%s%s from before is no longer read: DEMASTER takes _ORME; you can delete it)\n", f.stem.c_str(), fieldpbr::OLD_ORM_SUFFIX);
 		if (!NewestImage(stem + "_H").empty())
@@ -1066,13 +1121,29 @@ namespace
 			Gray own[4];
 			bool any = false;
 			bool ownHave[4] = {};
+			Image ownGlows;
+			std::string ownGlowsHow;
+			const bool ownPicture = GlowPicture(layerStem, LayerFraming(f, pupu), o, ownGlows, ownGlowsHow);
+			if (ownPicture)
+			{
+				WriteLayerMap(f, pupu, layerStem + "_EC", ownGlows, nullptr, true, o);
+				Say("  %s: its own _EC, %s\n", fieldlayers::PupuHex(pupu).c_str(), ownGlowsHow.c_str());
+			}
 			for (int k = 0; k < 4; k++)
-				any |= ownHave[k] = LoadGrayInput(layerStem, names[k], LayerFraming(f, pupu), own[k], used);
+				any |= ownHave[k] = (k < 3 || !ownPicture) && LoadGrayInput(layerStem, names[k], LayerFraming(f, pupu), own[k], used);
 			if (!any)
 				continue;
 			const Gray* pick[4];
 			for (int k = 0; k < 4; k++)
 				pick[k] = ownHave[k] ? &own[k] : have[k] ? &maps[k] : nullptr;
+			if (ownPicture && plain.v.empty())
+			{
+				plain.width = width;
+				plain.height = height;
+				plain.v.assign(static_cast<size_t>(width) * height, 1.0f);
+			}
+			if (ownPicture)
+				pick[3] = &plain;
 			WriteLayerMap(f, pupu, layerStem + "_ORME", PackOrme(width, height, pick[0], pick[1], pick[2], pick[3]), nullptr, false, o);
 			Say("  %s: its own _ORME\n", fieldlayers::PupuHex(pupu).c_str());
 		}
@@ -1208,6 +1279,10 @@ namespace
 			"  orme     packs <field>_O, _R, _M and the emissive map into <field>_ORME (do it after prep, once you're happy with _O).\n"
 			"           The emissive map is your <field>_E.png (white: glows), else made from _RESM: where the non-diffuse\n"
 			"           residual is most of the painting (a lamp's bulb, a lit screen). (ormh: the same, its old name)\n"
+			"           A <field>_E.png with colour (or an alpha of its own) is a picture of the glows instead: packed into\n"
+			"           <field>_EC, which takes the painting's place where it covers it once the room is dark. With an alpha:\n"
+			"           a layer over the night painting, as in a paint program. Without: painted on black, bright parts take\n"
+			"           the painting's place and dim ones (halos) add to it (--emissive-cover).\n"
 			"  all      prep, then orme\n"
 			"  compose  only writes <field>.png: the opaque layers put together (what to run Marigold/CHORD on)\n"
 			"  model    the field models' textures, not a field: see model above\n"
@@ -1240,6 +1315,8 @@ namespace
 			"  --light-share <%>    how much of the painting's light (above the ambient) a light must explain to count (default 2)\n"
 			"  --emissive-share <%> orme: how much of the painting the residual has to be for a pixel to start glowing (default 35;\n"
 			"                       full glow 40 points above)\n"
+			"  --emissive-cover <%> orme: a picture of the glows without alpha: the brightness from which it takes the painting's\n"
+			"                       place entirely (default 50; below a fifth of that it only adds its light)\n"
 			"  --threads <n>\n");
 	}
 }
@@ -1288,6 +1365,8 @@ int main(int argc, char** argv)
 			o.lights.minShare = static_cast<float>(std::clamp(v, 0.1, 50.0) / 100.0);
 		else if (a == "--emissive-share" && value(v))
 			o.emissiveShare = static_cast<float>(std::clamp(v, 1.0, 95.0) / 100.0);
+		else if (a == "--emissive-cover" && value(v))
+			o.emissiveCover = static_cast<float>(std::clamp(v, 2.0, 100.0) / 100.0);
 		else if (a == "--max-lights" && value(v))
 			o.lights.maxLights = std::clamp(static_cast<int>(v), 0, fieldpbr::MAX_FOUND_LIGHTS);
 		else if (a == "--threads" && value(v))

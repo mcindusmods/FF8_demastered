@@ -21,6 +21,7 @@ namespace fieldpbr
 		case LIGHTMAP: return "_LF";
 		case NORMAL_DEPTH: return "_ND";
 		case ORME: return "_ORME";
+		case EMISSIVE: return "_EC";
 		default: return "";
 		}
 	}
@@ -49,6 +50,57 @@ namespace fieldpbr
 	{
 		const float v = c < 0 ? 0 : c > 1 ? 1 : c;
 		return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+	}
+
+	//--- the glows' picture
+
+	bool EmissiveHasAlpha(const uint8_t* rgba, const size_t pixels)
+	{
+		for (size_t i = 0; i < pixels; i++)
+			if (rgba[i * 4 + 3] != 255)
+				return true;
+		return false;
+	}
+
+	bool EmissiveIsPicture(const uint8_t* rgba, const size_t pixels)
+	{
+		//a mask saved as RGB stays grey to within a few levels (JPEG-like noise from an editor); a picture has colour
+		size_t coloured = 0;
+		for (size_t i = 0; i < pixels; i++)
+		{
+			const uint8_t* p = rgba + i * 4;
+			if (p[3] != 255)
+				return true;
+			const int lo = std::min({ p[0], p[1], p[2] }), hi = std::max({ p[0], p[1], p[2] });
+			coloured += hi - lo > 12;
+		}
+		return coloured * 2000 > pixels; //more than 0.05% of it
+	}
+
+	void PackEmissive(const uint8_t* rgba, const size_t pixels, const bool ownAlpha, const float coverFull, uint8_t* out)
+	{
+		const float* toLinear = SrgbTable();
+		const float full = std::clamp(coverFull, 0.02f, 1.0f), none = full * 0.2f;
+		for (size_t i = 0; i < pixels; i++)
+		{
+			const uint8_t* p = rgba + i * 4;
+			uint8_t* o = out + i * 4;
+			if (ownAlpha)
+			{
+				const float a = p[3] / 255.0f;
+				for (int c = 0; c < 3; c++)
+					o[c] = LinearToSrgb8(toLinear[p[c]] * a);
+				o[3] = p[3];
+				continue;
+			}
+			const float brightest = std::max({ p[0], p[1], p[2] }) / 255.0f;
+			float t = std::clamp((brightest - none) / (full - none), 0.0f, 1.0f);
+			t = t * t * (3.0f - 2.0f * t);
+			o[0] = p[0];
+			o[1] = p[1];
+			o[2] = p[2];
+			o[3] = static_cast<uint8_t>(std::lround(t * 255.0f));
+		}
 	}
 
 	const float* SrgbTable()
@@ -710,9 +762,15 @@ namespace fieldpbr
 					if (ok)
 						e.strength = static_cast<float>(v[0]);
 				}
+				else if (kv.key == "day")
+				{
+					ok = Numbers(kv.value, v, 1) && v[0] >= 0 && v[0] <= 1;
+					if (ok)
+						e.day = static_cast<float>(v[0]);
+				}
 				else
 				{
-					warnings += where + "unknown setting " + kv.key + " in [emissive] (hue, tint, strength)\n";
+					warnings += where + "unknown setting " + kv.key + " in [emissive] (hue, tint, strength, day)\n";
 					continue;
 				}
 			}
@@ -1156,15 +1214,18 @@ namespace fieldpbr
 		out += Format("ambient = %.4f %.4f %.4f\n", lights.ambient[0], lights.ambient[1], lights.ambient[2]);
 		//the glows (kept when fieldprep finds the lights again)
 		const Emissive& e = lights.emissive;
-		out += "\n; The field's glows (the emissive map in _ORME's alpha: lamps, screens, signs), for the whole field. By day they are in\n";
-		out += "; the painting already; this is how they look once the room is dark (the day/night cycle; FIELD_PBR_VIEW=16 shows it now).\n";
-		out += "; hue      = degrees their painted colour turns around the colour wheel (-180 to 180; 0: as painted)\n";
-		out += "; tint     = red green blue they're multiplied by (linear; 1 1 1: as painted): colours white glows, which hue can't\n";
+		out += "\n; The field's glows (lamps, lit windows, screens, signs), for the whole field: your picture of them (<field>_E.png, packed\n";
+		out += "; into _EC by fieldprep) takes the painting's place where it covers it, once the room is dark (the day/night cycle;\n";
+		out += "; FIELD_PBR_VIEW=16 shows it now). Without that picture: the old mask in _ORME's alpha, which lights up the painting's own colour.\n";
+		out += "; hue      = degrees their colour turns around the colour wheel (-180 to 180; 0: as painted)\n";
+		out += "; tint     = red green blue they're multiplied by (linear; 1 1 1: as painted)\n";
 		out += "; strength = how bright (1: as painted)\n";
+		out += "; day      = how much of them shows by day (0: none, 1: all, as at night). For a room that needs its glows in daylight\n";
 		out += "[emissive]\n";
 		out += Format("hue = %.1f\n", e.hue);
 		out += Format("tint = %.3f %.3f %.3f\n", e.tint[0], e.tint[1], e.tint[2]);
 		out += Format("strength = %.3f\n", e.strength);
+		out += Format("day = %.3f\n", e.day);
 		//the night (kept when fieldprep finds the lights again)
 		const Night& n = lights.night;
 		out += "\n; The field at night (DEMASTER's day/night clock; time = day or night in _pbr.txt fixes it), for the whole field.\n";

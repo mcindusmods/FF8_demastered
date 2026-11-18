@@ -58,7 +58,8 @@ namespace
 	}
 }
 
-void fieldrt::MovingLightsCharacters(const uint64_t entry, const std::vector<fieldpbr::LeaderCandidate>& drawn, const int pcOfMost)
+void fieldrt::MovingLightsCharacters(const uint64_t entry, const std::vector<fieldpbr::LeaderCandidate>& drawn, const int pcOfMost,
+	const int controlled)
 {
 	if (!FIELD_MOVING_LIGHTS)
 		return;
@@ -70,7 +71,7 @@ void fieldrt::MovingLightsCharacters(const uint64_t entry, const std::vector<fie
 		presence = 0;
 	}
 	const FieldView& view = PbrView();
-	const int index = fieldpbr::ChooseLeader(drawn, view.partyFollow, pcOfMost, GetTickCount64() / 1000.0, track);
+	const int index = fieldpbr::ChooseLeader(drawn, view.partyFollow, pcOfMost, GetTickCount64() / 1000.0, track, controlled);
 	if (index < 0)
 		return;
 	leader = drawn[static_cast<size_t>(index)];
@@ -83,9 +84,20 @@ void fieldrt::MovingLightsCharacters(const uint64_t entry, const std::vector<fie
 		loggedEntry = entry;
 		loggedKey = leader.key;
 		if (leader.entity >= 0)
-			Log("MOVING_LIGHTS: %s: the party light's carrier is script entity %d (playable-character byte %d; most entities here have %d)%s\n",
-				view.name.c_str(), leader.entity, leader.pc, pcOfMost,
-				view.partyFollow >= 0 ? ", as [party] follow says" : ". Another one: [party] follow = <entity> in _lights.txt");
+		{
+			char why[160] = "";
+			if (view.partyFollow >= 0)
+				snprintf(why, sizeof(why), ", as [party] follow says");
+			else if (leader.entity == controlled)
+				snprintf(why, sizeof(why), ": the one the player moves");
+			else if (controlled >= 0)
+				snprintf(why, sizeof(why), ": the one that moved last (the one the player moves, entity %d, is not drawn)", controlled);
+			else
+				snprintf(why, sizeof(why), ": the one that moved last (the game's word on who the player moves is not known)");
+			Log("MOVING_LIGHTS: %s: the party light's carrier is script entity %d (playable-character byte %d; most entities here have %d)%s%s\n",
+				view.name.c_str(), leader.entity, leader.pc, pcOfMost, why,
+				view.partyFollow >= 0 ? "" : ". Another one: [party] follow = <entity> in _lights.txt");
+		}
 		else
 			Log("MOVING_LIGHTS: %s: the party light's carrier is the character that moved last (the field's camera isn't measured, so "
 				"its script entities aren't known)\n", view.name.c_str());

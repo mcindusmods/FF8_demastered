@@ -89,6 +89,8 @@ void ReadConfigFile()
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);
     ANALOG_MOVEMENT = conf.GetInteger("", "ANALOG_MOVEMENT", 1);
     ANALOG_DEADZONE = conf.GetReal("", "ANALOG_DEADZONE", 0.25);
+    ANALOG_WORLD_MAP = conf.GetInteger("", "ANALOG_WORLD_MAP", 1);
+    MOVE_TURN_SPEED = conf.GetReal("", "MOVE_TURN_SPEED", 720.0);
     FIELD_SMOOTH_SCROLL = conf.GetInteger("", "FIELD_SMOOTH_SCROLL", 1);
-    FIELD_INTERPOLATION = conf.GetInteger("", "FIELD_INTERPOLATION", 1);
+    FIELD_INTERPOLATION = conf.GetInteger("", "FIELD_INTERPOLATION", 0);
 }

@@ -14,7 +14,11 @@
 //	<field>_<pupu>_LF     one layer's lightmap, where it differs from the whole field     written by fieldprep
 //	<field>_ND            normal XYZ and depth (alpha)                                    written by fieldprep
 //	<field>_ORME          AO, roughness, metallic, emissive (an older _ORMH: height, unused) written by fieldprep
-//	<field>_<pupu>_ND / _ORME   the same for one layer (from per-layer inputs)
+//	<field>_EC            the glows as a picture: colour (sRGB, already times its coverage) and coverage (alpha: how
+//	                      much of the painting the glow takes the place of). With it _ORME's alpha isn't read. written by fieldprep
+//	<field>_<pupu>_ND / _ORME / _EC   the same for one layer (from per-layer inputs)
+//	A picture of an animation state without an _ND, _ORME or _EC of its own takes the one of its state's first picture
+//	(the name with its last digit 0), then the field's.
 //	<field>_PROBES.dds    the room's light in 3D, for the characters                      written by fieldprep
 //	<field>_pbr.txt       how to read them (camera, depth, lightmap scales)               written by fieldprep
 //	<field>_lights.txt    the field's lights                                              written once by fieldprep, then yours
@@ -31,8 +35,8 @@ namespace fieldpbr
 {
 	//--- names
 
-	enum Kind { ALBEDO, LIGHTMAP, NORMAL_DEPTH, ORME, KIND_COUNT };
-	const char* KindSuffix(Kind kind); //"_A", "_LF", "_ND", "_ORME"
+	enum Kind { ALBEDO, LIGHTMAP, NORMAL_DEPTH, ORME, EMISSIVE, KIND_COUNT };
+	const char* KindSuffix(Kind kind); //"_A", "_LF", "_ND", "_ORME", "_EC"
 	//before v15.7 the ORM map was _ORMH, its alpha the height (nothing used it): still read, its alpha left out
 	constexpr const char* OLD_ORM_SUFFIX = "_ORMH";
 
@@ -52,6 +56,17 @@ namespace fieldpbr
 	float LinearToSrgb(float c); //0-1
 	const float* SrgbTable(); //256 entries: SrgbToLinear(i / 255)
 	uint8_t LinearToSrgb8(float c);
+
+	//--- the glows' picture (_EC), from your <field>_E.png
+	//Is it a picture of the glows (colour, or an alpha of its own), or the mask from before v15.12 (grey on black, no alpha:
+	//white = the painting glows there)? rgba: 8-bit RGBA
+	bool EmissiveIsPicture(const uint8_t* rgba, size_t pixels);
+	//Packs it. ownAlpha: its alpha is yours and the colour is as you see it (a layer over the night painting, as in a paint
+	//program); else it is painted on black and the coverage comes from its brightness: nothing below a fifth of coverFull
+	//(a soft halo adds to the painting), all of it from coverFull (0-1, of the brightest channel) up (a lit window takes the
+	//painting's place). out: sRGB colour times coverage (worked out in linear light), coverage in alpha
+	bool EmissiveHasAlpha(const uint8_t* rgba, size_t pixels);
+	void PackEmissive(const uint8_t* rgba, size_t pixels, bool ownAlpha, float coverFull, uint8_t* out);
 
 	//The lightmap is stored as LinearToSrgb(light / scale): 0..scale with the darks kept fine (scale per image, in _pbr.txt)
 	uint8_t EncodeLightmap(float light, float scale);
@@ -239,9 +254,11 @@ namespace fieldpbr
 		//its painted light is under the _LF mask (it flickers, or its group can turn it off)
 		bool OwnsMask() const { return baked && (flicker != Flicker::None || follows >= 0); }
 	};
-	//the field's glows (the emissive map, the alpha of _ORME): their colour and strength, for the whole field
+	//the field's glows (the picture of them, _EC; before v15.12 a mask in the alpha of _ORME that lit up the painting's own
+	//colour): their colour and strength, for the whole field
 	struct Emissive
 	{
+		float day = 0.0f; //how much of them shows by day (0-1); at night they show in full whatever this says
 		float hue = 0.0f; //degrees the glows' painted colour turns around the colour wheel (-180 to 180)
 		float tint[3] = { 1, 1, 1 }; //times this colour (linear): gives white glows a colour, which hue can't
 		float strength = 1.0f; //how bright, 1 = as painted

@@ -271,7 +271,13 @@ int main(int argc, char** argv)
 			c[0] = static_cast<float>(stamp.layerX);
 			c[1] = static_cast<float>(stamp.layerY);
 			c[2] = 1.0f + (page.map[fieldpbr::NORMAL_DEPTH] && !files->second.path[fieldpbr::NORMAL_DEPTH].empty() ? 2.0f : 0.0f)
-				+ (page.map[fieldpbr::ORME] && !files->second.path[fieldpbr::ORME].empty() ? 4.0f + (files->second.emissive ? 8.0f : 0.0f) : 0.0f);
+				+ (page.map[fieldpbr::ORME] && !files->second.path[fieldpbr::ORME].empty() ? 4.0f : 0.0f);
+			//a picture of the glows (_EC): +16, and the ORM map's alpha isn't read (no +8)
+			const bool glowPicture = page.map[fieldpbr::EMISSIVE] && !files->second.path[fieldpbr::EMISSIVE].empty();
+			if (glowPicture)
+				c[2] += 16.0f;
+			else if (page.map[fieldpbr::ORME] && !files->second.path[fieldpbr::ORME].empty() && files->second.emissive)
+				c[2] += 8.0f;
 			c[3] = settings.LightmapScale(stamp.pupu, files->second.ownLightmap);
 			float* more = cells.data() + ((stamp.cellY / 16 + 16) * 16 + stamp.cellX / 16) * 4;
 			more[0] = static_cast<float>(stamp.z);
@@ -305,6 +311,7 @@ int main(int argc, char** argv)
 	glUniform1i(at("demasterLF"), 1);
 	glUniform1i(at("demasterND"), 2);
 	glUniform1i(at("demasterORME"), 3);
+	glUniform1i(at("demasterEC"), 9);
 	glUniform1i(at("demasterCells"), 4);
 
 	//--- target: the canvas at the layers' scale
@@ -435,7 +442,8 @@ int main(int argc, char** argv)
 			space.model == fieldpbr::DepthModel::Inverse ? 1.0f : 0.0f);
 		glUniform4f(at("demasterDepth"), static_cast<float>(space.a), static_cast<float>(space.b), static_cast<float>(space.nearest), 0.0f);
 		glUniform4f(at("demasterAmbient"), lit ? use->ambient[0] : 0, lit ? use->ambient[1] : 0, lit ? use->ambient[2] : 0, 0);
-		glUniform4f(at("demasterEmissive"), use->emissive.hue / 360.0f, use->emissive.strength, 0.0f, static_cast<float>(night));
+		glUniform4f(at("demasterEmissive"), use->emissive.hue / 360.0f, use->emissive.strength, 0.0f,
+			std::max(static_cast<float>(night), use->emissive.day));
 		glUniform4f(at("demasterEmissiveTint"), use->emissive.tint[0], use->emissive.tint[1], use->emissive.tint[2], 0.0f);
 		const float texel = 1.0f / (256 * scale);
 		glUniform4f(at("demasterTileClamp"), smooth ? 16.0f / 256 : 0.0f, smooth ? 16.0f / 256 : 0.0f, texel, texel);
@@ -449,6 +457,8 @@ int main(int argc, char** argv)
 			glUniform4f(at("demasterPbr"), isPbr ? 1.0f : 0.0f, static_cast<float>(view), 16.0f, 16.0f);
 			const GLuint* m = page->second.map;
 			const GLuint bind[5] = { m[0], m[1], m[2], m[3], page->second.cells };
+			glActiveTexture(GL_TEXTURE9);
+			glBindTexture(GL_TEXTURE_2D, m[fieldpbr::EMISSIVE]);
 			for (int u = 4; u >= 0; u--)
 			{
 				glActiveTexture(GL_TEXTURE0 + u);
@@ -1002,7 +1012,15 @@ int main(int argc, char** argv)
 		//the emissive map as the shader reads it (FIELD_PBR_VIEW 17): glowing pixels keep their own light at night, so the
 		//checks of the dimmed painting leave them out; they have their own check below
 		const Image glowMap = draw(17, false, 0.0, false, "");
-		const auto glows = [&](const int x, const int y) { return glowMap.rgba[(static_cast<size_t>(y) * width + x) * 4] > 0; };
+		//(a picture of the glows also adds light where it covers nothing: its halos)
+		const Image* halos = fieldMap[fieldpbr::EMISSIVE].empty() ? nullptr : load(fieldMap[fieldpbr::EMISSIVE]);
+		if (halos != nullptr && halos->rgba.size() != glowMap.rgba.size())
+			halos = nullptr;
+		const auto glows = [&](const int x, const int y)
+		{
+			const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+			return glowMap.rgba[i] > 0 || (halos != nullptr && (halos->rgba[i] | halos->rgba[i + 1] | halos->rgba[i + 2]) != 0);
+		};
 		night = 1.0;
 		const auto expected = [&](const uint8_t painted, const int c, const double left)
 		{
@@ -1111,8 +1129,62 @@ int main(int argc, char** argv)
 			size_t glowing = 0;
 			for (size_t i = 0; i < map.rgba.size(); i += 4)
 				glowing += map.rgba[i + 3] != 0 && map.rgba[i] > 0;
-			if (glowing == 0)
-				printf("night glows: the field has no emissive map (_ORME), check skipped\n");
+			//a picture of the glows for the whole field (<field>_EC.png, at the canvas size): painting x level x tint x
+			//(1 - coverage) + the picture's colour x tint x strength; half of both at "day = 0.5" in daylight
+			const std::string picturePath = fieldMap[fieldpbr::EMISSIVE];
+			const Image* picture = picturePath.empty() ? nullptr : load(picturePath);
+			if (picture != nullptr && (composite.rgba.empty() || picture->rgba.size() != composite.rgba.size()))
+			{
+				printf("night glows: %s is not the composite's size, its check skipped\n", picturePath.c_str());
+				picture = nullptr;
+			}
+			for (int pass = 0; pass < 3 && picture != nullptr; pass++)
+			{
+				const float tint[3] = { 1.0f, pass == 1 ? 0.5f : 1.0f, pass == 1 ? 0.25f : 1.0f };
+				dark.emissive.strength = pass == 1 ? 0.5f : 1.0f;
+				for (int c = 0; c < 3; c++)
+					dark.emissive.tint[c] = tint[c];
+				dark.emissive.day = pass == 2 ? 0.5f : 0.0f;
+				night = pass == 2 ? 0.0 : 1.0;
+				const double showing = pass == 2 ? 0.5 : 1.0;
+				const Image got = draw(0, false, 0.0, false, pass == 0 ? "night_glow_picture.png" : pass == 1 ? "night_glow_picture_tinted.png"
+					: "day_glow_picture_half.png");
+				int worst = 0;
+				double sum = 0;
+				size_t n = 0, over = 0, covered = 0;
+				for (size_t i = 0; i < got.rgba.size(); i += 4)
+				{
+					const uint8_t* e = picture->rgba.data() + i;
+					if (composite.rgba[i + 3] == 0 || (e[0] < 8 && e[1] < 8 && e[2] < 8 && e[3] == 0))
+						continue;
+					const double a = e[3] / 255.0;
+					covered += e[3] >= 128;
+					int d = 0;
+					for (int c = 0; c < 3; c++)
+					{
+						const double p = fieldpbr::SrgbToLinear(composite.rgba[i + c] / 255.0f);
+						const double t = c == 0 ? dark.night.tint[0] : c == 1 ? dark.night.tint[1] : dark.night.tint[2];
+						const double left = pass == 2 ? 1.0 : dark.night.level * t;
+						const double v = p * left * (1.0 - a * showing) + fieldpbr::SrgbToLinear(e[c] / 255.0f) * tint[c] * dark.emissive.strength * showing;
+						d = std::max(d, std::abs(got.rgba[i + c] - static_cast<int>(std::lround(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(v))))));
+					}
+					worst = std::max(worst, d);
+					sum += d;
+					over += d > 3;
+					n++;
+				}
+				printf("glow picture%s: %zu glowing pixels (%zu take the painting's place), max %d, mean %.3f, %.4f%% off by more than 3\n",
+					pass == 0 ? " (night, as painted)" : pass == 1 ? " (night, tint 1 0.5 0.25, strength 0.5)" : " (daylight, day = 0.5)", n, covered,
+					worst, n ? sum / n : 0.0, n ? 100.0 * over / n : 0.0);
+				if (n == 0 || sum / n > 1.0 || 100.0 * over / n > 0.5)
+					failures++;
+			}
+			dark.emissive.day = 0.0f;
+			night = 1.0;
+			if (picture != nullptr)
+				glowing = 0; //the old mask's check below is for fields without a picture
+			else if (glowing == 0)
+				printf("night glows: the field has no emissive map (_ORME or _EC), check skipped\n");
 			for (int pass = 0; pass < 2 && glowing; pass++)
 			{
 				const float tint[3] = { 1.0f, pass ? 0.5f : 1.0f, pass ? 0.25f : 1.0f };

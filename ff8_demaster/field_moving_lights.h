@@ -83,11 +83,13 @@ namespace fieldpbr
 		int current = 0; //the key it follows
 		bool has = false;
 	};
-	//Which candidate carries the light (its index; -1: none). follow >= 0: that script entity, if it is drawn. Else: among
+	//Which candidate carries the light (its index; -1: none). follow >= 0: that script entity, if it is drawn. Else the
+	//script entity the player moves (controlled, from the game; -1: not known), if it is drawn. Else, as before v15.12: among
 	//the characters whose pc byte differs from what most entities of the field have (those the script made playable; all of
 	//them when the byte tells nothing), the one that moved last; the one it followed before stays until another moves.
 	//pcOfMost: the pc byte most script entities of the field have (-1: not known). now: seconds, any clock that runs on.
-	int ChooseLeader(const std::vector<LeaderCandidate>& candidates, int follow, int pcOfMost, double now, LeaderTrack& track);
+	int ChooseLeader(const std::vector<LeaderCandidate>& candidates, int follow, int pcOfMost, double now, LeaderTrack& track,
+		int controlled = -1);
 	//The light the leader carries. mode: 0 off, 1 at night (it comes on with nightAmount), 2 always. strength:
 	//FIELD_PARTY_LIGHT_STRENGTH. It sits above the leader's middle and a little towards the camera, so the leader is lit by
 	//it too instead of standing in it.

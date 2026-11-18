@@ -119,6 +119,18 @@ Things that are easy to get wrong:
 
 `analog_move.h/.cpp` is the arithmetic (stick to the game's 0-255 per axis), `texturepatch_v2_analogMove.cpp` the three call sites it replaces in the field's movement function and the XInput reading (loaded at run time, no library). The addresses are `ANALOG_GET_VALUE`, `ANALOG_FIELD_TEST`, `ANALOG_FIELD_X`, `ANALOG_FIELD_Y` in `mymemory.h`, for both game DLLs. The game's own function is always called first: it also puts the game's emulated stack back.
 
+- **The swing (`MOVE_TURN_SPEED`).** `analogmove::FromDpad` turns bits 12-15 of the game's buttons word into a stick pushed all the way; `analogmove::Swing` turns the direction given towards the one held. The buttons word is the movement function's own argument, read from the guest stack in `FieldStickTest` (0x64 above the emulated ESP at that call, the same in both DLLs). Answering the stick test with anything but -1 sends the game down its analogue path, which reads the stick and the same walk/run button.
+- **The world map (`ANALOG_WORLD_MAP`).** `WorldStick` answers the eight calls in the world map's input function (found by scanning 0x240 bytes from `ANALOG_WORLD_FIRST` for calls to the getter: there must be exactly eight). It takes the d-pad bits out of `WM_KEYS[WM_KEY_INDEX]` while the left stick is pushed.
+- **Who the player moves.** `FIELD_PLAYER_ENTITY` (a guest address, s16): the index of the script entity the movement code gives the pad to. The party light reads it (`texturepatch_v2_fieldChars.cpp`, passed to `fieldpbr::ChooseLeader` as `controlled`).
+
+## Field pages: on the list, parked, taken back (FIELD_LAYERS)
+
+`fieldPages` in `texturepatch_v2_fieldLayers.cpp` maps a game texture to the page DEMASTER built into it; a draw with such a texture bound gets the tile filter and, with PBR maps, DEMASTER's field program. A page leaves the list when the game uploads to its texture (`FieldLayersForgetTexture`, from the glTexImage2D hook), when its texture has another size (`DriverWidth`, asked only when the driver has that texture bound), or when a .map is read (`ParkAll`: the pages go to `parkedPages`). A parked page whose texture the game draws without a new upload, in the same field, is put back by `TakeBack`. `LogDrop` writes each case to the log with `FIELD_DEBUG`.
+
+## The glows (FIELD_PBR)
+
+Two kinds, per cell (flags in the cell table): the old mask in `_ORME`'s alpha (flag 8: the painting's own colour glows) and a picture of the glows, `_EC` (flag 16: `fieldpbr::EMISSIVE`, texture unit 9, sampler `demasterEC`). `fieldpbr::PackEmissive` makes `_EC` from your `_E.png` (fieldprep's `GlowPicture`); `EmissiveIsPicture` tells a picture from the old grey mask. The shader's formula is under "Glows" in `README_field_pbr.md`. A layer's `_ND`, `_ORME` and `_EC` are looked for in this order: its own, its animation state's first picture's (`pupu & ~0xF`), the field's (`PbrFindFiles`).
+
 ## How to...
 
 **Add a setting to demaster.conf.** Declare it in `config.h` (`inline int` or `inline double`), read it in `ReadConfigFile` in `config.cpp` with its default, document it in `demaster.conf`. It is read once, at start.

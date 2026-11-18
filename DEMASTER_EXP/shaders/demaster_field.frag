@@ -7,8 +7,10 @@
 //   demasterLF     lightmap (sRGB curve, times the cell's scale) and steady mask (alpha: 1 steady, lower = flickers)
 //   demasterND     normal (x right, y up, z towards the camera) and depth map value (alpha)
 //   demasterORME   AO, roughness, metallic, emissive (an older _ORMH has the height there: not used)
+//   demasterEC     the glows as a picture: colour (sRGB, times its coverage) and coverage (alpha: how much of the painting
+//                  the glow takes the place of). A cell with it doesn't read the ORM map's alpha
 //   demasterCells  per 16x16 cell, two texels: (canvas x, y of its tile, flags 1 PBR +2 normal +4 ORM map +8 it is an
-//                  _ORME, lightmap scale)
+//                  _ORME +16 it has a picture of its glows, lightmap scale)
 //                  and, cellsY rows further down, (the tile's .map Z, layer id, the view distance of the nearest thing the
 //                  tile shows: a tenth of its pixels are nearer (0: none), 0)
 // Lighting happens in view space: x right, y down, z away from the camera (see field_pbr.h).
@@ -28,7 +30,8 @@ uniform vec4 demasterPbr;              // x: on; y: debug view (FIELD_PBR_VIEW);
 uniform vec4 demasterSpace;            // zoom, canvas x and y of the camera axis, depth model (0 linear, 1 inverse)
 uniform vec4 demasterDepth;            // a, b (distance = a + b * value, or 1 / (a + b * value)), nearest distance
 uniform vec4 demasterAmbient;          // rgb: light added everywhere
-uniform vec4 demasterEmissive;         // the glows (_lights.txt [emissive]): x hue turn (turns), y strength; w how much shows (how night it is: 0 by day, the painting has them)
+uniform sampler2D demasterEC;
+uniform vec4 demasterEmissive;         // the glows (_lights.txt [emissive]): x hue turn (turns), y strength; w how much shows (how night it is, or the file's "day" if that is more: 0 = none, the painting has them)
 uniform vec4 demasterEmissiveTint;     // rgb: the glows times this (linear)
 uniform vec4 demasterNight;            // DAY_NIGHT: x how night it is (0 day, 1 night); y the painted light left away from the night's lamps; z how much the lamps keep ([night] level, lamps)
 uniform vec4 demasterNightTint;        // rgb: what's left times this ([night] tint, linear)
@@ -306,6 +309,9 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		return false;
 	vec4 cellMore = texture2D(demasterCells, (cellIndex + vec2(0.5, 0.5 + cells.y)) / vec2(cells.x, cells.y * 2.0));
 	float flags = cell.z;
+	bool hasGlows = flags > 15.5;
+	if (hasGlows)
+		flags -= 16.0;
 	bool hasEmissive = flags > 7.5;
 	if (hasEmissive)
 		flags -= 8.0;
@@ -321,7 +327,9 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		discard;
 	vec4 nd = hasNormal ? texture2D(demasterND, uv) : vec4(0.5, 0.5, 1.0, 0.5);
 	vec4 orme = hasOrme ? texture2D(demasterORME, uv) : vec4(1.0, 0.8, 0.0, 0.0);
-	float emissive = hasEmissive ? orme.a : 0.0;
+	// the glows: a picture of them (its alpha: how much of the painting it covers), else the old mask in the ORM map's alpha
+	vec4 glows = hasGlows ? texture2D(demasterEC, uv) : vec4(0.0);
+	float emissive = hasGlows ? glows.a : hasEmissive ? orme.a : 0.0;
 
 	// where this pixel is: its tile's place on the canvas, the depth map, the camera
 	vec2 canvas = cell.xy + (cellPos - cellIndex) * 16.0;
@@ -358,13 +366,15 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 	float roughness = clamp(orme.g, 0.045, 1.0);
 	float metallic = clamp(orme.b, 0.0, 1.0);
 
-	// the glow: the painting's own colour there (turned by the lights file's hue, tinted, times its strength). Only worked
-	// out when it shows: at night, or in FIELD_PBR_VIEW 16
+	// the glow: the picture's colour, else (the old mask) the painting's own colour there; turned by the lights file's hue,
+	// tinted, times its strength. Only worked out when it shows: at night, or in FIELD_PBR_VIEW 16
 	vec3 glow = vec3(0.0);
-	if (emissive > 0.0 && (demasterEmissive.w > 0.0 || demasterPbr.y > 15.5))
+	if ((emissive > 0.0 || hasGlows) && (demasterEmissive.w > 0.0 || demasterPbr.y > 15.5))
 	{
-		vec3 colour = demasterToLinear(demasterHueTurn(demasterToSrgb(base * baked), demasterEmissive.x));
-		glow = colour * demasterEmissiveTint.rgb * demasterEmissive.y;
+		vec3 colour = hasGlows ? glows.rgb : demasterToSrgb(base * baked);
+		if (demasterEmissive.x != 0.0)
+			colour = demasterHueTurn(colour, demasterEmissive.x);
+		glow = demasterToLinear(colour) * demasterEmissiveTint.rgb * demasterEmissive.y;
 	}
 
 	// the characters' shadows, per light
@@ -484,7 +494,13 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 	painted *= mix(look, 1.0, emissive);
 	// at night a glowing pixel keeps its own light: the glow takes the dimmed painting's place there (it isn't added on top:
 	// the painting has the glow in it already, and adding it again burnt lamps out to white)
-	painted = mix(painted, glow, clamp(emissive * demasterEmissive.w, 0.0, 1.0));
+	// A picture of the glows: its colour already holds its coverage, so a lit window (coverage 1) takes the painting's place
+	// and a soft halo (coverage 0) only adds its light
+	float showing = clamp(demasterEmissive.w, 0.0, 1.0);
+	if (hasGlows)
+		painted = painted * (1.0 - emissive * showing) + glow * showing;
+	else
+		painted = mix(painted, glow, clamp(emissive * demasterEmissive.w, 0.0, 1.0));
 
 	// the characters reflected in glossy and metal surfaces
 	vec3 reflected = vec3(0.0);
@@ -538,9 +554,9 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		rgb = sky ? vec3(0.2, 0.4, 1.0) : cellMore.z > 0.0 ? vec3(clamp(behind - 1.0, 0.0, 1.0)) : vec3(1.0, 0.5, 0.0);
 	}
 	else if (viewMode == 16)
-		rgb = demasterToSrgb(glow * emissive); // the glows as they'll show at night (black: none)
+		rgb = demasterToSrgb(hasGlows ? glow : glow * emissive); // the glows as they'll show at night (black: none)
 	else if (viewMode == 17)
-		rgb = vec3(emissive); // the emissive map
+		rgb = vec3(emissive); // the emissive map (with a picture of the glows: its coverage)
 	result = vec4(rgb, albedo.a);
 	return true;
 }

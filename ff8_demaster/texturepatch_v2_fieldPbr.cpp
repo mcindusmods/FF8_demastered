@@ -9,7 +9,7 @@
 //
 //While such a page is drawn, DEMASTER draws it with its own program (DEMASTER_EXP\shaders\demaster_field.vert/.frag)
 //instead of the game's main.frag, only for that draw, and puts the game's back right after. The maps go on texture units
-//1-8: _LF, _ND, _ORME, the cells, the whole field's _ND (the room, for shadows and walls between), the pictures of the
+//1-9 (9: the glows' picture, _EC): _LF, _ND, _ORME, the cells, the whole field's _ND (the room, for shadows and walls between), the pictures of the
 //characters (reflections), the characters' shadow maps and the characters' depth (texturepatch_v2_fieldChars.cpp makes
 //those three). Lighting:
 //	albedo x lightmap x (1 + flicker mask x (flicker - 1)) + AO x added light (Lambert + GGX)
@@ -39,9 +39,10 @@ using namespace fieldrt;
 namespace
 {
 	constexpr int UNIT_LIGHTMAP = 1, UNIT_NORMAL = 2, UNIT_ORME = 3, UNIT_CELLS = 4, UNIT_ROOM = 5, UNIT_CAPTURE = 6, UNIT_SHADOW = 7,
-		UNIT_CHAR_DEPTH = 8;
-	constexpr int UNIT_FIRST = 1, UNIT_LAST = 8;
-	constexpr float FLAG_PBR = 1.0f, FLAG_NORMAL = 2.0f, FLAG_ORME = 4.0f, FLAG_EMISSIVE = 8.0f; //EMISSIVE: the ORM map is an _ORME
+		UNIT_CHAR_DEPTH = 8, UNIT_EMISSIVE = 9;
+	constexpr int UNIT_FIRST = 1, UNIT_LAST = 9;
+	//EMISSIVE: the ORM map is an _ORME (its alpha: the old glow mask); GLOWS: the cell has a picture of its glows (_EC)
+	constexpr float FLAG_PBR = 1.0f, FLAG_NORMAL = 2.0f, FLAG_ORME = 4.0f, FLAG_EMISSIVE = 8.0f, FLAG_GLOWS = 16.0f;
 	constexpr const char* PROBES_SUFFIX = "_PROBES.dds";
 
 	bool ReadBytes(const std::string& path, std::string& text)
@@ -160,9 +161,14 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 	const bool fieldEmissive = !fieldStem[fieldpbr::ORME].empty();
 	if (!fieldEmissive)
 		fieldStem[fieldpbr::ORME] = FindImageStem(folder, name, language, false, 0, fieldpbr::OLD_ORM_SUFFIX);
-	std::vector<std::string> noLightmap;
+	std::vector<std::string> noLightmap, fromState;
 	for (const auto& [pupu, blend] : layers)
 	{
+		//A picture of an animation state without an _ND, _ORME or _EC of its own takes its state's first picture's (the
+		//name with the last digit 0): both show the same state of the scene, and the field's own maps show another one
+		const uint32_t first = pupu & ~0xFu;
+		const bool hasFirst = ((pupu >> 12) & 0xFFu) != 0xFFu && first != pupu;
+		bool usedState = false;
 		if (blend != 4)
 			continue; //only opaque layers: glows and shadows are drawn as they are
 		PbrField::Layer layer;
@@ -179,12 +185,25 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 				layer.emissive = !layer.stem[k].empty();
 				if (layer.stem[k].empty())
 					layer.stem[k] = FindImageStem(folder, name, language, true, pupu, fieldpbr::OLD_ORM_SUFFIX);
-				if (layer.stem[k].empty())
-					layer.emissive = fieldEmissive;
 			}
+			if (layer.stem[k].empty() && hasFirst && k != fieldpbr::LIGHTMAP)
+			{
+				layer.stem[k] = FindImageStem(folder, name, language, true, first, fieldpbr::KindSuffix(static_cast<fieldpbr::Kind>(k)));
+				if (k == fieldpbr::ORME)
+				{
+					layer.emissive = !layer.stem[k].empty();
+					if (layer.stem[k].empty())
+						layer.stem[k] = FindImageStem(folder, name, language, true, first, fieldpbr::OLD_ORM_SUFFIX);
+				}
+				usedState |= !layer.stem[k].empty();
+			}
+			if (k == fieldpbr::ORME && layer.stem[k].empty())
+				layer.emissive = fieldEmissive;
 			if (layer.stem[k].empty())
 				layer.stem[k] = fieldStem[k];
 		}
+		if (usedState)
+			fromState.push_back(PupuHex(pupu));
 		if (layer.stem[fieldpbr::LIGHTMAP].empty())
 		{
 			noLightmap.push_back(PupuHex(pupu));
@@ -202,6 +221,14 @@ std::shared_ptr<const PbrField> fieldrt::PbrFindFiles(const std::string& folder,
 			list += " " + noLightmap[i];
 		Log("FIELD_PBR: %s: %zu layer(s) have an _A but no _LF (theirs or %s_LF): drawn from their paintings:%s\n", name.c_str(),
 			noLightmap.size(), name.c_str(), list.c_str());
+	}
+	if (!fromState.empty() && FIELD_DEBUG)
+	{
+		std::string list;
+		for (size_t i = 0; i < fromState.size() && i < 16; i++)
+			list += " " + fromState[i];
+		Log("FIELD_PBR: %s: %zu picture(s) of an animation state have no _ND, _ORME or _EC of their own and take their state's "
+			"first picture's (the name ending in 0):%s\n", name.c_str(), fromState.size(), list.c_str());
 	}
 	if (field->layers.empty())
 		return nullptr;
@@ -380,7 +407,7 @@ namespace
 		uint64_t entry = 0;
 		PageJob job; //the game page's job, without the game's pixels (to make the maps again)
 		PageSize size; //of the albedo page
-		GLuint map[fieldpbr::KIND_COUNT] = {}; //LIGHTMAP, NORMAL_DEPTH, ORMH (ALBEDO is the game's texture)
+		GLuint map[fieldpbr::KIND_COUNT] = {}; //LIGHTMAP, NORMAL_DEPTH, ORME, EMISSIVE (ALBEDO is the game's texture)
 		PageSize mapSize[fieldpbr::KIND_COUNT];
 		GLuint cells = 0;
 		int cellsX = 16, cellsY = 16;
@@ -710,12 +737,15 @@ void main()
 			float flags = FLAG_PBR;
 			if (page.map[fieldpbr::NORMAL_DEPTH] != 0 && !layer->second.stem[fieldpbr::NORMAL_DEPTH].empty())
 				flags += FLAG_NORMAL;
+			const bool glows = page.map[fieldpbr::EMISSIVE] != 0 && !layer->second.stem[fieldpbr::EMISSIVE].empty();
 			if (page.map[fieldpbr::ORME] != 0 && !layer->second.stem[fieldpbr::ORME].empty())
 			{
 				flags += FLAG_ORME;
-				if (layer->second.emissive)
-					flags += FLAG_EMISSIVE;
+				if (layer->second.emissive && !glows)
+					flags += FLAG_EMISSIVE; //with a picture of the glows the ORM map's alpha isn't read
 			}
+			if (glows)
+				flags += FLAG_GLOWS;
 			const size_t index = static_cast<size_t>(cy) * page.cellsX + cx;
 			float* cell = data.data() + index * 4;
 			cell[0] = static_cast<float>(stamp->layerX);
@@ -1023,9 +1053,10 @@ void main()
 		const GLint previous = glstate::Program();
 		glUseProgram(id);
 		const char* samplers[] = { "tex", "demasterLF", "demasterND", "demasterORME", "demasterCells", "demasterRoom", "demasterCapture",
-			"demasterShadowMap", "demasterCharDepth" };
-		const int units[] = { 0, UNIT_LIGHTMAP, UNIT_NORMAL, UNIT_ORME, UNIT_CELLS, UNIT_ROOM, UNIT_CAPTURE, UNIT_SHADOW, UNIT_CHAR_DEPTH };
-		for (int i = 0; i < 9; i++)
+			"demasterShadowMap", "demasterCharDepth", "demasterEC" };
+		const int units[] = { 0, UNIT_LIGHTMAP, UNIT_NORMAL, UNIT_ORME, UNIT_CELLS, UNIT_ROOM, UNIT_CAPTURE, UNIT_SHADOW, UNIT_CHAR_DEPTH,
+			UNIT_EMISSIVE };
+		for (int i = 0; i < 10; i++)
 			if (const GLint location = at(samplers[i]); location >= 0)
 				glUniform1i(location, units[i]);
 		glUseProgram(static_cast<GLuint>(previous));
@@ -1246,7 +1277,7 @@ void main()
 		const LightUniforms& lights = Lights();
 		//the glows: by day nothing (the painting has them); at night they stay lit as the room goes dark
 		const fieldpbr::Emissive& e = current.lights.emissive;
-		glUniform4f(p.emissive, e.hue / 360.0f, e.strength, 0.0f, lights.night[0]);
+		glUniform4f(p.emissive, e.hue / 360.0f, e.strength, 0.0f, std::max(lights.night[0], e.day)); //by day: as much as "day" says
 		glUniform4f(p.emissiveTint, e.tint[0], e.tint[1], e.tint[2], 0.0f);
 		glUniform4fv(p.night, 1, lights.night);
 		glUniform4fv(p.nightTint, 1, lights.nightTint);
@@ -1532,7 +1563,8 @@ bool fieldrt::PbrBeforeDraw(const GLuint boundTexture, const GLint program, cons
 	const bool capture = charsSet && chars.capture != 0, shadows = charsSet && chars.shadowMap != 0;
 	const bool charDepth = FIELD_PBR_DEPTH && charsSet && chars.depth != 0;
 	const GLuint textures[UNIT_LAST + 1] = { 0, page.map[fieldpbr::LIGHTMAP], page.map[fieldpbr::NORMAL_DEPTH], page.map[fieldpbr::ORME],
-		page.cells, current.room, capture ? chars.capture : 0, shadows ? chars.shadowMap : 0, charDepth ? chars.depth : 0 };
+		page.cells, current.room, capture ? chars.capture : 0, shadows ? chars.shadowMap : 0, charDepth ? chars.depth : 0,
+		page.map[fieldpbr::EMISSIVE] };
 	for (int unit = UNIT_FIRST; unit <= UNIT_LAST; unit++)
 	{
 		savedBinding[unit] = static_cast<GLint>(glstate::Texture(GL_TEXTURE_2D, unit));

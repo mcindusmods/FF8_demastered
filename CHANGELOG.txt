@@ -1,5 +1,70 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.12 (in the source; not packaged yet) - glows as a picture, the turn swings, world-map stick, pages that stay pages
+-----------------------------------------------------------------------------------------------------------------------
+Not run in the game yet. The shared code and the shader are tested on Linux (the new glows against sums worked out on
+the CPU, pixel for pixel); the Windows-only files are type-checked.
+The glows as a picture (FIELD_PBR; new file <field>_EC, new setting day in [emissive])
+  - Until now the glows were a mask (the alpha of _ORME) that lit up the painting's own colour at night, and [emissive]
+    tint multiplied it. A window painted blue by day could not glow yellow: the tint mixed with the blue and the old colour
+    showed around it. Now your <field>_E.png can be a picture of the glows themselves, in any colour. fieldprep orme
+    packs it into <field>_EC (BC7): the colour, and in the alpha how much of the painting the glow takes the place of
+    (coverage). At night: painting x (1 - coverage) + glow. A lit window replaces what is painted there; a soft halo
+    only adds its light.
+  - Two ways to paint it. On black, without alpha: bright parts take the painting's place, dim ones add to it
+    (--emissive-cover <%>: the brightness that replaces entirely, default 50; nothing below a fifth of that). Or with an
+    alpha of its own: a layer over the night painting, exactly as a paint program shows it.
+  - A grey _E.png without alpha is still the old mask and works as before. So do fields without any _E (the mask from
+    _RESM). hue, tint and strength in [emissive] apply to both kinds.
+  - [emissive] day = 0 to 1 in _lights.txt: how much of the glows shows in daylight (0: none, as before; 1: all). At
+    night they show in full whatever it says.
+  - With a picture of the glows _ORME's alpha is written plain white and not read: BC7 then spends all its bits on AO,
+    roughness and metallic. One more texture per page of a field that has glows (about 1 MB a page at 4x) and one more
+    texture read per pixel there.
+  - One layer's own: <field>_<pupu>_E.png gives <field>_<pupu>_EC.
+A picture of an animation state takes its state's maps (FIELD_PBR)
+  - bccent_1 has one camera and two states of the whole scene (sharp street, sharp planter). The pictures 00401011 to
+    00401015 had no _ND or _ORME of their own and took the field's, which show the other state: blocks lit by the wrong
+    normals. A picture of an animation state without an _ND, _ORME or _EC of its own now takes the one of its state's
+    first picture (the same name ending in 0: 00401010), and only then the field's. The log names the pictures that do.
+    Nothing to rename or copy. _LF is not touched (fieldprep already writes one per picture where it differs).
+Pages that stay pages (FIELD_LAYERS)
+  - In a frame log one page of bccent_1 still held DEMASTER's picture but was no longer on DEMASTER's list, so the game's
+    own program drew it: unlit, no shadows, no night. Four places take a page off the list and none said so in the log.
+  - The check that the game still uses a page's texture for that page asked the driver about "the bound texture" while
+    going by the remembered binding for which page it was. It now asks only when the driver has that same texture bound,
+    and leaves the page alone otherwise.
+  - When a .map is read the list is emptied (another field's textures can reuse the numbers). Pages are now set aside
+    instead: if the game then draws one without having given its texture a new picture, and it is still the same field,
+    the page is taken back with its PBR maps. A new upload by the game forgets it as before.
+  - FIELD_DEBUG: a line in the log every time a page leaves the list, with the reason, and every time one is taken back.
+  - Which cause it was in that session is not known (its log was not there). The next log will say.
+The party light follows the character you move (FIELD_MOVING_LIGHTS)
+  - It went to "the playable character that moved last", and followers move after the leader stops. The game keeps the
+    index of the script entity the pad moves (the field's movement code compares each entity with it before reading
+    the stick); the light now goes to that one. [party] follow in _lights.txt still wins; if that entity is not drawn,
+    the old rule applies. EFIGS and JP (FIELD_PLAYER_ENTITY in mymemory.h).
+The turn swings (new: MOVE_TURN_SPEED, 720 degrees a second; 0 = off)
+  - Fields: the d-pad and the arrow keys now walk through the game's analogue code too, as a stick pushed all the way in
+    the direction held, and the direction given to the game turns towards it the short way round instead of jumping:
+    a quarter turn takes an eighth of a second, a turn back a quarter. The left stick swings the same; how hard it is
+    pushed is passed on unchanged. After 0.3 s with nothing held the next push starts in its own direction.
+  - The buttons word is read from the movement code's own argument on the game's stack (the same place in EFIGS and JP).
+  - To check in the game: walk and run with the d-pad still follow your walk/run button as before (the analogue code
+    reads the same button, but that path has only been read, not played).
+The world map: the left stick moves at any angle (new: ANALOG_WORLD_MAP, on by default; needs ANALOG_MOVEMENT)
+  - The world map's input code asks for all four axes of both pads each frame (eight calls). With an XInput pad
+    connected, pad 1's are answered: the left stick as it is, the right stick at rest (Remastered turns the camera by
+    buttons). While the left stick is pushed, the d-pad bits are taken out of that frame's keys (Remastered also sends
+    the stick as d-pad presses), as FFNx does for the 2000 game. Without a pad: as before. EFIGS and JP.
+In-between pictures: off by default (FIELD_INTERPOLATION=0)
+  - In the game it slowed fields down (38 to 56 ms a frame against 33 without) and its own check for that did not catch
+    it. Shelved until it is rebuilt another way; the switch is still there.
+For working on the code
+  - tests: the glows' picture and its packing, [emissive] day, who carries the light when the game says who you move
+    (field_pbr_test, 17,892 checks), the d-pad as a stick and the swing (field_tween_test, 605 checks), and the shader's
+    new glows by night, tinted, and by day at day = 0.5 (pbr_shader_test, when FIELD's folder has an _EC.png).
+
 v15.11 (in the source; not packaged yet) - walking at any angle, smooth scroll, in-between pictures (60 a second)
 -----------------------------------------------------------------------------------------------------------------------
 None of this has run in the game yet: it was written against the game's code and a frame log, the rules and the

@@ -22,6 +22,7 @@ BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, 
 	PSX_VRAM, READ_VRAM_PALETTE, WRITE_PALETTE,
 	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
 	ANALOG_GET_VALUE, ANALOG_FIELD_TEST, ANALOG_FIELD_X, ANALOG_FIELD_Y,
+	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY,
 	ADDRESS_NAME_COUNT //keep last
 };
 
@@ -133,6 +134,15 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 	{ ANALOG_FIELD_TEST    , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0291659,} },
 	{ ANALOG_FIELD_X       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x02918CB,} },
 	{ ANALOG_FIELD_Y       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0291927,} },
+	//the world map's input (the host of 0x559240, FFNx's worldmap_input_update_sub_559240) asks for all four axes of both
+	//pads, eight E8 calls within 0x240 bytes: this is the first (pad 1, left X). Guest addresses (not RVAs): the world
+	//map's key states (a DWORD per entry, d-pad in bits 12-15) and the s16 index of the entry this frame's keys go into
+	{ ANALOG_WORLD_FIRST   , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0929854,} },
+	{ WM_KEYS              , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x203FDE8,} },
+	{ WM_KEY_INDEX         , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x20409BC,} },
+	//guest address: the script entity the player moves (s16; the field's movement code gives the pad to the entity whose
+	//index this is)
+	{ FIELD_PLAYER_ENTITY  , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1CD8FD0,} },
 	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
 	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
 	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
@@ -291,6 +301,11 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
 { ANALOG_FIELD_TEST    , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x029D1B0 }},
 { ANALOG_FIELD_X       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x029D43F }},
 { ANALOG_FIELD_Y       , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x029D49B }},
+//the world map's first call, its key states and the player's entity in the JP game (read from the same code there)
+{ ANALOG_WORLD_FIRST   , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x0962CED }},
+{ WM_KEYS              , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2543EC8 }},
+{ WM_KEY_INDEX         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2544A9C }},
+{ FIELD_PLAYER_ENTITY  , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x21DEF68 }},
 };
 
 
