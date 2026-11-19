@@ -23,7 +23,7 @@ BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, 
 	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
 	ANALOG_GET_VALUE, ANALOG_FIELD_TEST, ANALOG_FIELD_X, ANALOG_FIELD_Y,
 	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY, GTE_CONTROL, GAME_MOMENT, GAME_TIME, BATTLE_CAMERA,
-	WORLD_CAMERA,
+	WORLD_CAMERA, WORLD_PLAYER, WORLD_TARGET,
 	ADDRESS_NAME_COUNT //keep last
 };
 
@@ -164,6 +164,11 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 	//translation from the camera's place) into its MATRIX at +0x10, the same layout as BATTLE_CAMERA. The terrain and the
 	//models are drawn with it (SetRotMatrix 0x45DE00, SetTransMatrix 0x45DEF0); 56 places use it in each language
 	{ WORLD_CAMERA         , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x2040140,} },
+	//WORLD_PLAYER, WORLD_TARGET: the party's place on the world map (int32 x, z, height: x 0-0x3FFFF, z 0-0x2FFFF, the
+	//world wraps) and the point the camera follows, which 0x552AD0 moves halfway to the party each frame. The camera's
+	//space is within the 2048-unit cell of WORLD_TARGET: x - (x & ~0x7FF), the height, -(z - (z & ~0x7FF)) (0x53DC70)
+	{ WORLD_PLAYER         , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x203EE80,} },
+	{ WORLD_TARGET         , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x203FCF8,} },
 	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
 	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
 	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
@@ -335,6 +340,9 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
 { BATTLE_CAMERA        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x229B858 }},
 //WORLD_CAMERA: 0x5040E0 on, as the world map's other data (WM_KEYS, WMSET_GUEST); 56 references in FFVIII_JP.exe.dat too
 { WORLD_CAMERA         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2544220 }},
+//WORLD_PLAYER, WORLD_TARGET: the same 0x5040E0 on (FFVIII_JP.exe.dat's copy of 0x552AD0, at 0x5571A0, reads them there)
+{ WORLD_PLAYER         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2542F60 }},
+{ WORLD_TARGET         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2543DD8 }},
 };
 
 

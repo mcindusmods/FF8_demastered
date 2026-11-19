@@ -469,6 +469,17 @@ int main(int argc, char** argv)
 			glUniform4fv(at("demasterSceneLightAt[0]"), 4, lightAt);
 			glUniform4fv(at("demasterSceneLightColour[0]"), 4, lightColour);
 		}
+		//the world map's sky (draw w < 0): no lights on it
+		{
+			glUniform4f(at("demasterSceneDraw"), 1, 0, 0, -1);
+			uint8_t sky[4];
+			drawFloor(sky, px, py);
+			int plain[3];
+			for (int c = 0; c < 3; c++)
+				plain[c] = static_cast<int>(std::lround(painted[c]));
+			Check(near(sky, plain), "draw w < 0 (the world's sky): the lights leave it as painted");
+			glUniform4f(at("demasterSceneDraw"), 1, 0, 0, 0);
+		}
 		//a fighter (not the stage) gets the lights but not the sun's part
 		sun(1, -0.2, 0.3, 0.8f, 1.0f);
 		glUniform4f(at("demasterSceneDraw"), 0, 0, 0, 0);

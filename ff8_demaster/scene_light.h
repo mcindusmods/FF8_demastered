@@ -38,7 +38,9 @@
 //	  light  = x up z  r g b  range [night|day]   a light of the stage's own, up to four per stage (later rules add to
 //	                                      earlier ones): its place in the stage's units (the stage's middle is 0 0 0, "up"
 //	                                      is above its floor), its colour (linear, may be above 1), how far it reaches,
-//	                                      and optionally when it is on. For battles only
+//	                                      and optionally when it is on.
+//	                                      On the world map (in [world] or a rule for it, 64 at most): light = x y z ...,
+//	                                      the place in the world map's own numbers (see "the world map's lights")
 //	Rules are applied in the file's order, later ones over earlier ones.
 
 #include <cstdint>
@@ -53,12 +55,15 @@ namespace scenelight
 
 	struct Light
 	{
+		//a battle stage's: its place in the stage (up: above its floor); the world map's: x, y (its height, the game's way)
+		//and z in the world map's own numbers
 		float x = 0, up = 0, z = 0;
 		float colour[3] = { 1, 1, 1 };
 		float range = 2000;
 		int when = 0; //0 always, 1 by night, 2 by day
 	};
-	constexpr size_t MAX_LIGHTS = 4;
+	constexpr size_t MAX_LIGHTS = 4; //a battle stage's
+	constexpr size_t MAX_WORLD_LIGHTS = 64; //the world map's (the nearest 8 are lit)
 
 	struct Look
 	{
@@ -168,6 +173,19 @@ namespace scenelight
 	//how far a facing summed in view space agrees with the world space's -y (up, as the PlayStation has it): -1 to 1, 0 when
 	//there is none
 	double FacingAlongUp(const Camera& camera, const double facing[3]);
+
+	//--- the world map's lights ([world] and rules for it, light = x y z r g b range [night|day]): their places in the world
+	//map's own numbers, as the game keeps the party's (WORLD_PLAYER): x 0-262143 and z 0-196607 across the map, which wraps
+	//round, y its height the game's way. The camera's space (the stage) is within the 2048-unit cell of the point the camera
+	//follows (WORLD_TARGET): x - the cell's x, the height, -(z - the cell's z). Each frame the eight whose reach comes
+	//nearest the camera are lit
+	constexpr double WORLD_WIDTH = 262144.0, WORLD_DEPTH = 196608.0;
+	constexpr double WORLD_LIGHTS_SEEN = 12000.0; //a light whose reach ends farther than this from the camera isn't lit
+	//a world place in the camera's space (the nearest of the map's copies), and back
+	void WorldToStage(const double target[3], const double place[3], double stage[3]);
+	void StageToWorld(const double target[3], const double stage[3], double place[3]);
+	//the lights to light now (indices, nearest first): at most `most`; eye: the camera in the stage's space
+	std::vector<size_t> NearestLights(const std::vector<Light>& lights, const double target[3], const double eye[3], size_t most);
 
 	//--- the world map's ground, smoothed. The game draws it in many small draws (a few triangles each, far to near), so a
 	//corner's neighbours are mostly in other draws, drawn before or after it. DEMASTER keeps the faces around each corner

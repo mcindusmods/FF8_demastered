@@ -279,6 +279,22 @@ namespace scenelight
 				continue;
 			const std::string key = Lower(Trim(line.substr(0, equals))), value = Trim(line.substr(equals + 1));
 			int result = SetLook(key, value, *look, rule);
+			if (result == 0 && rule == nullptr && key == "light")
+			{
+				//[world] (and [battle]): lights of the place itself
+				Light light;
+				const size_t most = look == &settings.world ? MAX_WORLD_LIGHTS : MAX_LIGHTS;
+				if (!ReadLight(value, light))
+					result = -1;
+				else
+				{
+					result = 1;
+					if (look->lights.size() >= most)
+						warnings += where + "too many lights here: this one is left out\n";
+					else
+						look->lights.push_back(light);
+				}
+			}
 			if (result == 0 && rule != nullptr)
 			{
 				result = 1;
@@ -300,8 +316,8 @@ namespace scenelight
 					Light light;
 					if (!ReadLight(value, light))
 						result = -1;
-					else if (rule->look.lights.size() >= MAX_LIGHTS)
-						warnings += where + "a stage has four lights at most: this one is left out\n";
+					else if (rule->look.lights.size() >= MAX_WORLD_LIGHTS)
+						warnings += where + "a rule has 64 lights at most: this one is left out\n";
 					else
 						rule->look.lights.push_back(light);
 				}
@@ -402,13 +418,18 @@ namespace scenelight
 			";            a light of the stage's own, four per stage at most. x and z: its place on the stage's floor, in the\n"
 			";            stage's units (0 0 is the middle; the fighters stand a few thousand apart); up: how far above the\n"
 			";            floor; r g b: its colour (linear, may be above 1); range: how far it reaches; night or day: only then\n"
+			";            On the world map (in [world] or a rule with where = world; 64 at most, the eight whose reach comes\n"
+			";            nearest the camera are lit): light = x y z  r g b  range [night|day], its place in the world map's own\n"
+			";            numbers, as the game keeps the party's (x 0-262143 and z 0-196607 across the map, y the height, the\n"
+			";            game's way). With DAY_NIGHT_KEYS=1, Ctrl+F3 on the world map adds one here where the party stands.\n"
 			"; Later rules go over earlier ones.\n"
 			"\n"
-			"; The Lunar Cry: off until the story counter's value there is known (from the game's code). Then take the ; away\n"
-			"; and set its moment; the tints make the night red instead of blue.\n"
+			"; The Lunar Cry: off. By AxlRose-RX's list of the story's moments (FFNx's field debugger has it) the counter is\n"
+			"; 2504-2564 while the party is on the Lunar Base, where the Lunar Cry is seen, and 3000 on from the Ragnarok. Take\n"
+			"; the ; away and set the moment you want it from; the tints make the night red instead of blue.\n"
 			";[rule lunar cry]\n"
 			";where = both\n"
-			";moment = 3000-65535\n"
+			";moment = 2534-65535\n"
 			";day_tint = 1 0.94 0.92\n"
 			";night_tint = 1 0.5 0.45\n"
 			"\n"
@@ -479,10 +500,10 @@ namespace scenelight
 				look.sunAzimuth = rule.look.sunAzimuth;
 			if (rule.hasSunHeight)
 				look.sunHeight = rule.look.sunHeight;
-			if (where == Where::Battle)
-				for (const Light& light : rule.look.lights)
-					if (look.lights.size() < MAX_LIGHTS)
-						look.lights.push_back(light);
+			//(a stage has its first four; the world map up to 64, the nearest of which are lit)
+			for (const Light& light : rule.look.lights)
+				if (look.lights.size() < (where == Where::Battle ? MAX_LIGHTS : MAX_WORLD_LIGHTS))
+					look.lights.push_back(light);
 		}
 		return look;
 	}
@@ -644,6 +665,58 @@ namespace scenelight
 		double view[3];
 		DirectionToView(camera, up, view);
 		return (facing[0] * view[0] + facing[1] * view[1] + facing[2] * view[2]) / length;
+	}
+
+	//--- the world map's lights
+
+	namespace
+	{
+		//into -period/2 .. period/2: the nearest of the map's copies
+		double Wrapped(const double d, const double period)
+		{
+			return d - period * std::floor(d / period + 0.5);
+		}
+
+		double InCell(const double v)
+		{
+			return v - GroundNormals::CELL * std::floor(v / GroundNormals::CELL);
+		}
+	}
+
+	void WorldToStage(const double target[3], const double place[3], double stage[3])
+	{
+		stage[0] = InCell(target[0]) + Wrapped(place[0] - target[0], WORLD_WIDTH);
+		stage[1] = place[1];
+		stage[2] = -(InCell(target[2]) + Wrapped(place[2] - target[2], WORLD_DEPTH));
+	}
+
+	void StageToWorld(const double target[3], const double stage[3], double place[3])
+	{
+		const double x = target[0] - InCell(target[0]) + stage[0], z = target[2] - InCell(target[2]) - stage[2];
+		place[0] = x - WORLD_WIDTH * std::floor(x / WORLD_WIDTH);
+		place[1] = stage[1];
+		place[2] = z - WORLD_DEPTH * std::floor(z / WORLD_DEPTH);
+	}
+
+	std::vector<size_t> NearestLights(const std::vector<Light>& lights, const double target[3], const double eye[3], const size_t most)
+	{
+		std::vector<std::pair<double, size_t>> near;
+		for (size_t i = 0; i < lights.size(); i++)
+		{
+			const double place[3] = { lights[i].x, lights[i].up, lights[i].z };
+			double stage[3];
+			WorldToStage(target, place, stage);
+			const double d = std::sqrt((stage[0] - eye[0]) * (stage[0] - eye[0]) + (stage[1] - eye[1]) * (stage[1] - eye[1])
+				+ (stage[2] - eye[2]) * (stage[2] - eye[2]));
+			const double beyond = d - lights[i].range; //how far the nearest place it lights is from the camera
+			if (beyond < WORLD_LIGHTS_SEEN)
+				near.emplace_back(beyond, i);
+		}
+		std::sort(near.begin(), near.end());
+		std::vector<size_t> out;
+		for (size_t i = 0; i < near.size() && out.size() < most; i++)
+			out.push_back(near[i].second);
+		return out;
 	}
 
 	//--- the world map's ground, smoothed

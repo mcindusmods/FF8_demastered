@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps and smooth ground
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps, smooth ground and lights
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -167,6 +167,25 @@ The world map's ground with smooth normals (tenth step; new in scene_light.txt: 
     after a cell's jump, with the places a little off and the ground a little lower; a jump that isn't a cell's starts
     again; a 90-degree step stays sharp. scene_shader_test: the fighters' program on the ground (draw x = 1) takes the
     sun by the corner's normal, whichever way round it is handed.
+Lights on the world map at night (eleventh step; new: light = in [world], Ctrl+F3)
+  - light = x y z  r g b  range [night|day] in [world] of scene_light.txt, or in rules with where = world, 64 at most;
+    each frame the eight whose reach comes nearest the camera are lit (all eight of the shader's slots: the effects'
+    lights are for battles). Their places are the world map's own numbers, as the game keeps the party's (x 0-262143
+    and z 0-196607 across the map, which wraps; y the height the game's way).
+  - From the game's code (0x552AD0 and 0x53DC70): the camera's space is within the 2048-unit cell of the point the
+    camera follows (WORLD_TARGET 0x203FCF8, JP 0x2543DD8; it moves halfway to the party each frame), as x minus the
+    cell's x, the height, and minus (z minus the cell's z); the camera's matrix is the turn's transpose and its
+    translation the turned place, negated. DEMASTER puts a light there by the nearest of the map's copies.
+  - With DAY_NIGHT_KEYS=1, Ctrl+F3 on the world map writes a light 300 above where the party stands (WORLD_PLAYER
+    0x203EE80, JP 0x2542F60) as its own rule at the end of scene_light.txt: warm, at night, reaching 2500; the game
+    reads the file again at once. Not checked in the game yet: with SCENE_DEBUG=1 the log says every 10 seconds where
+    the party is, in the game's numbers and on the screen, so the sums can be checked against the picture.
+  - The world map's sky takes no lights (demasterSceneDraw.w < 0 in main.frag).
+  - The Lunar Cry: scene_light.txt's rule (still off) and demaster.conf's LUT_LUNAR_FROM now give the story's counter
+    there: 2504-2564 on the Lunar Base, where the Lunar Cry is seen, and 3000 on from the Ragnarok (AxlRose-RX's list).
+  - A battle rule keeps all its lights now (a stage lights its first four); world rules' lights reach the world map.
+  - Tests: field_pbr_test (the cell sums against the game's own for the target, round trips, the map's wrap, a target
+    just outside the map, the nearest lights, the file's limits); scene_shader_test (the sky takes no lights).
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

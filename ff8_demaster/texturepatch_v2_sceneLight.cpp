@@ -283,6 +283,83 @@ namespace
 			worldLook = look;
 	}
 
+	//the world map's party and the point its camera follows (WORLD_PLAYER, WORLD_TARGET: x, z, height as int32), as x,
+	//height, z
+	bool ReadWorldPlace(const ADDRESS_NAME name, double out[3])
+	{
+		const DWORD at = HasAddress(name) ? GetAddress(name) : 0;
+		int32_t v[3]{};
+		if (at == 0 || !GuestRead(v, at, sizeof(v)))
+			return false;
+		out[0] = v[0];
+		out[1] = v[2];
+		out[2] = v[1];
+		return true;
+	}
+
+	struct WorldLightCount
+	{
+		ULONGLONG said = 0;
+		bool warned = false;
+	} worldLightCount;
+
+	void WorldLights(const scenelight::Camera& camera, StageLight& next)
+	{
+		const std::vector<scenelight::Light>& lights = worldLook.lights;
+		double target[3];
+		const bool known = ReadWorldPlace(WORLD_TARGET, target);
+		if (!known)
+		{
+			if (!lights.empty() && !worldLightCount.warned)
+			{
+				worldLightCount.warned = true;
+				OutputDebug("SCENE_LIGHT: the world map's lights: the camera's place (WORLD_TARGET) can't be read in this game: not lit\n");
+			}
+			return;
+		}
+		const double origin[3] = { 0, 0, 0 };
+		double eye[3];
+		scenelight::PlaceToStage(camera, origin, eye);
+		const std::vector<size_t> lit = scenelight::NearestLights(lights, target, eye, 8);
+		size_t slot = 0;
+		for (const size_t i : lit)
+		{
+			const scenelight::Light& light = lights[i];
+			const float on = light.when == 1 ? now.night : light.when == 2 ? 1.0f - now.evening : 1.0f;
+			if (on <= 0.0f)
+				continue;
+			const double place[3] = { light.x, light.up, light.z };
+			double stage[3], view[3];
+			scenelight::WorldToStage(target, place, stage);
+			scenelight::PlaceToView(camera, stage, view);
+			for (int k = 0; k < 3; k++)
+			{
+				next.lightAt[slot * 4 + k] = static_cast<float>(view[k]);
+				next.lightColour[slot * 4 + k] = light.colour[k] * on;
+			}
+			next.lightAt[slot * 4 + 3] = light.range;
+			slot++;
+		}
+		//every 10 s (SCENE_DEBUG): where the party is, in the game's numbers and on the screen (to check the places' sums
+		//against the picture), and what is lit
+		const ULONGLONG tick = GetTickCount64();
+		if (SCENE_DEBUG && tick - worldLightCount.said >= 10000)
+		{
+			worldLightCount.said = tick;
+			double party[3], stage[3], view[3];
+			if (ReadWorldPlace(WORLD_PLAYER, party))
+			{
+				scenelight::WorldToStage(target, party, stage);
+				scenelight::PlaceToView(camera, stage, view);
+				const double sx = view[2] > 1 ? camera.centreX + camera.distance * view[0] / view[2] : -1;
+				const double sy = view[2] > 1 ? camera.centreY + camera.distance * view[1] / view[2] : -1;
+				OutputDebug("SCENE_LIGHT: the world map: the party at x %.0f z %.0f height %.0f (the camera follows x %.0f z %.0f), %.0f in "
+					"front of the camera, on the screen at %.0f %.0f of 320 x 240 (it should be where the party is drawn); %zu of %zu world "
+					"light(s) lit now\n", party[0], party[2], party[1], target[0], target[2], view[2], sx, sy, slot, lights.size());
+			}
+		}
+	}
+
 	//Once a frame in battle: the camera from the game's projection registers, the sun and the stage's lights in view space
 	void WorkStageLight()
 	{
@@ -408,9 +485,14 @@ namespace
 				next.lightAt[count * 4 + 3] = light.range;
 				count++;
 			}
-			//the effects' (EFFECT_LIGHTS), in slots 4-7
+			//the world map's own (scene_light.txt, its places the game's: WORLD_TARGET's cell): the eight that reach nearest
+			//the camera, in all the slots
+			if (world)
+				WorldLights(camera, next);
+			//the effects' (EFFECT_LIGHTS), in slots 4-7 (in battle)
 			size_t slot = scenelight::MAX_LIGHTS;
-			for (const scenelight::EffectLight& light : glows.lights.Lights())
+			static const std::vector<scenelight::EffectLight> noEffects;
+			for (const scenelight::EffectLight& light : world ? noEffects : glows.lights.Lights())
 			{
 				if (slot >= scenelight::MAX_LIGHTS + scenelight::MAX_EFFECT_LIGHTS)
 					break;
@@ -1827,6 +1909,7 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 				WorkStageLight();
 				stageLit = true;
 				drawValue[0] = sky ? 0.0f : 1.0f;
+				drawValue[3] = sky ? -1.0f : 0.0f; //(the sky: no lights on it)
 				//its page's maps (SceneLightWorldPage): the normal map and the ORMH map answer to the sun, not on the sky
 				drawValue[1] = !sky && t.normal != 0 ? 1.0f : 0.0f;
 				drawValue[2] = !sky && t.orm != 0 ? 1.0f : 0.0f;
@@ -1915,10 +1998,65 @@ const fieldrt::EffectGlows& fieldrt::FieldEffectGlows()
 	return glows.fieldOut;
 }
 
+namespace
+{
+	//Ctrl+F3 on the world map (DAY_NIGHT_KEYS): a light where the party stands, a little above it, written into
+	//scene_light.txt as a rule of its own (move it, colour it or take it out there; the file is read again at once)
+	bool worldKeyWasDown = false;
+
+	void WorldLightKey()
+	{
+		if (!DAY_NIGHT_KEYS || currentMode != MODE_WORLDMAP)
+		{
+			worldKeyWasDown = false;
+			return;
+		}
+		const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 && (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+		const bool pressed = down && !worldKeyWasDown;
+		worldKeyWasDown = down;
+		if (!pressed)
+			return;
+		const HWND window = GetForegroundWindow();
+		DWORD process = 0;
+		if (window == nullptr || GetWindowThreadProcessId(window, &process) == 0 || process != GetCurrentProcessId())
+			return;
+		double party[3];
+		if (!ReadWorldPlace(WORLD_PLAYER, party))
+		{
+			OutputDebug("SCENE_LIGHT: Ctrl+F3: the party's place (WORLD_PLAYER) can't be read in this game: no light added\n");
+			return;
+		}
+		ReadSettings();
+		int number = 1;
+		for (const scenelight::Rule& rule : settings.rules)
+			if (rule.name.rfind("world light", 0) == 0)
+				number++;
+		//300 above the ground, up as the ground showed it (-y of its space unless measured otherwise)
+		const double up = worldUp.decided && worldUp.sign < 0 ? 1.0 : -1.0;
+		char text[512];
+		snprintf(text, sizeof(text), "\n[rule world light %d]\n; put where the party stood with Ctrl+F3: x, y (the height, the game's way), z; "
+			"colour; how far it reaches\nwhere = world\nlight = %.0f %.0f %.0f  1.6 1.15 0.7  2500  night\n", number, party[0],
+			party[1] + 300.0 * up, party[2]);
+		FILE* file = nullptr;
+		if (fopen_s(&file, settingsPath.c_str(), "ab") != 0 || file == nullptr)
+		{
+			OutputDebug("SCENE_LIGHT: Ctrl+F3: %s can't be written: no light added\n", settingsPath.c_str());
+			return;
+		}
+		fwrite(text, 1, strlen(text), file);
+		fclose(file);
+		settingsChecked = 0; //(read again on the next draw)
+		OutputDebug("SCENE_LIGHT: Ctrl+F3: [rule world light %d] added to %s: a warm light at night 300 above the party (x %.0f z %.0f, "
+			"height %.0f)\n", number, settingsPath.c_str(), party[0], party[2], party[1]);
+	}
+}
+
 //SwapBuffers hook: a frame is over
 void SceneLightFrameEnd()
 {
 	sceneFrame++;
+	if (SCENE_LIGHT)
+		WorldLightKey();
 	if (SCENE_LIGHT)
 	{
 		FightersFrameEnd();

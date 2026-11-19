@@ -71,13 +71,18 @@ smooth = 1
 ;            a light of the stage's own, four per stage at most. x and z: its place on the stage's floor, in the
 ;            stage's units (0 0 is the middle; the fighters stand a few thousand apart); up: how far above the
 ;            floor; r g b: its colour (linear, may be above 1); range: how far it reaches; night or day: only then
+;            On the world map (in [world] or a rule with where = world; 64 at most, the eight whose reach comes
+;            nearest the camera are lit): light = x y z  r g b  range [night|day], its place in the world map's own
+;            numbers, as the game keeps the party's (x 0-262143 and z 0-196607 across the map, y the height, the
+;            game's way). With DAY_NIGHT_KEYS=1, Ctrl+F3 on the world map adds one here where the party stands.
 ; Later rules go over earlier ones.
 
-; The Lunar Cry: off until the story counter's value there is known (from the game's code). Then take the ; away
-; and set its moment; the tints make the night red instead of blue.
+; The Lunar Cry: off. By AxlRose-RX's list of the story's moments (FFNx's field debugger has it) the counter is
+; 2504-2564 while the party is on the Lunar Base, where the Lunar Cry is seen, and 3000 on from the Ragnarok. Take
+; the ; away and set the moment you want it from; the tints make the night red instead of blue.
 ;[rule lunar cry]
 ;where = both
-;moment = 3000-65535
+;moment = 2534-65535
 ;day_tint = 1 0.94 0.92
 ;night_tint = 1 0.5 0.45
 

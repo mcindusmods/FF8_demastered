@@ -38,9 +38,11 @@ uniform vec4 demasterSceneSun;     // xyz: towards the sun or moon, view space; 
 uniform vec4 demasterSceneSunLight; // rgb: its light (colour x strength); w: relief (how strongly a normal map shows)
 uniform vec4 demasterSceneDraw;    // this draw: x 1 = the stage (the sun's part; fighters only get the lights), y 1 = a
                                    // normal map on demasterSceneN, z 1 = an ORM map on demasterSceneORM; w: a fighter
-                                   // DEMASTER draws (DEMASTER_FIGHTER): its share of the sun's darkening
+                                   // DEMASTER draws (DEMASTER_FIGHTER): its share of the sun's darkening; w < 0: no lights
+                                   // (the world map's sky)
 uniform vec4 demasterSceneLightAt[8];     // the stage's own lights (0-3) and the effects' (4-7, EFFECT_LIGHTS: a spell's
-                                          // glow): xyz view space, w range (0: none)
+                                          // glow); on the world map all eight are its own, the nearest: xyz view space,
+                                          // w range (0: none)
 uniform vec4 demasterSceneLightColour[8]; // rgb, linear
 uniform sampler2D demasterSceneN;
 uniform vec4 demasterSceneSurface; // x: how deep the height in demasterSceneORM's alpha goes (an ORMH map: 1 the surface,
@@ -271,7 +273,7 @@ void main()
 					}
 					for (int i = 0; i < 8; i++)
 					{
-						if (demasterSceneLightAt[i].w <= 0.0)
+						if (demasterSceneLightAt[i].w <= 0.0 || demasterSceneDraw.w < 0.0) // (w < 0: the world map's sky)
 							continue;
 						vec3 to = demasterSceneLightAt[i].xyz - p;
 						float away = length(to);

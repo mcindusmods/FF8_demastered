@@ -2116,11 +2116,13 @@ static void TestSceneCamera()
 		elsewhere = scenelight::Resolve(s, scenelight::Where::Battle, 5, 0), map = scenelight::Resolve(s, scenelight::Where::World, -1, 0);
 	CHECK(twelve.lights.size() == 4 && twelve.lights[0].when == 1 && twelve.lights[0].up == 600.0f && twelve.lights[0].colour[1] == 1.6f
 		&& twelve.lights[1].when == 0 && twelve.lights[1].range == 2500.0f && twelve.lights[2].when == 2 && twelve.sun == 0.0f);
-	CHECK(thirteen.lights.size() == 3 && elsewhere.lights.empty() && elsewhere.sun == 0.5f && map.lights.empty());
+	CHECK(thirteen.lights.size() == 3 && elsewhere.lights.empty() && elsewhere.sun == 0.5f && map.lights.size() == 1); //(the world's: v15.15)
 	scenelight::Parse("[rule x]\nlight = 1 2 3  1 1 1\nlight = 1 2 3  1 1 1  -5\nlight = 1 2 3  1 1 1  10 dusk\nlight = 1 2 3  1 1 1  10\nlight = 1 2 3  1 1 1  10\n"
 		"light = 1 2 3  1 1 1  10\nlight = 1 2 3  1 1 1  10\nlight = 1 2 3  1 1 1  10\n[battle]\nsun = 2\nsun_height = 2\n", s, w);
-	CHECK(s.rules.size() == 1 && s.rules[0].look.lights.size() == 4 && s.battle.sun == 0.35f && s.battle.sunHeight == 60.0f);
-	for (const char* part : { "line 2: can't read light", "line 3: can't read light", "line 4: can't read light", "four lights at most", "can't read sun = 2",
+	//(a rule keeps them all, 64 at most; a stage lights its first four)
+	CHECK(s.rules.size() == 1 && s.rules[0].look.lights.size() == 5 && s.battle.sun == 0.35f && s.battle.sunHeight == 60.0f);
+	CHECK(scenelight::Resolve(s, scenelight::Where::Battle, 1, 0).lights.size() == 4);
+	for (const char* part : { "line 2: can't read light", "line 3: can't read light", "line 4: can't read light", "can't read sun = 2",
 		"can't read sun_height" })
 		CHECK(w.find(part) != std::string::npos);
 	w.clear();
@@ -2503,6 +2505,62 @@ static void TestLut()
 	CHECK(std::string(lutgrade::SlotName(lutgrade::LUNAR_DAWN)) == "lunar_dawn");
 }
 
+//SCENE_LIGHT: the world map's lights: their places in the game's numbers, in the camera's cell, the nearest lit
+static void TestWorldLights()
+{
+	using scenelight::WorldToStage;
+	using scenelight::StageToWorld;
+	using scenelight::NearestLights;
+	using scenelight::Where;
+	//the camera's cell: the point it follows, x & ~0x7FF and z & ~0x7FF (0x53DC70: x & 0x7FF, the height, -(z & 0x7FF))
+	const double target[3] = { 5000, -300, 7000 };
+	double stage[3];
+	WorldToStage(target, target, stage);
+	CHECK(stage[0] == (5000 & 0x7FF) && stage[1] == -300 && stage[2] == -(7000 & 0x7FF));
+	const double town[3] = { 5100, -350, 7100 };
+	WorldToStage(target, town, stage);
+	CHECK(stage[0] == 1004 && stage[1] == -350 && stage[2] == -956);
+	double back[3];
+	StageToWorld(target, stage, back);
+	CHECK(back[0] == 5100 && back[1] == -350 && back[2] == 7100);
+	//the map wraps round: a place just over the edge is the near one
+	const double edge[3] = { 262000, 0, 196500 }, over[3] = { 100, 0, 50 };
+	WorldToStage(edge, over, stage);
+	CHECK(stage[0] == (262000 & 0x7FF) + 244 && stage[2] == -((196500 & 0x7FF) + 158));
+	StageToWorld(edge, stage, back);
+	CHECK(back[0] == 100 && back[2] == 50);
+	//the target a little outside the map (the game lets it, as it follows the party over the edge): the same cell sums
+	const double outside[3] = { -100, 0, 196700 };
+	WorldToStage(outside, outside, stage);
+	CHECK(stage[0] == (-100 & 0x7FF) && stage[2] == -(196700 & 0x7FF));
+	//the nearest by how near their reach comes to the camera; one too far isn't lit
+	std::vector<scenelight::Light> lights(3);
+	lights[0].x = 5100; lights[0].up = -350; lights[0].z = 7100; lights[0].range = 2500; //near
+	lights[1].x = 9000; lights[1].up = -350; lights[1].z = 7000; lights[1].range = 4000; //4000 off, reaching 4000
+	lights[2].x = 60000; lights[2].up = 0; lights[2].z = 7000; lights[2].range = 2500; //far away
+	double eye[3];
+	WorldToStage(target, target, eye);
+	std::vector<size_t> lit = NearestLights(lights, target, eye, 8);
+	CHECK(lit.size() == 2 && lit[0] == 0 && lit[1] == 1); //(the first's reach passes the camera by 2350, the second's ends at it)
+	lit = NearestLights(lights, target, eye, 1);
+	CHECK(lit.size() == 1 && lit[0] == 0);
+	//in the file: [world] and rules for it hold up to 64; a stage keeps four
+	scenelight::Settings settings;
+	std::string warnings;
+	scenelight::Parse("[world]\nlight = 5100 -350 7100  1 0.8 0.5  2500 night\n[rule towns]\nwhere = world\nlight = 9000 -350 7000 1 1 1 4000\n"
+		"[rule stage]\nwhere = battle\nlight = 0 100 0 1 1 1 2000\nlight = 0 100 0 1 1 1 2000\nlight = 0 100 0 1 1 1 2000\n"
+		"light = 0 100 0 1 1 1 2000\nlight = 0 100 0 1 1 1 2000\n", settings, warnings);
+	CHECK(warnings.empty());
+	const scenelight::Look world = scenelight::Resolve(settings, Where::World, -1, -1);
+	CHECK(world.lights.size() == 2 && world.lights[0].x == 5100 && world.lights[0].when == 1 && world.lights[1].range == 4000);
+	CHECK(scenelight::Resolve(settings, Where::Battle, 3, -1).lights.size() == scenelight::MAX_LIGHTS);
+	std::string many = "[world]\n";
+	for (size_t i = 0; i < scenelight::MAX_WORLD_LIGHTS + 1; i++)
+		many += "light = " + std::to_string(i * 100) + " 0 0 1 1 1 1000\n";
+	scenelight::Parse(many, settings, warnings);
+	CHECK(settings.world.lights.size() == scenelight::MAX_WORLD_LIGHTS && warnings.find("too many lights") != std::string::npos);
+}
+
 //SCENE_LIGHT: the world map's ground smoothed across its many small draws, kept from frame to frame by place
 static void TestGroundNormals()
 {
@@ -2721,6 +2779,7 @@ static void TestTimeRules()
 
 int main(int argc, char** argv)
 {
+	TestWorldLights();
 	TestGroundNormals();
 	TestTimeRules();
 	TestLut();
