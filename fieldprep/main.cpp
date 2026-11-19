@@ -1335,6 +1335,7 @@ namespace
 			"       missing ones plain). Keep d001_0.png: the game reads it. A DDS newer than its PNGs is left alone (--force).\n"
 			"       --quality <0-4>  BC7 effort (default 2)    --flip-green  the normal maps are green down (DirectX)\n"
 			"       --coverage <0-1> the game's cut-out test, kept in the albedo's small levels (default 0.44; 0: off)\n"
+			"       --no-pad         don't fill around the islands (the albedo's see-through texels) in every level\n"
 			"\n"
 			"Commands:\n"
 			"  prep     (the default) from your maps: <field>_<pupu>_A for every opaque layer, <field>_LF, <field>_ND,\n"
@@ -1443,6 +1444,8 @@ int main(int argc, char** argv)
 			o.model.coverage = static_cast<float>(std::clamp(v, 0.0, 1.0));
 		else if (a == "--flip-green")
 			o.model.flipGreen = true;
+		else if (a == "--no-pad")
+			o.model.pad = false;
 		else if (!a.empty() && a[0] == '-')
 		{
 			fprintf(stderr, "unknown option %s (fieldprep --help)\n", a.c_str());

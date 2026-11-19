@@ -231,6 +231,42 @@ static void TestPieces()
 		const Image plain = PackOrme(1, 1, nullptr, nullptr, nullptr, nullptr);
 		CHECK(plain.rgba[0] == 255 && plain.rgba[1] == 179 && plain.rgba[2] == 0 && plain.rgba[3] == 0);
 	}
+	//island padding: an island of colour on a see-through black background; what's outside takes the island's edge, in every
+	//level, so the small levels' edge texels keep the island's colour (unpadded, black creeps in)
+	{
+		const auto inIsland = [](const int x, const int y) { return x >= 10 && x < 30 && y >= 10 && y < 30; };
+		const Image island = Make(64, 64, [&](int x, int y, uint8_t* p)
+		{
+			const bool in = inIsland(x, y);
+			p[0] = in ? 200 : 0; p[1] = in ? 60 : 0; p[2] = in ? 40 : 0; p[3] = in ? 255 : 0;
+		});
+		const std::vector<Image> padded = AlbedoLevels(island, 0.0f, true), plain = AlbedoLevels(island, 0.0f, false);
+		CHECK(padded[0].rgba[(5 * 64 + 5) * 4] == 200 && padded[0].rgba[(5 * 64 + 5) * 4 + 3] == 0); //far outside: the colour, still see-through
+		CHECK(plain[0].rgba[(5 * 64 + 5) * 4] == 0);
+		CHECK(padded[0].rgba[(15 * 64 + 15) * 4 + 1] == 60); //inside: as it was
+		//level 3 (8 x 8): texel 1 is made of 8..15, half outside the island
+		const uint8_t* edge = padded[3].rgba.data() + (1 * 8 + 1) * 4;
+		CHECK(std::abs(edge[0] - 200) <= 1 && std::abs(edge[1] - 60) <= 1 && edge[3] > 0);
+		const std::vector<uint8_t> covered = IslandCoverage(island, island);
+		CHECK(covered.size() == 64 * 64 && covered[15 * 64 + 15] == 1 && covered[5 * 64 + 5] == 0);
+		//a map without see-through texels says nothing about islands
+		const Image opaque = Grey(64, 64, [](int, int) { return 100; });
+		CHECK(IslandCoverage(opaque, opaque).empty());
+		CHECK(IslandCoverage(opaque, island).size() == covered.size()); //the image the game reads, when the albedo is opaque
+		//ORME (data) and normals: padded from the albedo's islands
+		const Image data = Make(64, 64, [&](int x, int y, uint8_t* p) { const bool in = inIsland(x, y); p[0] = p[1] = p[2] = p[3] = in ? 100 : 0; });
+		const std::vector<Image> dPadded = DataLevels(data, covered), dPlain = DataLevels(data);
+		const size_t at = (2 * 16 + 2) * 4; //level 2 (16 x 16): texel 2 is made of 8..11, half outside
+		CHECK(dPadded[2].rgba[at] == 100 && dPadded[2].rgba[at + 3] == 100 && dPlain[2].rgba[at] < 80);
+		const Image tilted = Make(64, 64, [&](int x, int y, uint8_t* p)
+		{
+			const bool in = inIsland(x, y);
+			p[0] = in ? 192 : 0; p[1] = in ? 128 : 0; p[2] = in ? 238 : 0; p[3] = 255; //(0.5, 0, 0.87); outside: garbage
+		});
+		const std::vector<Image> nPadded = NormalLevels(tilted, covered), nPlain = NormalLevels(tilted);
+		CHECK(std::abs(nPadded[2].rgba[at] - 192) <= 2 && std::abs(nPadded[2].rgba[at + 2] - 238) <= 2);
+		CHECK(std::abs(nPlain[2].rgba[at] - 192) > 2 || std::abs(nPlain[2].rgba[at + 2] - 238) > 2);
+	}
 	//resizing: smaller by area, larger bilinear
 	{
 		const Image big = Grey(8, 8, [](int x, int) { return x < 4 ? 0 : 200; });

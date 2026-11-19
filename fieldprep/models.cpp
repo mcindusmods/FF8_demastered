@@ -102,6 +102,102 @@ namespace fieldprep
 			return to;
 		}
 
+		//Uncovered texels take the average of their neighbours that have a value, ring by ring outwards from the covered ones,
+		//until every texel that can be reached has one (each texel is visited once). channels: how many of the 4 (3: colour)
+		void Pad(Floats& f, const std::vector<uint8_t>& covered, const int channels)
+		{
+			const int w = f.width, h = f.height;
+			const size_t n = static_cast<size_t>(w) * h;
+			if (covered.size() != n)
+				return;
+			std::vector<uint8_t> filled(covered), queued(n, 0);
+			std::vector<size_t> ring, next;
+			const auto around = [&](const size_t i, auto&& visit)
+			{
+				const int x = static_cast<int>(i % w), y = static_cast<int>(i / w);
+				for (int dy = -1; dy <= 1; dy++)
+					for (int dx = -1; dx <= 1; dx++)
+					{
+						const int sx = x + dx, sy = y + dy;
+						if ((dx != 0 || dy != 0) && sx >= 0 && sy >= 0 && sx < w && sy < h)
+							visit(static_cast<size_t>(sy) * w + sx);
+					}
+			};
+			for (size_t i = 0; i < n; i++)
+				if (!filled[i])
+					around(i, [&](const size_t j)
+					{
+						if (filled[j] && !queued[i])
+						{
+							queued[i] = 1;
+							ring.push_back(i);
+						}
+					});
+			std::vector<double> values;
+			while (!ring.empty())
+			{
+				values.assign(ring.size() * 4, 0.0);
+				for (size_t k = 0; k < ring.size(); k++)
+				{
+					int count = 0;
+					around(ring[k], [&](const size_t j)
+					{
+						if (!filled[j])
+							return;
+						for (int c = 0; c < channels; c++)
+							values[k * 4 + c] += f.v[j * 4 + c];
+						count++;
+					});
+					for (int c = 0; c < channels; c++)
+						values[k * 4 + c] /= std::max(count, 1);
+				}
+				next.clear();
+				for (size_t k = 0; k < ring.size(); k++)
+				{
+					for (int c = 0; c < channels; c++)
+						f.v[ring[k] * 4 + c] = values[k * 4 + c];
+					filled[ring[k]] = 1;
+				}
+				for (const size_t i : ring)
+					around(i, [&](const size_t j)
+					{
+						if (!filled[j] && !queued[j])
+						{
+							queued[j] = 1;
+							next.push_back(j);
+						}
+					});
+				ring.swap(next);
+			}
+		}
+
+		//the next level's coverage: a texel is covered when any texel it is made from is
+		std::vector<uint8_t> HalfCoverage(const std::vector<uint8_t>& covered, const int width, const int height, const int toWidth,
+			const int toHeight)
+		{
+			std::vector<uint8_t> out(static_cast<size_t>(toWidth) * toHeight, 0);
+			if (covered.size() != static_cast<size_t>(width) * height)
+				return {};
+			ForCover(width, height, toWidth, toHeight, [&](const int dx, const int dy, const int sx, const int sy, double)
+			{
+				if (covered[static_cast<size_t>(sy) * width + sx])
+					out[static_cast<size_t>(dy) * toWidth + dx] = 1;
+			});
+			return out;
+		}
+
+		//some texels covered and some not (else there is nothing to pad, or nothing to pad from)
+		bool Mixed(const std::vector<uint8_t>& covered)
+		{
+			bool some = false, notAll = false;
+			for (const uint8_t c : covered)
+			{
+				some |= c != 0;
+				notAll |= c == 0;
+			}
+			return some && notAll;
+		}
+
 		//the alpha scale that makes `image`'s alpha pass the test (alpha >= ref) as often as `target`
 		double CoverageScale(const std::vector<double>& alpha, const double ref, const double target)
 		{
@@ -231,26 +327,42 @@ namespace fieldprep
 				r.text = "  " + m.stem + ": ERROR " + what + "\n";
 				return r;
 			};
+			const char* albedoSuffix = has("_A") ? "_A" : has("_AM") ? "_AM" : "";
+			const fs::path albedoSource = file(albedoSuffix);
+			//the islands (for padding the normal and ORME maps): from the albedo's alpha, read once
+			std::vector<uint8_t> islands;
+			bool islandsRead = false;
+			const auto readIslands = [&]() -> bool
+			{
+				if (islandsRead || !o.pad)
+					return true;
+				islandsRead = true;
+				Image albedo = base;
+				std::string ignored;
+				if (*albedoSuffix != '\0' && !Load(albedoSource, width, height, albedo, ignored, error))
+					return false;
+				islands = IslandCoverage(albedo, base);
+				return true;
+			};
 			//the albedo
 			{
-				const char* from = has("_A") ? "_A" : has("_AM") ? "_AM" : "";
-				const fs::path source = file(from), out = folder / (m.stem + ".dds");
+				const fs::path source = albedoSource, out = folder / (m.stem + ".dds");
 				if (!o.force && UpToDate(out, { source, image }))
 					r.upToDate++;
 				else
 				{
 					Image albedo = base;
-					if (*from != '\0' && !Load(source, width, height, albedo, notes, error))
+					if (*albedoSuffix != '\0' && !Load(source, width, height, albedo, notes, error))
 						return fail(error);
-					const std::vector<Image> levels = AlbedoLevels(albedo, o.coverage);
+					const std::vector<Image> levels = AlbedoLevels(albedo, o.coverage, o.pad);
 					if (!WriteLevels(out, levels, true, o, threads, error))
 						return fail(error);
 					bool cutouts = false;
 					for (size_t i = 3; i < albedo.rgba.size() && !cutouts; i += 4)
 						cutouts = albedo.rgba[i] < 255;
 					char line[200];
-					snprintf(line, sizeof(line), "albedo from %s (%zu levels%s)", source.filename().string().c_str(), levels.size(),
-						cutouts && o.coverage > 0 ? ", cut-outs keep their coverage" : "");
+					snprintf(line, sizeof(line), "albedo from %s (%zu levels%s%s)", source.filename().string().c_str(), levels.size(),
+						cutouts && o.coverage > 0 ? ", cut-outs keep their coverage" : "", cutouts && o.pad ? ", padded under the see-through texels" : "");
 					made += line;
 					r.made++;
 				}
@@ -259,7 +371,7 @@ namespace fieldprep
 			if (has("_N"))
 			{
 				const fs::path source = file("_N"), out = folder / (m.stem + "_N.dds");
-				if (!o.force && UpToDate(out, { source, image }))
+				if (!o.force && UpToDate(out, { source, image, albedoSource }))
 					r.upToDate++;
 				else
 				{
@@ -272,7 +384,9 @@ namespace fieldprep
 							normal.rgba[i + 1] = static_cast<uint8_t>(255 - normal.rgba[i + 1]);
 						normal.rgba[i + 3] = 255; //BC7 spends every bit on the normal
 					}
-					if (!WriteLevels(out, NormalLevels(normal), false, o, threads, error))
+					if (!readIslands())
+						return fail(error);
+					if (!WriteLevels(out, NormalLevels(normal, islands), false, o, threads, error))
 						return fail(error);
 					made += std::string(made.empty() ? "" : ", ") + "normal" + (o.flipGreen ? " (green flipped)" : "");
 					r.made++;
@@ -291,7 +405,7 @@ namespace fieldprep
 					}
 			if (anySeparate || has("_ORME"))
 			{
-				std::vector<fs::path> sources{ image };
+				std::vector<fs::path> sources{ image, albedoSource };
 				if (anySeparate)
 				{
 					for (const char* s : chosen)
@@ -330,12 +444,17 @@ namespace fieldprep
 							return fail(error);
 						which = "packed";
 					}
-					if (!WriteLevels(out, DataLevels(orme), false, o, threads, error))
+					if (!readIslands())
+						return fail(error);
+					if (!WriteLevels(out, DataLevels(orme, islands), false, o, threads, error))
 						return fail(error);
 					made += std::string(made.empty() ? "" : ", ") + "ORME (" + which + ")";
 					r.made++;
 				}
 			}
+			if (o.pad && islandsRead)
+				notes += islands.empty() ? ", not padded (the albedo has no see-through texels to tell its islands by)"
+					: ", padded around its islands";
 			const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 			char head[96];
 			snprintf(head, sizeof(head), "  %s %dx%d: ", m.stem.c_str(), width, height);
@@ -384,7 +503,20 @@ namespace fieldprep
 		return static_cast<double>(passing) / n;
 	}
 
-	std::vector<Image> AlbedoLevels(const Image& level0, const float coverage)
+	std::vector<uint8_t> IslandCoverage(const Image& albedo, const Image& image)
+	{
+		for (const Image* from : { &albedo, &image })
+		{
+			std::vector<uint8_t> covered(static_cast<size_t>(from->width) * from->height);
+			for (size_t i = 0; i < covered.size(); i++)
+				covered[i] = from->rgba[i * 4 + 3] > 0;
+			if (from->width == albedo.width && from->height == albedo.height && Mixed(covered))
+				return covered;
+		}
+		return {};
+	}
+
+	std::vector<Image> AlbedoLevels(const Image& level0, const float coverage, const bool pad)
 	{
 		std::vector<Image> levels{ level0 };
 		//linear light, colour weighted by alpha (see-through pixels don't bleed into their neighbours)
@@ -402,6 +534,22 @@ namespace fieldprep
 		}
 		const bool keepCoverage = cutouts && coverage > 0.0f;
 		const double target = keepCoverage ? Coverage(level0, coverage) : 0.0;
+		//the colour under the see-through texels: their island's edge's (the levels below are made from it too)
+		const auto padLevel = [&](Image& out)
+		{
+			std::vector<uint8_t> covered(static_cast<size_t>(f.width) * f.height);
+			for (size_t i = 0; i < covered.size(); i++)
+				covered[i] = f.v[i * 4 + 3] > 0.0;
+			if (!Mixed(covered))
+				return;
+			Pad(f, covered, 3);
+			for (size_t i = 0; i < covered.size(); i++)
+				if (!covered[i])
+					for (int c = 0; c < 3; c++)
+						out.rgba[i * 4 + c] = Byte(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(f.v[i * 4 + c])));
+		};
+		if (pad && cutouts)
+			padLevel(levels[0]);
 		while (f.width > 1 || f.height > 1)
 		{
 			f = Half(f, [](const double* in, const double w, double* s)
@@ -433,20 +581,33 @@ namespace fieldprep
 					out.rgba[i * 4 + c] = Byte(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(f.v[i * 4 + c])));
 				out.rgba[i * 4 + 3] = Byte(255.0 * std::min(1.0, alpha[i] * scale));
 			}
+			if (pad && cutouts)
+				padLevel(out);
 			levels.push_back(std::move(out));
 		}
 		return levels;
 	}
 
-	std::vector<Image> DataLevels(const Image& level0)
+	std::vector<Image> DataLevels(const Image& level0, const std::vector<uint8_t>& coveredIn)
 	{
 		std::vector<Image> levels{ level0 };
 		Floats f;
 		f.width = level0.width;
 		f.height = level0.height;
 		f.v.assign(level0.rgba.begin(), level0.rgba.end());
+		std::vector<uint8_t> covered = coveredIn.size() == static_cast<size_t>(f.width) * f.height && Mixed(coveredIn) ? coveredIn
+			: std::vector<uint8_t>();
+		if (!covered.empty())
+		{
+			Pad(f, covered, 4);
+			for (size_t i = 0; i < covered.size(); i++)
+				if (!covered[i])
+					for (int c = 0; c < 4; c++)
+						levels[0].rgba[i * 4 + c] = Byte(f.v[i * 4 + c]);
+		}
 		while (f.width > 1 || f.height > 1)
 		{
+			const int fromWidth = f.width, fromHeight = f.height;
 			f = Half(f, [](const double* in, const double w, double* s)
 			{
 				for (int c = 0; c < 4; c++)
@@ -460,6 +621,12 @@ namespace fieldprep
 			out.width = f.width;
 			out.height = f.height;
 			out.rgba.resize(f.v.size());
+			if (!covered.empty())
+			{
+				covered = HalfCoverage(covered, fromWidth, fromHeight, f.width, f.height);
+				if (Mixed(covered))
+					Pad(f, covered, 4);
+			}
 			for (size_t i = 0; i < f.v.size(); i++)
 				out.rgba[i] = Byte(f.v[i]);
 			levels.push_back(std::move(out));
@@ -467,7 +634,7 @@ namespace fieldprep
 		return levels;
 	}
 
-	std::vector<Image> NormalLevels(const Image& level0)
+	std::vector<Image> NormalLevels(const Image& level0, const std::vector<uint8_t>& coveredIn)
 	{
 		std::vector<Image> levels{ level0 };
 		Floats f;
@@ -480,8 +647,36 @@ namespace fieldprep
 				f.v[i + c] = level0.rgba[i + c] / 255.0 * 2.0 - 1.0;
 			f.v[i + 3] = 1.0;
 		}
+		//a padded normal is the average of its neighbours', made unit length again
+		const auto padNormals = [&](const std::vector<uint8_t>& covered, Image* out)
+		{
+			Pad(f, covered, 3);
+			for (size_t i = 0; i < covered.size(); i++)
+			{
+				if (covered[i])
+					continue;
+				double* v = f.v.data() + i * 4;
+				const double length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+				if (length > 1e-9)
+					for (int c = 0; c < 3; c++)
+						v[c] /= length;
+				else
+				{
+					v[0] = v[1] = 0.0;
+					v[2] = 1.0;
+				}
+				if (out != nullptr)
+					for (int c = 0; c < 3; c++)
+						out->rgba[i * 4 + c] = Byte((v[c] * 0.5 + 0.5) * 255.0);
+			}
+		};
+		std::vector<uint8_t> covered = coveredIn.size() == static_cast<size_t>(f.width) * f.height && Mixed(coveredIn) ? coveredIn
+			: std::vector<uint8_t>();
+		if (!covered.empty())
+			padNormals(covered, &levels[0]);
 		while (f.width > 1 || f.height > 1)
 		{
+			const int fromWidth = f.width, fromHeight = f.height;
 			f = Half(f, [](const double* in, const double w, double* s)
 			{
 				for (int c = 0; c < 3; c++)
@@ -499,6 +694,12 @@ namespace fieldprep
 				}
 				s[3] = 1.0;
 			});
+			if (!covered.empty())
+			{
+				covered = HalfCoverage(covered, fromWidth, fromHeight, f.width, f.height);
+				if (Mixed(covered))
+					padNormals(covered, nullptr);
+			}
 			Image out;
 			out.width = f.width;
 			out.height = f.height;

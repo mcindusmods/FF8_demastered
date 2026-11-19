@@ -37,6 +37,16 @@ The colour grade by the time of day (second step; new: LUT, LUT_STRENGTH, LUT_IN
   - Tests: lut_grade.h in field_pbr_test (the strips both ways, .cube with and without a domain, the cross-fades at the
     cycle's points and without jumps anywhere, also on an odd cycle), and main.frag and main_char.frag through Mesa
     against the same arithmetic (scene_shader_test: within 0 levels).
+Island padding in fieldprep model (third step; new: --no-pad)
+  - Outside a model texture's islands (the albedo's alpha-0 texels: the _A's, else the image the game reads) every map
+    now holds its island's edge, spread out until all is filled, in every mip level: no dark seams creeping in from the
+    background in the small levels, no dark fringes where the card filters a cut-out's edge. The albedo's see-through
+    texels stay see-through (only their colour changes); the normal map's padding is unit length; ORME's four channels
+    each. A texture without any see-through texel isn't padded (the log says so). Costs nothing noticeable (BC7 is the
+    time). DDS files made before stay as they are until their PNGs change: --force once to pad them.
+  - The normal and ORME DDS are now also made again when the albedo changes (its alpha says where the islands are).
+  - Tests: fieldprep_model_test (an island on black: the padded levels' edge texels keep its colour, normal and data;
+    unpadded ones don't; textures without see-through texels).
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------
