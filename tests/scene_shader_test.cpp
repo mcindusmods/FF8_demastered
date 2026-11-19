@@ -561,6 +561,87 @@ int main(int argc, char** argv)
 			glUniform4f(at("demasterSceneSurface"), 0, 0, 0, 0);
 			glActiveTexture(GL_TEXTURE0);
 		}
+
+		//10. the world map's ground as DEMASTER draws it (the fighters' program with draw x = 1): the corners' smooth normal
+		//is the surface, for the sun too
+		{
+			std::string fragment = ReadFile(folder + "main.frag");
+			const size_t line = fragment.find('\n');
+			fragment.insert(line == std::string::npos ? fragment.size() : line + 1, "#define DEMASTER_FIGHTER 1\n");
+			const GLuint fg = glCreateProgram();
+			glAttachShader(fg, Compile(GL_VERTEX_SHADER, ReadFile(folder + "demaster_fighter.vert")));
+			glAttachShader(fg, Compile(GL_FRAGMENT_SHADER, fragment));
+			glLinkProgram(fg);
+			glUseProgram(fg);
+			const auto g = [&](const char* name) { return glGetUniformLocation(fg, name); };
+			glUniform1i(g("tex"), 0);
+			glUniform1i(g("vertextype"), 3);
+			glUniform1i(g("blend_mode"), 0);
+			glUniform4f(g("demasterScene"), 1, 1, 1, 1);
+			glUniform4f(g("demasterSceneMaps"), 0, 0, 0, 0);
+			glUniform4f(g("demasterSceneDraw"), 1, 0, 0, 0);
+			glUniform4f(g("demasterSceneProj"), 320.0f / W, 240.0f / H, static_cast<float>(H), static_cast<float>(camera.distance));
+			glUniform4f(g("demasterSceneCentre"), static_cast<float>(camera.centreX), static_cast<float>(camera.centreY), 0.0f, 20000.0f);
+			float rot[9], trans[3];
+			for (int i = 0; i < 9; i++)
+				rot[i] = static_cast<float>(camera.r[i]);
+			for (int i = 0; i < 3; i++)
+				trans[i] = static_cast<float>(camera.t[i]);
+			glUniformMatrix3fv(g("demasterSceneRot"), 1, GL_FALSE, rot);
+			glUniform3fv(g("demasterSceneTrans"), 1, trans);
+			const double sunStage[3] = { 0.6, -0.5, 0.62 };
+			double sunView[3];
+			scenelight::DirectionToView(camera, sunStage, sunView);
+			const double sl = std::sqrt(sunView[0] * sunView[0] + sunView[1] * sunView[1] + sunView[2] * sunView[2]);
+			for (double& c : sunView)
+				c /= sl;
+			glUniform4f(g("demasterSceneSun"), static_cast<float>(sunView[0]), static_cast<float>(sunView[1]), static_cast<float>(sunView[2]), 0.8f);
+			glUniform4f(g("demasterSceneSunLight"), 1, 1, 1, 0);
+			const auto drawWithNormal = [&](uint8_t out[4], const double n[3])
+			{
+				glActiveTexture(GL_TEXTURE0);
+				glBindTexture(GL_TEXTURE_2D, albedo);
+				glClearColor(0, 0, 0, 0);
+				glClear(GL_COLOR_BUFFER_BIT);
+				glBegin(GL_QUADS);
+				glColor4ub(vertex[2], vertex[1], vertex[0], 255); //(the fighters' program takes the game's BGRA)
+				glNormal3f(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
+				for (int i = 0; i < 4; i++)
+				{
+					glTexCoord2f(i == 1 || i == 2 ? 1.0f : 0.0f, i >= 2 ? 1.0f : 0.0f);
+					glVertex4fv(vertices[i]);
+				}
+				glEnd();
+				glReadPixels(px, H - 1 - py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+			};
+			//its own face's normal: the same as the game's flat floor
+			drawWithNormal(got, normal);
+			const double flatTowards = normal[0] * sunView[0] + normal[1] * sunView[1] + normal[2] * sunView[2];
+			for (int c = 0; c < 3; c++)
+				want[c] = level(linear(painted[c]) * (1.0 - 0.8 * (0.5 - 0.5 * flatTowards)));
+			Check(near(got, want), "the world's ground with its face's normal: as the flat floor");
+			//a corner's normal leaning towards the sun: brighter, by that normal (on the camera's side, whichever way it came)
+			const double leanStage[3] = { 0.45, -0.85, 0.28 };
+			double lean[3];
+			scenelight::DirectionToView(camera, leanStage, lean);
+			const double ll = std::sqrt(lean[0] * lean[0] + lean[1] * lean[1] + lean[2] * lean[2]);
+			for (double& c : lean)
+				c /= ll;
+			double towards = lean[0] * sunView[0] + lean[1] * sunView[1] + lean[2] * sunView[2];
+			if (lean[0] * normal[0] + lean[1] * normal[1] + lean[2] * normal[2] < 0)
+				towards = -towards;
+			for (int c = 0; c < 3; c++)
+				want[c] = level(linear(painted[c]) * (1.0 - 0.8 * (0.5 - 0.5 * towards)));
+			uint8_t leaned[4];
+			drawWithNormal(leaned, lean);
+			Check(near(leaned, want) && std::abs(leaned[0] - got[0]) > 3, "the world's ground with a smooth normal: the sun by that normal");
+			const double back[3] = { -lean[0], -lean[1], -lean[2] };
+			uint8_t turned[4];
+			drawWithNormal(turned, back);
+			Check(near(turned, want), "a smooth normal handed the other way round: the camera's side of it");
+			printf("world ground: flat %d %d %d, leaning %d %d %d (want %d %d %d)\n", got[0], got[1], got[2], leaned[0], leaned[1], leaned[2], want[0], want[1], want[2]);
+			glUseProgram(program);
+		}
 	}
 
 	//6. LUT: the colour grade in main.frag (and main_char.frag) against lut_grade.h's arithmetic: a 16 x 16 picture of

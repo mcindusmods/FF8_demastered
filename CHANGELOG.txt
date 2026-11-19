@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps
----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps and smooth ground
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -144,6 +144,29 @@ The world map's textures get maps (ninth step; new in scene_light.txt: parallax)
     ORMH height of 1 moves nothing, the deepest moves the texture where the CPU's arithmetic says (within 1 level on a
     256 x 256 ramp). field_pbr_test: parallax in the file and in rules, and the shipped scene_light.txt is the
     defaults.
+The world map's ground with smooth normals (tenth step; new in scene_light.txt: smooth)
+  - The world map's ground was lit flat, triangle by triangle (faceted). The game draws it in many small draws, far to
+    near, a few triangles each (130-530 a frame in the logs), so a corner's neighbours are mostly in other draws.
+    DEMASTER now keeps the faces around every corner from one frame to the next by the corner's place in the world
+    map's own space, and gives each corner the normal of the faces around it in the frame before (the faces seen so far
+    in this frame for a corner it hadn't seen: its own draw's at least). The same corner in two draws gets the same
+    normal: no seams where one draw meets another. Faces more than 60 degrees apart stay sharp (a cliff's edge).
+  - The world's space is within one of the game's 2048-unit cells, the one the camera is over (the game's own code at
+    0x53DC70 puts the camera's place there): when the game moves to the next cell everything jumps by 2048 along x or
+    z, the camera with it, and the store follows. Corners match from frame to frame within 3 units along the ground and
+    more loosely up and down (the game bends the far ground as the camera moves); a jump that isn't a cell's starts
+    again.
+  - Opaque world draws (the ground, and what stands on it) are drawn by DEMASTER through the fighters' program
+    (demaster_fighter.vert + main.frag) with those normals; their state, texture and the game's uniforms are as the
+    game set them. In main.frag the ground's smooth normal takes the sun as well as the maps and the lights. smooth = 0
+    in [world] puts the game's flat draws back. SCENE_DEBUG=1 logs every 10 seconds how many draws and corners were
+    smoothed and how many corners were found from the frame before.
+  - Cost: about 0.4 ms a frame for the busiest logged frame (4,600 corners); 2.4 ms for 30,000 in a test.
+  - Tests: field_pbr_test smooths rolling ground drawn as 144 shuffled draws: the first frame knows only what came
+    before, from the second every corner is the true normal of the faces around it (within 1e-4) with no seams, still
+    after a cell's jump, with the places a little off and the ground a little lower; a jump that isn't a cell's starts
+    again; a 90-degree step stays sharp. scene_shader_test: the fighters' program on the ground (draw x = 1) takes the
+    sun by the corner's normal, whichever way round it is handed.
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

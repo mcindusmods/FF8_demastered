@@ -184,6 +184,17 @@ namespace scenelight
 				if (rule != nullptr)
 					(key == "relief" ? rule->hasRelief : rule->hasSpecular) = true;
 			}
+			else if (key == "smooth")
+			{
+				if (word == "1" || word == "on" || word == "yes")
+					look.smooth = true;
+				else if (word == "0" || word == "off" || word == "no")
+					look.smooth = false;
+				else
+					return -1;
+				if (rule != nullptr)
+					rule->hasSmooth = true;
+			}
 			else if (key == "parallax")
 			{
 				if (!Numbers(value, v, 1) || v[0] < 0 || v[0] > 64)
@@ -368,7 +379,8 @@ namespace scenelight
 			"night_tint = 0.55 0.65 1\n"
 			"night_level = 0.3\n"
 			"; The sun and the moon cross the world map by the clock too (its camera is read from the game): sun, sun_azimuth\n"
-			"; and sun_height as for battles. The ground is big flat triangles, each lit flat, so it darkens less here\n"
+			"; and sun_height as for battles. Its ground is drawn with smooth normals (smooth = 0: each of its big triangles lit\n"
+			"; flat, as before)\n"
 			"sun = 0.25\n"
 			"sun_azimuth = 30\n"
 			"sun_height = 60\n"
@@ -378,6 +390,7 @@ namespace scenelight
 			"relief = 1\n"
 			"specular = 0.5\n"
 			"parallax = 4\n"
+			"smooth = 1\n"
 			"\n"
 			"; Rules change the settings above where their conditions hold. Only the keys written in a rule change anything.\n"
 			";   where  = battle | world | both     (left out: both)\n"
@@ -460,6 +473,8 @@ namespace scenelight
 				look.specular = rule.look.specular;
 			if (rule.hasParallax)
 				look.parallax = rule.look.parallax;
+			if (rule.hasSmooth)
+				look.smooth = rule.look.smooth;
 			if (rule.hasSunAzimuth)
 				look.sunAzimuth = rule.look.sunAzimuth;
 			if (rule.hasSunHeight)
@@ -629,6 +644,322 @@ namespace scenelight
 		double view[3];
 		DirectionToView(camera, up, view);
 		return (facing[0] * view[0] + facing[1] * view[1] + facing[2] * view[2]) / length;
+	}
+
+	//--- the world map's ground, smoothed
+
+	namespace
+	{
+		uint64_t Mix(uint64_t h)
+		{
+			h ^= h >> 33;
+			h *= 0xFF51AFD7ED558CCDull;
+			h ^= h >> 33;
+			h *= 0xC4CEB9FE1A85EC53ull;
+			h ^= h >> 33;
+			return h;
+		}
+
+		//(never 0: 0 is an empty slot)
+		uint64_t BucketKey(const int64_t bx, const int64_t bz)
+		{
+			return Mix((static_cast<uint64_t>(bx) << 32) ^ (static_cast<uint64_t>(bz) & 0xFFFFFFFFull)) | 1ull;
+		}
+
+		uint64_t ExactKey(const double* p)
+		{
+			uint64_t a, b, c;
+			memcpy(&a, &p[0], 8);
+			memcpy(&b, &p[1], 8);
+			memcpy(&c, &p[2], 8);
+			return Mix(a ^ Mix(b ^ Mix(c + 0x9E3779B97F4A7C15ull))) | 1ull;
+		}
+
+		int64_t Square(const double v)
+		{
+			return static_cast<int64_t>(std::floor(v / 8.0));
+		}
+	}
+
+	void GroundNormals::Table::Clear(const size_t atLeast)
+	{
+		size_t size = 64;
+		while (size < atLeast * 2)
+			size *= 2;
+		if (keys.size() != size)
+		{
+			keys.assign(size, 0);
+			values.assign(size, -1);
+		}
+		else
+			std::fill(keys.begin(), keys.end(), 0ull);
+		used = 0;
+	}
+
+	int32_t GroundNormals::Table::Find(const uint64_t key) const
+	{
+		if (keys.empty())
+			return -1;
+		const size_t mask = keys.size() - 1;
+		for (size_t i = key & mask;; i = (i + 1) & mask)
+		{
+			if (keys[i] == key)
+				return values[i];
+			if (keys[i] == 0)
+				return -1;
+		}
+	}
+
+	int32_t& GroundNormals::Table::At(const uint64_t key, bool& added)
+	{
+		if (keys.empty() || (used + 1) * 2 > keys.size())
+		{
+			//grow: put everything into one twice the size
+			std::vector<uint64_t> oldKeys = std::move(keys);
+			std::vector<int32_t> oldValues = std::move(values);
+			const size_t size = std::max<size_t>(64, oldKeys.size() * 2);
+			keys.assign(size, 0);
+			values.assign(size, -1);
+			used = 0;
+			for (size_t i = 0; i < oldKeys.size(); i++)
+				if (oldKeys[i] != 0)
+				{
+					bool unused = false;
+					At(oldKeys[i], unused) = oldValues[i];
+				}
+		}
+		const size_t mask = keys.size() - 1;
+		for (size_t i = key & mask;; i = (i + 1) & mask)
+		{
+			if (keys[i] == key)
+			{
+				added = false;
+				return values[i];
+			}
+			if (keys[i] == 0)
+			{
+				keys[i] = key;
+				values[i] = -1;
+				used++;
+				added = true;
+				return values[i];
+			}
+		}
+	}
+
+	void GroundNormals::Table::Put(const uint64_t key, const int32_t value)
+	{
+		bool added = false;
+		int32_t& slot = At(key, added);
+		if (added)
+			slot = value;
+	}
+
+	void GroundNormals::Reset()
+	{
+		kept.clear();
+		nextInBucket.clear();
+		buckets.Clear(0);
+		now.clear();
+		nowIndex.Clear(0);
+		haveEye = begun = false;
+		origin[0] = origin[1] = origin[2] = 0;
+		found = missed = 0;
+	}
+
+	void GroundNormals::BeginFrame(const double newEye[3])
+	{
+		if (begun)
+			EndFrame();
+		begun = true;
+		frame++;
+		found = missed = 0;
+		if (haveEye)
+		{
+			//the game moved its cell: everything (the camera too) jumped by whole cells along x or z
+			for (const int axis : { 0, 2 })
+			{
+				const double moved = newEye[axis] - eye[axis];
+				if (std::fabs(moved) > CELL / 2)
+				{
+					const double cells = std::round(moved / CELL);
+					if (std::fabs(moved - cells * CELL) > CELL / 4)
+					{
+						Reset(); //not a cell's move (a jump elsewhere): start again
+						begun = true;
+						break;
+					}
+					origin[axis] -= cells * CELL;
+				}
+			}
+		}
+		for (int k = 0; k < 3; k++)
+			eye[k] = newEye[k];
+		haveEye = true;
+		if (nowIndex.keys.empty())
+			nowIndex.Clear(4096);
+	}
+
+	int GroundNormals::FindKept(const double at[3]) const
+	{
+		//the nearest within MATCH along x and z; up and down more loosely (the game bends the far ground down as the camera
+		//moves, a little each frame)
+		const double eyeDistance = std::hypot(at[0] - (eye[0] + origin[0]), at[2] - (eye[2] + origin[2]));
+		const double matchUp = 24.0 + 0.02 * eyeDistance;
+		int best = -1;
+		double bestDistance = 1e300;
+		const int64_t bx = Square(at[0]), bz = Square(at[2]);
+		for (int64_t dx = -1; dx <= 1; dx++)
+			for (int64_t dz = -1; dz <= 1; dz++)
+				for (int32_t i = buckets.Find(BucketKey(bx + dx, bz + dz)); i >= 0; i = nextInBucket[i])
+				{
+					const Corner& c = kept[i];
+					const double ex = c.at[0] - at[0], ez = c.at[2] - at[2], ey = c.at[1] - at[1];
+					if (std::fabs(ex) > MATCH || std::fabs(ez) > MATCH || std::fabs(ey) > matchUp)
+						continue;
+					const double d = ex * ex + ez * ez + 1e-4 * ey * ey;
+					if (d < bestDistance)
+					{
+						bestDistance = d;
+						best = i;
+					}
+				}
+		return best;
+	}
+
+	void GroundNormals::Smooth(const std::vector<double>& places, const float creaseDegrees, std::vector<float>& normals)
+	{
+		const size_t faces = places.size() / 9;
+		normals.assign(faces * 9, 0.0f);
+		if (faces == 0)
+			return;
+		static thread_local std::vector<Face> own;
+		static thread_local std::vector<int32_t> nowOf;
+		own.resize(faces);
+		nowOf.resize(faces * 3);
+		//each face's normal, on the camera's side, weighted by its size; its corners into this frame's (a corner new to the
+		//frame looks for its place in the frame before once)
+		for (size_t f = 0; f < faces; f++)
+		{
+			const double* a = &places[f * 9];
+			const double* b = a + 3;
+			const double* c = a + 6;
+			const double u[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, v[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+			const double n[3] = { u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
+			const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+			const double toEye[3] = { eye[0] - a[0], eye[1] - a[1], eye[2] - a[2] };
+			const double side = n[0] * toEye[0] + n[1] * toEye[1] + n[2] * toEye[2] < 0 ? -1.0 : 1.0;
+			Face& face = own[f];
+			face.weight = static_cast<float>(length);
+			for (int k = 0; k < 3; k++)
+				face.n[k] = length > 1e-12 ? static_cast<float>(n[k] * side / length) : 0.0f;
+			for (int corner = 0; corner < 3; corner++)
+			{
+				const double* p = a + corner * 3;
+				bool added = false;
+				int32_t& index = nowIndex.At(ExactKey(p), added);
+				if (added)
+				{
+					index = static_cast<int32_t>(now.size());
+					now.emplace_back();
+					Corner& fresh = now.back();
+					for (int k = 0; k < 3; k++)
+						fresh.at[k] = p[k] + origin[k];
+					fresh.seen = frame;
+					fresh.before = FindKept(fresh.at);
+				}
+				Corner& here = now[index];
+				if (length > 1e-12 && here.count < MOST_FACES)
+					here.faces[here.count++] = face;
+				nowOf[f * 3 + corner] = index;
+			}
+		}
+		//each corner: the faces around it the frame before (else this frame's so far) that lie within the crease of its own
+		const float threshold = std::cos(creaseDegrees * 3.14159265f / 180.0f);
+		for (size_t f = 0; f < faces; f++)
+		{
+			const Face& face = own[f];
+			for (int corner = 0; corner < 3; corner++)
+			{
+				const Corner& here = now[nowOf[f * 3 + corner]];
+				const Corner& around = here.before >= 0 ? kept[here.before] : here;
+				if (here.before >= 0)
+					found++;
+				else
+					missed++;
+				double sum[3] = { 0, 0, 0 };
+				for (uint32_t i = 0; i < around.count; i++)
+				{
+					const Face& g = around.faces[i];
+					if (face.weight <= 0 || g.n[0] * face.n[0] + g.n[1] * face.n[1] + g.n[2] * face.n[2] >= threshold)
+						for (int k = 0; k < 3; k++)
+							sum[k] += static_cast<double>(g.n[k]) * g.weight;
+				}
+				double length = std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+				float* out = &normals[(f * 3 + corner) * 3];
+				if (!(length > 0))
+				{
+					for (int k = 0; k < 3; k++)
+						sum[k] = face.n[k];
+					length = face.weight > 0 ? 1.0 : 0.0;
+				}
+				for (int k = 0; k < 3; k++)
+					out[k] = length > 0 ? static_cast<float>(sum[k] / length) : 0.0f;
+			}
+		}
+	}
+
+	void GroundNormals::Rebuild()
+	{
+		buckets.Clear(kept.size());
+		nextInBucket.assign(kept.size(), -1);
+		for (size_t i = 0; i < kept.size(); i++)
+		{
+			bool added = false;
+			int32_t& head = buckets.At(BucketKey(Square(kept[i].at[0]), Square(kept[i].at[2])), added);
+			nextInBucket[i] = added ? -1 : head;
+			head = static_cast<int32_t>(i);
+		}
+	}
+
+	void GroundNormals::EndFrame()
+	{
+		if (!begun)
+			return;
+		begun = false;
+		//this frame's corners take their places' (or are new); the ones not seen for a while go
+		static thread_local std::vector<uint8_t> taken;
+		taken.assign(kept.size(), 0);
+		size_t fresh = 0;
+		for (Corner& c : now)
+		{
+			if (c.before >= 0 && !taken[c.before])
+			{
+				taken[c.before] = 1;
+				kept[c.before] = c;
+			}
+			else
+			{
+				c.before = -2; //(new)
+				fresh++;
+			}
+		}
+		size_t write = 0;
+		for (size_t i = 0; i < kept.size(); i++)
+			if (taken[i] || frame - kept[i].seen <= static_cast<uint64_t>(FORGET_AFTER))
+			{
+				if (write != i)
+					kept[write] = kept[i];
+				write++;
+			}
+		kept.resize(write);
+		kept.reserve(write + fresh);
+		for (const Corner& c : now)
+			if (c.before == -2)
+				kept.push_back(c);
+		Rebuild();
+		now.clear();
+		nowIndex.Clear(std::max<size_t>(4096, nowIndex.used));
 	}
 
 	const char* const GLOW_VERTEX_SHADER = "#version 120\nvarying float demasterGlowDepth;\nvoid main() {\n\tvec4 p = gl_Vertex;\n"

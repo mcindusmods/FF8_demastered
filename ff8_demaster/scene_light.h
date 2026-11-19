@@ -27,6 +27,7 @@
 //	  specular    = 0-4     the sun's highlight on pages with an ORM map
 //	  parallax    = 0-64    how deep the height in a page's ORMH map (its alpha: 1 the surface) goes, in the place's
 //	                        units: what is lower shifts with the view (0: off)
+//	  smooth      = 0 | 1   [world]: its ground drawn with smooth normals (GroundNormals; 0: each triangle lit flat)
 //	A battle stage page's maps are <page>_N, _ORMH (or _ORM), _EC; a world map page's (texl_NNN_P, wmset_NNN_P) _N,
 //	_ORMH (or _ORM) and _E (the glows' colour on black, added at night) or _EC
 //	  sun_azimuth = degrees, sun_height = degrees   where it rises (0: along the stage's +x) and how high it climbs
@@ -72,6 +73,7 @@ namespace scenelight
 		float fighterSun = 0.5f; //the fighters' share of the sun's darkening (their smooth normals; 0: as the game lights them)
 		float shadow = 0.5f; //how much of the sun the fighters' shadows take off the stage (0: none)
 		float parallax = 4.0f; //how deep a page's ORMH height goes (the place's units; 0: no parallax)
+		bool smooth = true; //the world map's ground is drawn with smooth normals (GroundNormals); false: each triangle flat
 		std::vector<Light> lights; //the stage's own (from rules), four at most
 	};
 
@@ -84,7 +86,7 @@ namespace scenelight
 		Look look; //only the members flagged below are used
 		bool hasNight = false, hasTime = false, hasDayTint = false, hasNightTint = false, hasNightLevel = false, hasAo = false,
 			hasGlow = false, hasSun = false, hasRelief = false, hasSpecular = false, hasSunAzimuth = false, hasSunHeight = false,
-			hasFighterSun = false, hasShadow = false, hasParallax = false;
+			hasFighterSun = false, hasShadow = false, hasParallax = false, hasSmooth = false;
 	};
 
 	struct Settings
@@ -166,6 +168,73 @@ namespace scenelight
 	//how far a facing summed in view space agrees with the world space's -y (up, as the PlayStation has it): -1 to 1, 0 when
 	//there is none
 	double FacingAlongUp(const Camera& camera, const double facing[3]);
+
+	//--- the world map's ground, smoothed. The game draws it in many small draws (a few triangles each, far to near), so a
+	//corner's neighbours are mostly in other draws, drawn before or after it. DEMASTER keeps the faces around each corner
+	//from one frame to the next, by the corner's place in the world map's space (the camera's stage: within one of the
+	//game's 2048-unit cells, the cell the camera is over), and gives every corner the normal of the faces around it in the
+	//frame before; a corner it hadn't seen then gets the faces seen so far in this frame (its own draw's at least). Faces
+	//more than the crease apart aren't smoothed together (a cliff's edge stays sharp). When the game moves its cell under
+	//the camera, every place jumps by 2048 along x or z: the camera's place jumps with them, and the store follows.
+	class GroundNormals
+	{
+	public:
+		static constexpr double CELL = 2048.0; //the game's cells (0x800)
+		static constexpr double MATCH = 3.0; //how far apart (x and z) two frames' places of one corner can be
+		static constexpr int FORGET_AFTER = 90; //frames a corner not seen is kept
+		static constexpr size_t MOST_FACES = 12; //faces kept per corner
+		//a new frame; eye: the camera's place in the world's space
+		void BeginFrame(const double eye[3]);
+		//one draw's triangles (places in the world's space, 3 numbers a corner, 3 corners a face): the corners' normals
+		//(3 numbers a corner, length 1, on the side the camera sees)
+		void Smooth(const std::vector<double>& places, float creaseDegrees, std::vector<float>& normals);
+		//the frame's corners become the ones the next frame uses
+		void EndFrame();
+		void Reset();
+		size_t Kept() const { return kept.size(); }
+		uint64_t Frame() const { return frame; }
+		bool Begun() const { return begun; }
+		//the frame's corners found from the frame before, and not
+		size_t found = 0, missed = 0;
+		//how far the store has followed the game's cell (added to the places)
+		double origin[3] = { 0, 0, 0 };
+
+	private:
+		struct Face
+		{
+			float n[3];
+			float weight;
+		};
+		struct Corner
+		{
+			double at[3]; //the place, plus origin
+			Face faces[MOST_FACES];
+			uint32_t count = 0; //faces
+			uint64_t seen = 0; //the last frame it was in
+			int32_t before = -1; //(this frame's: the frame before's corner at its place, -1: none)
+		};
+		//open addressing, a power of two: keys (0: empty) and what they point at
+		struct Table
+		{
+			std::vector<uint64_t> keys;
+			std::vector<int32_t> values;
+			size_t used = 0;
+			void Clear(size_t atLeast);
+			int32_t Find(uint64_t key) const; //-1: none
+			void Put(uint64_t key, int32_t value); //(keeps what is there)
+			int32_t& At(uint64_t key, bool& added);
+		};
+		std::vector<Corner> kept; //the frames before
+		Table buckets; //an 8-unit square of x and z -> its first corner in kept
+		std::vector<int32_t> nextInBucket; //kept -> the next of its square
+		std::vector<Corner> now; //this frame's
+		Table nowIndex; //the exact place (its numbers' bits) -> now
+		double eye[3] = { 0, 0, 0 };
+		bool haveEye = false, begun = false;
+		uint64_t frame = 0;
+		int FindKept(const double at[3]) const; //-1: none
+		void Rebuild();
+	};
 
 	//--- lights from the effects (EFFECT_LIGHTS): a spell, a GF's fire, a limit's flash lights the stage and the fighters
 	//What the frame's glowing draws (the ones that add light) put on the screen, gathered on a small grid over the game's

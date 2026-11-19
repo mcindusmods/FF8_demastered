@@ -1891,8 +1891,11 @@ static void TestSceneLight()
 	{
 		scenelight::Settings p;
 		std::string pw;
-		scenelight::Parse("[world]\nparallax = 12\n[rule deep]\nwhere = battle\nparallax = 0\n[rule bad]\nparallax = 65\n", p, pw);
+		CHECK(s.world.smooth);
+		scenelight::Parse("[world]\nparallax = 12\nsmooth = 0\n[rule deep]\nwhere = battle\nparallax = 0\n[rule bad]\nparallax = 65\n"
+			"[rule smooth again]\nwhere = world\nmoment = 100-200\nsmooth = 1\n", p, pw);
 		CHECK(p.world.parallax == 12.0f && p.battle.parallax == 4.0f && pw.find("parallax") != std::string::npos);
+		CHECK(!p.world.smooth && scenelight::Resolve(p, Where::World, -1, 150).smooth && !scenelight::Resolve(p, Where::World, -1, 99).smooth);
 		CHECK(scenelight::Resolve(p, Where::Battle, 3, -1).parallax == 0.0f && scenelight::Resolve(p, Where::World, -1, -1).parallax == 12.0f);
 	}
 	//the file shipped in DEMASTER_EXP is the defaults (when the tests run from the repository's folder)
@@ -2500,6 +2503,158 @@ static void TestLut()
 	CHECK(std::string(lutgrade::SlotName(lutgrade::LUNAR_DAWN)) == "lunar_dawn");
 }
 
+//SCENE_LIGHT: the world map's ground smoothed across its many small draws, kept from frame to frame by place
+static void TestGroundNormals()
+{
+	using scenelight::GroundNormals;
+	//rolling ground, 12 x 12 squares of 60 units, two triangles each, y up is -y (the PlayStation's), a camera above it
+	const int N = 12;
+	const double step = 60.0;
+	const auto height = [](const double x, const double z) { return -40.0 * std::sin(x / 150.0) * std::cos(z / 210.0); };
+	const auto place = [&](const int i, const int j, const double shift, std::vector<double>& out)
+	{
+		const double x = i * step + shift, z = j * step;
+		out.insert(out.end(), { x, height(i * step, z), z });
+	};
+	//the draws: each square on its own (two triangles), in a shuffled order, as the game's are small and far to near
+	std::vector<std::vector<double>> draws;
+	const auto makeDraws = [&](const double shift)
+	{
+		draws.clear();
+		for (int j = 0; j < N; j++)
+			for (int i = 0; i < N; i++)
+			{
+				std::vector<double> d;
+				place(i, j, shift, d); place(i + 1, j, shift, d); place(i, j + 1, shift, d);
+				place(i + 1, j, shift, d); place(i + 1, j + 1, shift, d); place(i, j + 1, shift, d);
+				draws.push_back(d);
+			}
+		uint32_t seed = 12345;
+		for (size_t k = draws.size(); k > 1; k--)
+		{
+			seed = seed * 1664525u + 1013904223u;
+			std::swap(draws[k - 1], draws[seed % k]);
+		}
+	};
+	//what a corner's normal should be: the faces around it (all of them: gentle ground), weighted by size, facing up
+	const auto truth = [&](const int i, const int j)
+	{
+		double sum[3] = { 0, 0, 0 };
+		const auto addFace = [&](const int ai, const int aj, const int bi, const int bj, const int ci, const int cj)
+		{
+			if (std::min({ ai, bi, ci, aj, bj, cj }) < 0 || std::max({ ai, bi, ci, aj, bj, cj }) > N)
+				return;
+			if (!((ai == i && aj == j) || (bi == i && bj == j) || (ci == i && cj == j)))
+				return; //(a face of the squares around that doesn't touch the corner)
+			std::vector<double> p;
+			place(ai, aj, 0, p); place(bi, bj, 0, p); place(ci, cj, 0, p);
+			const double u[3] = { p[3] - p[0], p[4] - p[1], p[5] - p[2] }, v[3] = { p[6] - p[0], p[7] - p[1], p[8] - p[2] };
+			double n[3] = { u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
+			if (n[1] > 0)
+				for (double& c : n)
+					c = -c;
+			for (int k = 0; k < 3; k++)
+				sum[k] += n[k];
+		};
+		for (int dj = -1; dj <= 0; dj++)
+			for (int di = -1; di <= 0; di++)
+			{
+				const int si = i + di, sj = j + dj;
+				addFace(si, sj, si + 1, sj, si, sj + 1);
+				addFace(si + 1, sj, si + 1, sj + 1, si, sj + 1);
+			}
+		const double l = std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+		return std::array<double, 3>{ sum[0] / l, sum[1] / l, sum[2] / l };
+	};
+	//one frame: every draw smoothed; the worst difference from the truth, and between the draws a corner is in
+	const auto frame = [&](GroundNormals& g, const double eye[3], const double shift, double& worst, double& seams)
+	{
+		g.BeginFrame(eye);
+		std::map<std::pair<long long, long long>, std::array<float, 3>> first;
+		worst = seams = 0;
+		std::vector<float> normals;
+		for (const std::vector<double>& d : draws)
+		{
+			g.Smooth(d, 60.0f, normals);
+			for (size_t c = 0; c * 3 < d.size(); c++)
+			{
+				const int i = static_cast<int>(std::lround((d[c * 3] - shift) / step)), j = static_cast<int>(std::lround(d[c * 3 + 2] / step));
+				const std::array<double, 3> t = truth(i, j);
+				const float* n = &normals[c * 3];
+				worst = std::max(worst, std::fabs(n[0] - t[0]) + std::fabs(n[1] - t[1]) + std::fabs(n[2] - t[2]));
+				const auto key = std::make_pair(static_cast<long long>(i), static_cast<long long>(j));
+				const auto at = first.find(key);
+				if (at == first.end())
+					first[key] = { n[0], n[1], n[2] };
+				else
+					seams = std::max(seams, static_cast<double>(std::fabs(at->second[0] - n[0]) + std::fabs(at->second[1] - n[1]) + std::fabs(at->second[2] - n[2])));
+			}
+		}
+		g.EndFrame();
+	};
+	GroundNormals g;
+	const double eye[3] = { 360, -900, -400 };
+	makeDraws(0);
+	double worst = 0, seams = 0;
+	frame(g, eye, 0, worst, seams);
+	CHECK(g.missed > 0 && seams > 0.01); //the first frame: each draw knows only what was drawn before it
+	frame(g, eye, 0, worst, seams);
+	printf("ground normals, second frame: %zu found, %zu missed, %.2g from the truth at worst, seams %.2g\n", g.found, g.missed, worst, seams);
+	CHECK(g.missed == 0 && worst < 1e-4 && seams < 1e-6); //from the second frame: the whole neighbourhood, no seams
+	CHECK(g.Kept() == static_cast<size_t>((N + 1) * (N + 1)));
+	//the game moves its cell: every place and the camera jump by -2048 along x; the store follows
+	makeDraws(-GroundNormals::CELL);
+	const double jumped[3] = { eye[0] - GroundNormals::CELL, eye[1], eye[2] };
+	frame(g, jumped, -GroundNormals::CELL, worst, seams);
+	CHECK(g.missed == 0 && worst < 1e-4 && seams < 1e-6 && g.origin[0] == GroundNormals::CELL);
+	//the places come back a little off (the screen's quarter pixels) and the far ground a little lower (the game's bend)
+	{
+		std::vector<std::vector<double>> before = draws;
+		//(the same corner in two draws is the same numbers, as the game's are: off by its own amount)
+		for (std::vector<double>& d : draws)
+			for (size_t c = 0; c * 3 < d.size(); c++)
+			{
+				const double i = std::round((d[c * 3] + GroundNormals::CELL) / step), j = std::round(d[c * 3 + 2] / step);
+				d[c * 3] += 0.8 * std::sin(i * 1.7 + j * 0.3);
+				d[c * 3 + 2] -= 0.6 * std::cos(i * 0.4 + j * 2.3);
+				d[c * 3 + 1] += 3.0;
+			}
+		g.BeginFrame(jumped);
+		std::vector<float> normals;
+		for (const std::vector<double>& d : draws)
+			g.Smooth(d, 60.0f, normals);
+		CHECK(g.missed == 0 && g.found > 0);
+		g.EndFrame();
+		CHECK(g.Kept() == static_cast<size_t>((N + 1) * (N + 1))); //the same corners, moved, not new ones
+		draws = before;
+	}
+	//a jump that isn't a cell's: everything starts again (nothing found)
+	{
+		const double elsewhere[3] = { jumped[0] + 1500, jumped[1], jumped[2] + 5000 };
+		g.BeginFrame(elsewhere);
+		std::vector<float> normals;
+		g.Smooth(draws[0], 60.0f, normals);
+		CHECK(g.found == 0 && g.origin[0] == 0);
+		g.EndFrame();
+	}
+	//a sharp edge (a step of 90 degrees) stays sharp: the two faces keep their own normals
+	{
+		GroundNormals edge;
+		const double e[3] = { 50, -500, -300 };
+		const std::vector<double> floor = { 0, 0, 0, 100, 0, 0, 0, 0, 100 }, wall = { 100, 0, 0, 100, -100, 0, 100, 0, 100 };
+		std::vector<float> a, b;
+		for (int f = 0; f < 2; f++)
+		{
+			edge.BeginFrame(e);
+			edge.Smooth(floor, 60.0f, a);
+			edge.Smooth(wall, 60.0f, b);
+			edge.EndFrame();
+		}
+		//the shared corner (100 0 0): on the floor straight up (-y), on the wall along -x (towards the camera)
+		CHECK(std::fabs(a[3 + 1] + 1.0f) < 1e-5 && std::fabs(b[0] + 1.0f) < 1e-5);
+	}
+}
+
 //DAY_NIGHT: the story's time of day (field_time.txt): Deling City follows the clock, night for two parts of the story
 static void TestTimeRules()
 {
@@ -2566,6 +2721,7 @@ static void TestTimeRules()
 
 int main(int argc, char** argv)
 {
+	TestGroundNormals();
 	TestTimeRules();
 	TestLut();
 	TestEffectLights();

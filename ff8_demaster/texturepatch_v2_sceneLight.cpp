@@ -869,6 +869,143 @@ namespace
 		return true;
 	}
 
+	//--- the world map's ground, drawn by DEMASTER with smooth normals (scenelight::GroundNormals: the faces around each
+	//corner, kept from frame to frame by place in the world's space) through the fighters' program: the game's corners,
+	//texture and state as they are, the normals in view space with them
+	scenelight::GroundNormals ground;
+	struct GroundCount
+	{
+		uint64_t frame = ~0ull;
+		size_t draws = 0, corners = 0, found = 0, missed = 0, frames = 0;
+		ULONGLONG from = 0;
+		bool said = false;
+	} groundCount;
+
+	//this draw writes its colour as it is (no blending, or blending that changes nothing)
+	bool Opaque()
+	{
+		if (!glstate::BlendOn())
+			return true;
+		GLint source = 0, destination = 0;
+		glstate::BlendFactors(source, destination);
+		return source == GL_ONE && destination == GL_ZERO;
+	}
+
+	//true when DEMASTER drew it (the game's draw is skipped)
+	bool DrawGround(const GLint gameProgram, const GLenum mode, const GLsizei count, const GLenum type, const void* indices,
+		const float scene[4], const float maps[4], float draw[4], const float surface[4])
+	{
+		Fighters& f = fighters;
+		if (mode != GL_TRIANGLES || count < 3 || count % 3 != 0 || !stageLight.camera || !MakeFighterProgram())
+			return false;
+		static std::vector<fieldchars::GameVertex> corners;
+		if (!ReadDrawCorners(count, type, indices, corners) || corners.size() != static_cast<size_t>(count))
+			return false;
+		const scenelight::Camera& camera = stageLight.view;
+		if (groundCount.frame != sceneFrame)
+		{
+			//a new frame: the camera's place in the world's space (the store follows the game's cells with it)
+			groundCount.frame = sceneFrame;
+			if (ground.Begun())
+			{
+				groundCount.found += ground.found;
+				groundCount.missed += ground.missed;
+			}
+			const double origin[3] = { 0, 0, 0 };
+			double eye[3];
+			scenelight::PlaceToStage(camera, origin, eye);
+			ground.BeginFrame(eye);
+			groundCount.frames++;
+		}
+		static std::vector<double> places;
+		static std::vector<float> normals;
+		places.resize(corners.size() * 3);
+		for (size_t i = 0; i < corners.size(); i++)
+		{
+			double v[3];
+			scenelight::ScreenToView(camera, corners[i].x, corners[i].y, corners[i].rhw, v);
+			scenelight::PlaceToStage(camera, v, &places[i * 3]);
+		}
+		ground.Smooth(places, 60.0f, normals);
+		f.vertices.resize(corners.size());
+		for (size_t i = 0; i < corners.size(); i++)
+		{
+			FighterVertex& v = f.vertices[i];
+			v.pos[0] = corners[i].x;
+			v.pos[1] = corners[i].y;
+			v.pos[2] = corners[i].z;
+			v.pos[3] = corners[i].rhw;
+			memcpy(v.color, corners[i].color, 4);
+			v.uv[0] = corners[i].u;
+			v.uv[1] = corners[i].v;
+			const double world[3] = { normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2] };
+			double view[3];
+			scenelight::DirectionToView(camera, world, view);
+			v.normal[0] = static_cast<float>(view[0]);
+			v.normal[1] = static_cast<float>(view[1]);
+			v.normal[2] = static_cast<float>(view[2]);
+		}
+		//the game's uniforms and its client arrays as they are, DEMASTER's arrays for this one draw
+		const GLint program = gameProgram;
+		glUseProgram(f.program);
+		LutUse(f.program, true); //LUT: the time of day's colour grade
+		if (f.vertextype >= 0)
+			glUniform1i(f.vertextype, 3);
+		const auto copyInt = [&](const GLint ours, const char* name)
+		{
+			if (ours < 0)
+				return;
+			const GLint theirs = glGetUniformLocation(static_cast<GLuint>(program), name);
+			glUniform1i(ours, theirs >= 0 ? glstate::UniformInt(program, theirs) : 0);
+		};
+		copyInt(f.blendMode, "blend_mode");
+		copyInt(f.effecttype, "effecttype");
+		copyInt(f.effectoption, "effectoption");
+		if (f.tileClamp >= 0)
+			glUniform4f(f.tileClamp, 0.0f, 0.0f, 0.0f, 0.0f);
+		draw[3] = 0.0f; //(not a fighter's share of the sun: the ground's own normal takes the sun)
+		Send(static_cast<GLint>(f.program), f.state, scene, maps, draw, true, surface);
+		glstate::ClientState saved;
+		glstate::SaveClient(saved);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		const uint8_t* base = reinterpret_cast<const uint8_t*>(f.vertices.data());
+		glVertexPointer(4, GL_FLOAT, sizeof(FighterVertex), base + offsetof(FighterVertex, pos));
+		glEnableClientState(GL_VERTEX_ARRAY);
+		glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(FighterVertex), base + offsetof(FighterVertex, color));
+		glEnableClientState(GL_COLOR_ARRAY);
+		glNormalPointer(GL_FLOAT, sizeof(FighterVertex), base + offsetof(FighterVertex, normal));
+		glEnableClientState(GL_NORMAL_ARRAY);
+		glClientActiveTexture(GL_TEXTURE0);
+		glTexCoordPointer(2, GL_FLOAT, sizeof(FighterVertex), base + offsetof(FighterVertex, uv));
+		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+		glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(f.vertices.size()));
+		glstate::RestoreClient(saved);
+		glUseProgram(static_cast<GLuint>(program));
+		groundCount.draws++;
+		groundCount.corners += corners.size();
+		if (!groundCount.said)
+		{
+			groundCount.said = true;
+			OutputDebug("SCENE_LIGHT: the world map's ground is drawn by DEMASTER with smooth normals (smooth = 0 in [world] of "
+				"scene_light.txt: each triangle flat, as the game draws it)\n");
+		}
+		//what it does, every 10 s (SCENE_DEBUG)
+		const ULONGLONG tick = GetTickCount64();
+		if (groundCount.from == 0)
+			groundCount.from = tick;
+		else if (SCENE_DEBUG && tick - groundCount.from >= 10000 && groundCount.frames > 1)
+		{
+			const double frames = static_cast<double>(groundCount.frames);
+			const size_t looked = groundCount.found + groundCount.missed;
+			OutputDebug("SCENE_LIGHT: the world's ground, the last %.0f s: %.1f smoothed draws a frame (%.0f corners), %.1f%% of the corners "
+				"found from the frame before, %zu kept\n", (tick - groundCount.from) / 1000.0, groundCount.draws / frames,
+				groundCount.corners / frames, looked > 0 ? 100.0 * groundCount.found / looked : 0.0, ground.Kept());
+			groundCount.from = tick;
+			groundCount.draws = groundCount.corners = groundCount.found = groundCount.missed = groundCount.frames = 0;
+		}
+		return true;
+	}
+
 	bool MakeShadowMap()
 	{
 		ShadowMap& m = shadow;
@@ -1591,7 +1728,10 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 	{
 		//where a battle starts from: the last of the two it can start from
 		if (mode == MODE_WORLDMAP)
+		{
 			fromWorld = true;
+			ground.Reset(); //(the world map again: its ground's corners from the start)
+		}
 		else if (mode == MODE_FIELD)
 			fromWorld = false;
 		lastMode = mode;
@@ -1746,6 +1886,10 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 	}
 	//a fighter: drawn by DEMASTER with smooth normals (its maps' units are set above, as for the game's draw)
 	if (stageLit && drawValue[0] < 0.5f && knownFighter && DrawFighter(program, drawMode, count, indexType, indices, sceneValue, mapsValue, drawValue))
+		return true;
+	//the world map's ground (and what stands on it) where it is opaque: drawn by DEMASTER with smooth normals
+	if (stageLit && mode == MODE_WORLDMAP && drawValue[0] > 0.5f && worldLook.smooth && Opaque()
+		&& DrawGround(program, drawMode, count, indexType, indices, sceneValue, mapsValue, drawValue, surfaceValue))
 		return true;
 	Send(program, p, sceneValue, mapsValue, drawValue, stageLit, surfaceValue);
 	return false;

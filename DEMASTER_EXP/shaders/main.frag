@@ -50,7 +50,7 @@ uniform sampler2D demasterSceneShadowMap;
 uniform mat4 demasterSceneShadowMatrix; // the stage's space to the map: x, y 0-1 across it, z its depth (0 nearest the sun)
 uniform vec4 demasterSceneShadowInfo;   // x: how much of the sun a shadow takes; y: the depth's bias; z: one texel; w: 1 = on
 #ifdef DEMASTER_FIGHTER
-// DEMASTER's fighter program (demaster_fighter.vert): the corners' smooth normals, view space
+// DEMASTER's fighter program (demaster_fighter.vert; also the world map's ground): the corners' smooth normals, view space
 varying vec3 demasterVertexNormal;
 #endif
 
@@ -212,10 +212,14 @@ void main()
 						face = -face; // towards the camera
 					vec3 n = face;
 #ifdef DEMASTER_FIGHTER
-					// a fighter: its smooth normal (on the side the camera sees) for the lights, and its share of the sun's darkening
+					// a fighter: its smooth normal (on the side the camera sees) for the lights, and its share of the sun's darkening.
+					// The world map's ground (x = 1: DEMASTER draws it with this program too): its smooth normal is its surface,
+					// for the sun as well
 					vec3 smoothNormal = normalize(demasterVertexNormal);
 					n = dot(smoothNormal, face) < 0.0 ? -smoothNormal : smoothNormal;
 					lit *= 1.0 - demasterSceneDraw.w * demasterSceneSun.w * (0.5 - 0.5 * dot(n, demasterSceneSun.xyz));
+					if (demasterSceneDraw.x > 0.5)
+						face = n;
 #endif
 					if (demasterSceneDraw.y > 0.5)
 					{
