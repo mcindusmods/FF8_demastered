@@ -132,7 +132,8 @@ int fieldrt::MovingLightsNow(const FieldView& view, const fieldpbr::Settings& se
 		double extent = 1.0;
 		fieldpbr::FieldExtent(settings, view.canvasWidth, view.canvasHeight, centre, extent);
 		//without the clock (DAY_NIGHT=0) every field is a day field: the sun stands at [sun] fixed
-		const fieldpbr::FieldTime time = DAY_NIGHT ? settings.time : fieldpbr::FieldTime::Day;
+		//(the field's time: its _pbr.txt's, or a rule of field_time.txt for this point of the story)
+		const fieldpbr::FieldTime time = DAY_NIGHT ? DayNightPlaceTime() : fieldpbr::FieldTime::Day;
 		const fieldpbr::MovingLight sun = fieldpbr::SunLight(lights.sun, settings, time, DayNightSky(), night, centre, extent, FIELD_SUN);
 		if (sun.on)
 		{

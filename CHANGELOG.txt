@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun
-----------------------------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story
+------------------------------------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -106,6 +106,24 @@ The world map, first step of its PBR (seventh step; from the world logs: on foot
     world map's scene (the round shadows under field characters, drawn with it too, are unchanged).
   - Tests: field_pbr_test (up measured from a rolling ground seen at an angle, and from a flipped space), scene_shader_test
     (main_notex.frag as the game's when off, the sky at night as main.frag darkens).
+Deling City by the story (eighth step; new: DEMASTER_EXP\field_time.txt)
+  - The game paints Deling City at night all the time. field_time.txt says a field's time of day for some part of the
+    story, over its _pbr.txt's: [rule <name>] with field = (names, * for any letters, ! for one it isn't for), moment =
+    (the story's counter, the savemap's game moment, e.g. 359-419) and time = cycle | day | night. The last rule that
+    holds decides. Read again within two seconds when it changes; written with the defaults when it's missing.
+  - The defaults: Deling City (gl..., not glwitch3, the Commencement Room) follows the clock, also where its _pbr.txt
+    says night, and is night for Laguna's visit to Julia (his first dream: the hotel and its piano bar, counter
+    221-234) and for the sorceress parade, from the city square after Caraway's mansion to the fight with Edea on the
+    float (359-419; 420 is the D-District prison). The values are from AxlRose-RX's list of the story's moments, which
+    FFNx's field debugger uses; the first number of the parade can be moved to have the night come sooner.
+  - Applied when a field is entered and every frame in it, so a scene that moves the counter on changes the time in the
+    same field. Night by a rule is like time = night: the clock waits, PBR fields and the colour grade are at night, and
+    a battle started there (the fight with Edea) is fought as its stage is painted. The log (DAY_NIGHT=1) says which
+    rule holds and the counter whenever that changes.
+  - With day paintings of Deling (its fields' pictures; the night ones as _nt_A night pictures) it gets a day; without
+    them its night paintings show by day and darken at night.
+  - Tests: the rules in field_pbr_test (the patterns, the defaults at the edges of their ranges, a field that isn't
+    Deling, the counter not known, warnings), and the shipped field_time.txt is the defaults.
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

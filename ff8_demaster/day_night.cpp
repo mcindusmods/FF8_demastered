@@ -22,7 +22,9 @@
 #include <filesystem>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -36,7 +38,7 @@ namespace
 	double clockTime = 0; //seconds into the cycle
 	bool paused = false;
 	int speed = 0; //index into SPEEDS
-	std::atomic<int> fieldTime{ static_cast<int>(fieldpbr::FieldTime::Cycle) }; //the place you are: its _pbr.txt time
+	std::atomic<int> fieldTime{ static_cast<int>(fieldpbr::FieldTime::Cycle) }; //the place you are: its time (_pbr.txt, rules)
 	LARGE_INTEGER frequency{}, lastCount{};
 	double realTime = 0; //seconds since the clock started (for the bar and saving)
 	double wallTime = 0; //the same, not held back on hitches (for the play time's jumps)
@@ -568,6 +570,97 @@ namespace
 	}
 }
 
+namespace
+{
+	//--- the story's time of day: DEMASTER_EXP\field_time.txt (fieldpbr::TimeRule). The field you are in and its _pbr.txt's
+	//time come from the game thread (a field's .map read); the rules are applied there and on the renderer's, every frame,
+	//so a scene that moves the story's counter on in the same field changes its time there and then
+	namespace rules
+	{
+		std::mutex mutex;
+		std::string field; //the field you are in ("": none yet)
+		fieldpbr::FieldTime own = fieldpbr::FieldTime::Cycle; //its _pbr.txt's time
+		std::vector<fieldpbr::TimeRule> list;
+		std::string path;
+		std::filesystem::file_time_type fileTime{};
+		bool read = false;
+		double checkedAt = -1e9;
+		int lastRule = -2; //-2: nothing said yet
+
+		//(the renderer, or the game thread; mutex held): the file, looked at every 2 seconds
+		void Read()
+		{
+			const double now = static_cast<double>(GetTickCount64()) / 1000.0;
+			if (read && now - checkedAt < 2.0)
+				return;
+			checkedAt = now;
+			if (path.empty())
+				path = std::string(DIRECT_IO_EXPORT_DIR) + "field_time.txt";
+			std::error_code error;
+			if (!std::filesystem::exists(path, error))
+			{
+				FILE* file = nullptr;
+				if (fopen_s(&file, path.c_str(), "wb") == 0 && file != nullptr)
+				{
+					const std::string text = fieldpbr::DefaultTimeRulesText();
+					fwrite(text.data(), 1, text.size(), file);
+					fclose(file);
+					OutputDebug("DAY_NIGHT: %s written (Deling City's time by the story; change it while you play)\n", path.c_str());
+				}
+			}
+			const auto time = std::filesystem::last_write_time(path, error);
+			if (read && !error && time == fileTime)
+				return;
+			std::string text;
+			FILE* file = nullptr;
+			if (fopen_s(&file, path.c_str(), "rb") == 0 && file != nullptr)
+			{
+				char buffer[4096];
+				size_t got = 0;
+				while ((got = fread(buffer, 1, sizeof(buffer), file)) > 0)
+					text.append(buffer, got);
+				fclose(file);
+			}
+			else
+				text = fieldpbr::DefaultTimeRulesText();
+			std::string warnings;
+			fieldpbr::ParseTimeRules(text, list, warnings);
+			if (!warnings.empty())
+				OutputDebug("DAY_NIGHT: %s:\n%s", path.c_str(), warnings.c_str());
+			OutputDebug("DAY_NIGHT: %s read%s: %zu rule(s)\n", path.c_str(), read ? " again" : "", list.size());
+			read = true;
+			fileTime = time;
+			lastRule = -2; //said again under the new rules
+		}
+
+		//the field's time now (mutex held)
+		fieldpbr::FieldTime Now(int& which)
+		{
+			which = -1;
+			if (field.empty())
+				return own;
+			const int moment = SceneLightMoment();
+			return fieldpbr::TimeByRules(list, field, moment, own, &which);
+		}
+
+		//when another rule (or none) starts holding: walking from one of Deling's fields to the next says nothing
+		void Say(const fieldpbr::FieldTime time, const int which)
+		{
+			if (which == lastRule)
+				return;
+			const bool first = lastRule == -2;
+			lastRule = which;
+			if (which >= 0)
+				OutputDebug("DAY_NIGHT: %s: [rule %s] in field_time.txt holds (the story's counter is %d): %s\n", field.c_str(),
+					list[which].name.c_str(), SceneLightMoment(), time == fieldpbr::FieldTime::Cycle ? "it follows the clock"
+					: time == fieldpbr::FieldTime::Night ? "always night here (the clock waits)" : "always day here (the clock waits)");
+			else if (!first)
+				OutputDebug("DAY_NIGHT: %s: no rule of field_time.txt holds now (the story's counter is %d): its own time (%s)\n",
+					field.c_str(), SceneLightMoment(), fieldpbr::FieldTimeName(own));
+		}
+	}
+}
+
 void DayNightSwap()
 {
 	if (!DAY_NIGHT)
@@ -584,6 +677,17 @@ void DayNightSwap()
 	const int mode = currentMode;
 	if (mode == MODE_WORLDMAP && Held())
 		fieldTime = static_cast<int>(fieldpbr::FieldTime::Cycle);
+	//the story's rules (field_time.txt): in a field, every frame (a battle keeps the time it started with)
+	if (mode == MODE_FIELD)
+	{
+		std::lock_guard<std::mutex> lock(rules::mutex);
+		rules::Read();
+		int which = -1;
+		const fieldpbr::FieldTime time = rules::Now(which);
+		const int before = fieldTime.exchange(static_cast<int>(time));
+		if (before != static_cast<int>(time) || which != rules::lastRule)
+			rules::Say(time, which);
+	}
 	if (mode != lastMode)
 	{
 		lastMode = mode;
@@ -603,13 +707,27 @@ void DayNightSwap()
 		DrawBar();
 }
 
-void DayNightFieldEntered(const std::string& field, const fieldpbr::FieldTime time)
+void DayNightFieldEntered(const std::string& field, const fieldpbr::FieldTime own)
 {
+	//its _pbr.txt's time, unless a rule of field_time.txt says otherwise at this point of the story
+	std::lock_guard<std::mutex> lock(rules::mutex);
+	rules::field = field;
+	rules::own = own;
+	if (DAY_NIGHT)
+		rules::Read();
+	int which = -1;
+	const fieldpbr::FieldTime time = DAY_NIGHT ? rules::Now(which) : own;
 	const int before = fieldTime.exchange(static_cast<int>(time));
-	if (DAY_NIGHT && before != static_cast<int>(time) && time != fieldpbr::FieldTime::Cycle)
+	if (!DAY_NIGHT)
+		return;
+	const bool byRule = which >= 0 || rules::lastRule >= 0; //(the rules say it, when another one starts holding)
+	rules::Say(time, which);
+	if (byRule)
+		return;
+	if (before != static_cast<int>(time) && time != fieldpbr::FieldTime::Cycle)
 		OutputDebug("DAY_NIGHT: %s is always %s (time = %s in its _pbr.txt): the clock waits until you leave\n", field.c_str(),
 			fieldpbr::FieldTimeName(time), fieldpbr::FieldTimeName(time));
-	else if (DAY_NIGHT && before != static_cast<int>(time) && FIELD_DEBUG)
+	else if (before != static_cast<int>(time) && FIELD_DEBUG)
 		OutputDebug("DAY_NIGHT: %s follows the clock\n", field.c_str());
 }
 

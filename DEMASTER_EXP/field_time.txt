@@ -1,0 +1,37 @@
+; DEMASTER: the time of day by the story (DAY_NIGHT). DEMASTER reads this file again when it changes.
+;
+; A field's own time of day is its _pbr.txt's: time = cycle (it follows the clock; also every field without a _pbr.txt),
+; day or night (always that: the clock waits while you are there, and a battle started there is fought as its stage is
+; painted). A rule here says the time for some fields at some part of the story, over that:
+;   [rule <name>]
+;   field  = gl*, !glwitch3   the fields, by name (as the log and the field_bg folders have them): * for any letters,
+;                             ! before one the rule is not for
+;   moment = 359-419          the story's progress: the game's own counter (the savemap's "game moment"; with
+;                             SCENE_DEBUG=1 the log says it at every battle and on the world map, with DAY_NIGHT=1 when a
+;                             rule starts or stops holding). Left out: the whole game
+;   time   = cycle | day | night
+; The last rule that holds decides. The counter's values below come from AxlRose-RX's list of FF8's story moments
+; (FFNx's field debugger has it), which says where in the story each value is.
+;
+; Deling City (its fields are gl..., but glwitch3 is the Commencement Room) is painted at night in the game. Give it
+; day paintings (each field's picture; its night paintings as its _nt_A night pictures) and it follows the clock, with
+; the night kept for two parts of the story:
+
+[rule deling city follows the clock]
+field = gl*, !glwitch3
+time = cycle
+
+[rule laguna visits julia]
+; Laguna's first dream: Deling, the Galbadia Hotel and its piano bar (the counter 222-233; 220 is the forest before, 235
+; Timber after)
+field = gl*, !glwitch3
+moment = 221-234
+time = night
+
+[rule the sorceress parade]
+; from the city square after Caraway's mansion (359: by the order of the scenes, Caraway taking the team along the
+; parade's route) to the fight with Edea on the parade's float (392; 420 is the D-District prison). Make the first
+; number smaller to have the night come earlier (350: from the arrival in Deling)
+field = gl*, !glwitch3
+moment = 359-419
+time = night

@@ -216,6 +216,35 @@ namespace fieldpbr
 	bool ParseSettings(const std::string& text, Settings& out, std::string& warnings);
 	std::string WriteSettings(const Settings& settings, const std::string& field, const std::string& notes);
 
+	//--- the story's time of day: DEMASTER_EXP\field_time.txt (DAY_NIGHT)
+	//
+	//Some places are painted at night in the game whatever the story does (Deling City). With day paintings of them they can
+	//follow the clock and keep the night for the story's scenes there. A rule says a time for some fields at some part of
+	//the story, over their _pbr.txt's:
+	//	[rule <name>]
+	//	field  = gl*, !glwitch3    the fields: names, * for any letters, ! before one it is not for (case doesn't matter)
+	//	moment = 359-419           the story's progress (the game's own counter, the savemap's game moment), inclusive;
+	//	                           left out: the whole game
+	//	time   = cycle | day | night
+	//The last rule that holds decides; none: the field's _pbr.txt (cycle without one).
+	struct TimeRule
+	{
+		std::string name;
+		std::vector<std::string> fields, notFields; //lower case
+		int momentFrom = -1, momentTo = -1; //-1: no condition
+		FieldTime time = FieldTime::Cycle;
+	};
+	//rules without a field or a time are dropped (with a warning)
+	void ParseTimeRules(const std::string& text, std::vector<TimeRule>& out, std::string& warnings);
+	//the file DEMASTER writes when there is none: the format, and Deling City's rules
+	std::string DefaultTimeRulesText();
+	//a field's name against a pattern: * for any letters (none too), case blind
+	bool NameMatches(const std::string& pattern, const std::string& name);
+	//The time a field has at this moment of the story (-1: not known: rules with a moment don't hold): the last rule that
+	//holds for it, else own (its _pbr.txt's). which: that rule's index, -1 for none
+	FieldTime TimeByRules(const std::vector<TimeRule>& rules, const std::string& field, int moment, FieldTime own,
+		int* which = nullptr);
+
 	//--- lights: <field>_lights.txt
 
 	enum class Flicker { None, Fire, Candle, Pulse, Strobe, Fluorescent };

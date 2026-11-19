@@ -2481,8 +2481,73 @@ static void TestLut()
 	CHECK(std::string(lutgrade::SlotName(lutgrade::LUNAR_DAWN)) == "lunar_dawn");
 }
 
+//DAY_NIGHT: the story's time of day (field_time.txt): Deling City follows the clock, night for two parts of the story
+static void TestTimeRules()
+{
+	using namespace fieldpbr;
+	CHECK(NameMatches("gl*", "glmall1") && NameMatches("GL*", "glMall1") && !NameMatches("gl*", "bgroom_1"));
+	CHECK(NameMatches("*", "anything") && NameMatches("gl*1", "glmall1") && !NameMatches("gl*2", "glmall1"));
+	CHECK(NameMatches("glyagu1", "glyagu1") && !NameMatches("glyagu1", "glyagu10") && NameMatches("g*a*u1", "glyagu1"));
+	CHECK(NameMatches("*1", "glyagu1") && !NameMatches("", "glyagu1") && NameMatches("", ""));
+	std::vector<TimeRule> rules;
+	std::string warnings;
+	ParseTimeRules(DefaultTimeRulesText(), rules, warnings);
+	CHECK(warnings.empty());
+	CHECK(rules.size() == 3);
+	if (rules.size() == 3)
+	{
+		CHECK(rules[0].name == "deling city follows the clock" && rules[0].fields.size() == 1 && rules[0].notFields.size() == 1
+			&& rules[0].notFields[0] == "glwitch3" && rules[0].momentFrom < 0 && rules[0].time == FieldTime::Cycle);
+		CHECK(rules[1].momentFrom == 221 && rules[1].momentTo == 234 && rules[1].time == FieldTime::Night);
+		CHECK(rules[2].momentFrom == 359 && rules[2].momentTo == 419 && rules[2].time == FieldTime::Night);
+	}
+	int which = -2;
+	//the parade (the parade's field, the story at the float) and Laguna's dream: night
+	CHECK(TimeByRules(rules, "glyagu1", 392, FieldTime::Cycle, &which) == FieldTime::Night && which == 2);
+	CHECK(TimeByRules(rules, "glhtl1", 223, FieldTime::Cycle, &which) == FieldTime::Night && which == 1);
+	CHECK(TimeByRules(rules, "glclub1", 226, FieldTime::Day, &which) == FieldTime::Night && which == 1);
+	//the rest of the story in Deling follows the clock, even where a _pbr.txt says night
+	CHECK(TimeByRules(rules, "glmall1", 350, FieldTime::Night, &which) == FieldTime::Cycle && which == 0);
+	CHECK(TimeByRules(rules, "glmall1", 420, FieldTime::Cycle, &which) == FieldTime::Cycle && which == 0);
+	CHECK(TimeByRules(rules, "glmall1", 3000, FieldTime::Cycle) == FieldTime::Cycle);
+	//not Deling: its own time; the counter not known: only the rules without a moment
+	CHECK(TimeByRules(rules, "glwitch3", 392, FieldTime::Day, &which) == FieldTime::Day && which == -1);
+	CHECK(TimeByRules(rules, "bghall_1", 392, FieldTime::Night, &which) == FieldTime::Night && which == -1);
+	CHECK(TimeByRules(rules, "glyagu1", -1, FieldTime::Night, &which) == FieldTime::Cycle && which == 0);
+	//the edges of a range, a single moment, later rules over earlier ones
+	CHECK(TimeByRules(rules, "glgate1", 359, FieldTime::Cycle) == FieldTime::Night);
+	CHECK(TimeByRules(rules, "glgate1", 358, FieldTime::Cycle) == FieldTime::Cycle);
+	CHECK(TimeByRules(rules, "glgate1", 419, FieldTime::Cycle) == FieldTime::Night);
+	ParseTimeRules("[rule a]\nfield = bg*\ntime = night\n[rule b]\nfield = bghall_1 bgroom_1\nmoment = 100\ntime = day\n", rules, warnings);
+	CHECK(rules.size() == 2 && warnings.empty());
+	CHECK(TimeByRules(rules, "bgroom_1", 100, FieldTime::Cycle) == FieldTime::Day);
+	CHECK(TimeByRules(rules, "bgroom_1", 101, FieldTime::Cycle) == FieldTime::Night);
+	CHECK(TimeByRules(rules, "bgmd1_1", 100, FieldTime::Cycle) == FieldTime::Night);
+	//what isn't understood is said and left out
+	warnings.clear();
+	ParseTimeRules("time = night\n[rule no field]\ntime = night\n[rule no time]\nfield = gl*\n[rule bad]\nfield = gl*\n"
+		"moment = 400-300\ntime = dusk\ntime = day\ncolour = red\n[battle]\n", rules, warnings);
+	CHECK(rules.size() == 1 && rules[0].name == "bad" && rules[0].momentFrom < 0 && rules[0].time == FieldTime::Day);
+	CHECK(warnings.find("outside a [rule") != std::string::npos && warnings.find("has no field") != std::string::npos
+		&& warnings.find("has no time") != std::string::npos && warnings.find("moment = 400-300") != std::string::npos
+		&& warnings.find("time = dusk") != std::string::npos && warnings.find("unknown key colour") != std::string::npos
+		&& warnings.find("[battle]") != std::string::npos);
+	//the file shipped in DEMASTER_EXP is the defaults (when the tests run from the repository's folder)
+	if (FILE* f = fopen("DEMASTER_EXP/field_time.txt", "rb"))
+	{
+		std::string shipped;
+		char buffer[4096];
+		size_t got = 0;
+		while ((got = fread(buffer, 1, sizeof(buffer), f)) > 0)
+			shipped.append(buffer, got);
+		fclose(f);
+		CHECK(shipped == DefaultTimeRulesText());
+	}
+}
+
 int main(int argc, char** argv)
 {
+	TestTimeRules();
 	TestLut();
 	TestEffectLights();
 	TestSaveSlots();

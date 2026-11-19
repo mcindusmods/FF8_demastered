@@ -316,7 +316,7 @@ namespace scenelight
 			"; night       = auto | 0 | 1   does the night come here. auto: the world map always; a battle when it started on\n"
 			";                              the world map or in a field open to the sky (sky = 1 in its _pbr.txt). Battles from\n"
 			";                              other fields stay as painted; from a field with a fixed time (time = day or night\n"
-			";                              in its _pbr.txt) they are fought by day.\n"
+			";                              in its _pbr.txt, or a rule of field_time.txt) they are fought by day.\n"
 			"; time        = cycle | day | night   cycle: the day/night clock; day or night: always that\n"
 			"; day_tint    = what the picture is multiplied by in daylight\n"
 			"; night_tint, night_level = by night the picture is multiplied by night_level x night_tint\n"

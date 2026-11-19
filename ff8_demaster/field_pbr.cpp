@@ -681,6 +681,200 @@ namespace fieldpbr
 		return time == FieldTime::Day ? "day" : time == FieldTime::Night ? "night" : "cycle";
 	}
 
+	//--- the story's time of day (field_time.txt)
+
+	bool NameMatches(const std::string& pattern, const std::string& name)
+	{
+		//* matches any run of letters: the usual walk with one place to go back to
+		const std::string p = Lower(pattern), n = Lower(name);
+		size_t i = 0, j = 0, star = std::string::npos, from = 0;
+		while (j < n.size())
+		{
+			if (i < p.size() && p[i] == '*')
+			{
+				star = i++;
+				from = j;
+			}
+			else if (i < p.size() && p[i] == n[j])
+			{
+				i++;
+				j++;
+			}
+			else if (star != std::string::npos)
+			{
+				i = star + 1;
+				j = ++from;
+			}
+			else
+				return false;
+		}
+		while (i < p.size() && p[i] == '*')
+			i++;
+		return i == p.size();
+	}
+
+	void ParseTimeRules(const std::string& text, std::vector<TimeRule>& out, std::string& warnings)
+	{
+		out.clear();
+		const std::vector<KeyValue> lines = ReadKeyValues(text, warnings);
+		TimeRule rule;
+		bool open = false, hasTime = false;
+		int startLine = 0;
+		const auto close = [&]()
+		{
+			if (!open)
+				return;
+			if (rule.fields.empty())
+				warnings += "line " + std::to_string(startLine) + ": [rule " + rule.name + "] has no field = ...: left out\n";
+			else if (!hasTime)
+				warnings += "line " + std::to_string(startLine) + ": [rule " + rule.name + "] has no time = ...: left out\n";
+			else
+				out.push_back(rule);
+			open = false;
+		};
+		for (const KeyValue& kv : lines)
+		{
+			if (kv.key.empty())
+			{
+				close();
+				if (kv.section.rfind("rule", 0) == 0)
+				{
+					rule = TimeRule();
+					rule.name = Trim(kv.section.substr(4));
+					open = true;
+					hasTime = false;
+					startLine = kv.line;
+				}
+				else
+					warnings += "line " + std::to_string(kv.line) + ": [" + kv.section + "]: only [rule <name>] sections are read here\n";
+				continue;
+			}
+			if (!open)
+			{
+				warnings += "line " + std::to_string(kv.line) + ": " + kv.key + " outside a [rule ...]: skipped\n";
+				continue;
+			}
+			bool ok = true;
+			if (kv.key == "field")
+			{
+				std::string list = kv.value;
+				std::replace(list.begin(), list.end(), ',', ' ');
+				for (const std::string& word : SplitWords(Lower(list)))
+				{
+					if (word.size() > 1 && word[0] == '!')
+						rule.notFields.push_back(word.substr(1));
+					else if (word != "!")
+						rule.fields.push_back(word);
+				}
+				ok = !rule.fields.empty();
+			}
+			else if (kv.key == "moment")
+			{
+				std::string value = kv.value;
+				std::replace(value.begin(), value.end(), '-', ' ');
+				const std::vector<std::string> words = SplitWords(value);
+				char* end = nullptr;
+				const long from = words.empty() ? -1 : strtol(words[0].c_str(), &end, 10);
+				ok = !words.empty() && words.size() <= 2 && end != nullptr && *end == '\0' && from >= 0 && from <= 65535;
+				long to = from;
+				if (ok && words.size() == 2)
+				{
+					to = strtol(words[1].c_str(), &end, 10);
+					ok = *end == '\0' && to >= from && to <= 65535;
+				}
+				if (ok)
+				{
+					rule.momentFrom = static_cast<int>(from);
+					rule.momentTo = static_cast<int>(to);
+				}
+			}
+			else if (kv.key == "time")
+			{
+				const std::string t = Lower(kv.value);
+				ok = t == "cycle" || t == "day" || t == "night";
+				if (ok)
+				{
+					rule.time = t == "day" ? FieldTime::Day : t == "night" ? FieldTime::Night : FieldTime::Cycle;
+					hasTime = true;
+				}
+			}
+			else
+			{
+				warnings += "line " + std::to_string(kv.line) + ": unknown key " + kv.key + ": skipped\n";
+				continue;
+			}
+			if (!ok)
+				warnings += "line " + std::to_string(kv.line) + ": " + kv.key + " = " + kv.value + ": not understood\n";
+		}
+		close();
+	}
+
+	FieldTime TimeByRules(const std::vector<TimeRule>& rules, const std::string& field, const int moment, const FieldTime own,
+		int* which)
+	{
+		FieldTime time = own;
+		int found = -1;
+		for (size_t r = 0; r < rules.size(); r++)
+		{
+			const TimeRule& rule = rules[r];
+			if (rule.momentFrom >= 0 && (moment < rule.momentFrom || moment > rule.momentTo))
+				continue;
+			const auto matches = [&](const std::vector<std::string>& patterns)
+			{
+				return std::any_of(patterns.begin(), patterns.end(), [&](const std::string& p) { return NameMatches(p, field); });
+			};
+			if (!matches(rule.fields) || matches(rule.notFields))
+				continue;
+			time = rule.time;
+			found = static_cast<int>(r);
+		}
+		if (which != nullptr)
+			*which = found;
+		return time;
+	}
+
+	std::string DefaultTimeRulesText()
+	{
+		return
+			"; DEMASTER: the time of day by the story (DAY_NIGHT). DEMASTER reads this file again when it changes.\n"
+			";\n"
+			"; A field's own time of day is its _pbr.txt's: time = cycle (it follows the clock; also every field without a _pbr.txt),\n"
+			"; day or night (always that: the clock waits while you are there, and a battle started there is fought as its stage is\n"
+			"; painted). A rule here says the time for some fields at some part of the story, over that:\n"
+			";   [rule <name>]\n"
+			";   field  = gl*, !glwitch3   the fields, by name (as the log and the field_bg folders have them): * for any letters,\n"
+			";                             ! before one the rule is not for\n"
+			";   moment = 359-419          the story's progress: the game's own counter (the savemap's \"game moment\"; with\n"
+			";                             SCENE_DEBUG=1 the log says it at every battle and on the world map, with DAY_NIGHT=1 when a\n"
+			";                             rule starts or stops holding). Left out: the whole game\n"
+			";   time   = cycle | day | night\n"
+			"; The last rule that holds decides. The counter's values below come from AxlRose-RX's list of FF8's story moments\n"
+			"; (FFNx's field debugger has it), which says where in the story each value is.\n"
+			";\n"
+			"; Deling City (its fields are gl..., but glwitch3 is the Commencement Room) is painted at night in the game. Give it\n"
+			"; day paintings (each field's picture; its night paintings as its _nt_A night pictures) and it follows the clock, with\n"
+			"; the night kept for two parts of the story:\n"
+			"\n"
+			"[rule deling city follows the clock]\n"
+			"field = gl*, !glwitch3\n"
+			"time = cycle\n"
+			"\n"
+			"[rule laguna visits julia]\n"
+			"; Laguna's first dream: Deling, the Galbadia Hotel and its piano bar (the counter 222-233; 220 is the forest before, 235\n"
+			"; Timber after)\n"
+			"field = gl*, !glwitch3\n"
+			"moment = 221-234\n"
+			"time = night\n"
+			"\n"
+			"[rule the sorceress parade]\n"
+			"; from the city square after Caraway's mansion (359: by the order of the scenes, Caraway taking the team along the\n"
+			"; parade's route) to the fight with Edea on the parade's float (392; 420 is the D-District prison). Make the first\n"
+			"; number smaller to have the night come earlier (350: from the arrival in Deling)\n"
+			"field = gl*, !glwitch3\n"
+			"moment = 359-419\n"
+			"time = night\n";
+	}
+
 	//--- lights
 
 	const char* FlickerName(const Flicker flicker)

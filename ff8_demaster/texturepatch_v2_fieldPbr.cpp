@@ -1113,11 +1113,12 @@ void main()
 		const double seconds = now / 1000.0;
 		const fieldpbr::Space& space = current.settings.space;
 		static const uint32_t groups = HasAddress(FIELD_BG_GROUPS) ? GetAddress(FIELD_BG_GROUPS) : 0; //a guest address
-		//the time of day (DAY_NIGHT): the field's own (time = day or night in _pbr.txt) or the clock's; which lights are on and
-		//how much, the night's darkness
-		const double night = DayNightAmount(current.settings.time);
+		//the time of day (DAY_NIGHT): the field's own (time = day or night in _pbr.txt, or a rule of field_time.txt for this
+		//point of the story) or the clock's; which lights are on and how much, the night's darkness
+		const fieldpbr::FieldTime placeTime = DAY_NIGHT ? DayNightPlaceTime() : current.settings.time;
+		const double night = DayNightAmount(placeTime);
 		//the evening (DAY_NIGHT_EVENING): the day's own lights start going and the glows start coming before the dusk's fade
-		const double evening = DayNightEvening(current.settings.time);
+		const double evening = DayNightEvening(placeTime);
 		//the moving lights (the sun, the party light) take places among the lights; the field's own get the rest. By day the
 		//sun is one of the day's two
 		const int moving = MovingLightsWanted(current.settings, current.lights, night);

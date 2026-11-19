@@ -11,8 +11,9 @@
 //scene_light.txt ("; comment", "key = value", sections in [brackets]):
 //	[battle] / [world]   the place's own look
 //	  night       = auto | 0 | 1   does the night come here. auto: the world map always; a battle when it started on the
-//	                               world map, in a field open to the sky (sky = 1 in its _pbr.txt) or in a field whose
-//	                               _pbr.txt says time = night. Battles from other fields stay as painted.
+//	                               world map or in a field open to the sky (sky = 1 in its _pbr.txt). Battles from other
+//	                               fields, and from a field with a fixed time (time = day or night in its _pbr.txt, or a
+//	                               rule of field_time.txt), stay as painted.
 //	  time        = cycle | day | night   cycle: the clock's; day / night: always that
 //	  day_tint    = r g b   the picture times this by day (linear; 1 1 1: as painted)
 //	  night_tint  = r g b   by night: times night_level x this
