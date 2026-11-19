@@ -113,6 +113,11 @@ namespace scenelight
 	};
 	//false: the registers don't hold a rotation (rows not of length 1 or not at right angles) or no distance
 	bool CameraFromRegisters(const int32_t registers[32], Camera& camera);
+	//The battle camera as the game builds it (BATTLE_CAMERA: a PlayStation MATRIX, 32 bytes), with the distance and the
+	//screen's centre of `projection` (the registers': they don't change within a battle). false: not a rotation
+	bool CameraFromMatrix(const uint8_t matrix[32], const Camera& projection, Camera& camera);
+	//how far two cameras are apart: the largest difference of the rotations' entries, and of the translations
+	void CameraDifference(const Camera& a, const Camera& b, double& rotation, double& translation);
 	//a direction, or a place, of the stage's space in view space
 	void DirectionToView(const Camera& camera, const double stage[3], double view[3]);
 	void PlaceToView(const Camera& camera, const double stage[3], double view[3]);

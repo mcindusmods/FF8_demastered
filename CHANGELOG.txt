@@ -1,5 +1,21 @@
 DEMASTER changelog (MCINDUS's continuation)
 
+v15.15 (in the source; not packaged yet) - the battle camera from the game, LUT colour grading, island padding
+--------------------------------------------------------------------------------------------------------------
+Built in steps. Not run in the game yet; tested on Linux as before.
+The battle camera from the game itself (first step)
+  - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
+    its sections zlib-packed; Memoria FF8 reads it the same way). From it: once a battle frame, after the effects and the
+    models, the game builds the camera (0x5033E0; JP 0x5072A0) from the eye and the target the camera programs and the
+    spells' own cameras move, and its roll, into a PlayStation matrix at 0x1D97778 (JP 0x229B858). The Remastered code
+    uses that matrix at about 1,500 places in each language.
+  - DEMASTER reads that matrix (BATTLE_CAMERA) for the battle's light instead of the projection's registers, which hold
+    it only until a model's own matrix is set: every pan to a caster and back is the camera as the game has it. The
+    distance and the screen's centre still come from the registers (they don't change within a battle).
+  - The camera filter (taking a register reading only when it agreed with the last) is left for the world map only,
+    whose camera isn't known yet. With SCENE_DEBUG=1 the log says six times whether the game's camera and the registers
+    agree at that moment.
+
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------
 Built in steps: the first (fields, fieldprep, battles fought by day from fixed-time fields), the second (the time of

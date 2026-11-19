@@ -219,10 +219,39 @@ namespace
 		static const DWORD at = HasAddress(GTE_CONTROL) ? GetAddress(GTE_CONTROL) : 0;
 		int32_t registers[32]{};
 		scenelight::Camera read, camera;
-		const bool readable = at != 0 && GuestRead(registers, at, sizeof(registers)) && scenelight::CameraFromRegisters(registers, read);
+		const bool registersRead = at != 0 && GuestRead(registers, at, sizeof(registers));
+		const bool readable = registersRead && scenelight::CameraFromRegisters(registers, read);
+		//in battle the camera the game built for this frame (BATTLE_CAMERA): every pan and cut of the spells and the GFs as
+		//it is, whatever model's matrix the registers hold. The distance and the screen's centre are the registers' (they
+		//don't change in a battle). On the world map (and if it can't be read) the registers, through the filter
+		bool own = false;
+		if (currentMode == MODE_BATTLE && registersRead)
+		{
+			static const DWORD matrixAt = HasAddress(BATTLE_CAMERA) ? GetAddress(BATTLE_CAMERA) : 0;
+			uint8_t matrix[32];
+			scenelight::Camera projection;
+			projection.centreX = registers[24] / 65536.0;
+			projection.centreY = registers[25] / 65536.0;
+			projection.distance = static_cast<double>(registers[26] & 0xFFFF);
+			own = matrixAt != 0 && GuestRead(matrix, matrixAt, sizeof(matrix)) && scenelight::CameraFromMatrix(matrix, projection, camera);
+			if (own)
+			{
+				cameraFilter.Reset();
+				static int compared = 0;
+				if (SCENE_DEBUG && readable && compared < 6)
+				{
+					compared++;
+					double rotation = 0, translation = 0;
+					scenelight::CameraDifference(camera, read, rotation, translation);
+					OutputDebug("SCENE_LIGHT: the battle camera from the game's own (BATTLE_CAMERA) %s the registers (rotation %.4f apart, "
+						"translation %.0f)\n", rotation < 0.01 && translation < 2 ? "agrees with" : "differs from (a model's matrix in them)",
+						rotation, translation);
+				}
+			}
+		}
 		GLint viewport[4] = { 0, 0, 0, 0 };
 		glGetIntegerv(GL_VIEWPORT, viewport);
-		if (cameraFilter.Frame(readable, read, camera) && viewport[2] > 0 && viewport[3] > 0)
+		if ((own || cameraFilter.Frame(readable, read, camera)) && viewport[2] > 0 && viewport[3] > 0)
 		{
 			next.camera = true;
 			next.view = camera;

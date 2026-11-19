@@ -1968,6 +1968,27 @@ static void TestSceneCamera()
 	const double middle[3] = { 0, 0, 0 };
 	scenelight::PlaceToView(camera, middle, view);
 	CHECK(view[0] == -547.0 && view[1] == 469.0 && view[2] == 8796.0);
+	//the game's own camera matrix (BATTLE_CAMERA): the same camera as those registers, from its 32 bytes
+	{
+		uint8_t m[32]{};
+		for (int i = 0; i < 9; i++)
+		{
+			const int16_t v = static_cast<int16_t>(std::lround(camera.r[i] * 4096.0));
+			memcpy(m + i * 2, &v, 2);
+		}
+		for (int i = 0; i < 3; i++)
+		{
+			const int32_t v = static_cast<int32_t>(camera.t[i]);
+			memcpy(m + 20 + i * 4, &v, 4);
+		}
+		scenelight::Camera fromMatrix;
+		CHECK(scenelight::CameraFromMatrix(m, camera, fromMatrix));
+		double rotation = 1, translation = 1;
+		scenelight::CameraDifference(fromMatrix, camera, rotation, translation);
+		CHECK(rotation < 1e-3 && translation == 0 && fromMatrix.distance == camera.distance && fromMatrix.centreX == camera.centreX);
+		uint8_t zero[32]{};
+		CHECK(!scenelight::CameraFromMatrix(zero, camera, fromMatrix)); //not a rotation
+	}
 	//a corner the game hands OpenGL comes back to the place it was projected from (640 x 480 screen, rhw = 1 / z)
 	{
 		double v[3], st[3];

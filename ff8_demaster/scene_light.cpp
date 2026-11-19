@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -486,6 +487,45 @@ namespace scenelight
 		camera.centreY = reg[25] / 65536.0;
 		camera.distance = static_cast<double>(reg[26] & 0xFFFF);
 		return camera.distance >= 16.0;
+	}
+
+	bool CameraFromMatrix(const uint8_t m[32], const Camera& projection, Camera& camera)
+	{
+		Camera c = projection;
+		for (int i = 0; i < 9; i++)
+		{
+			int16_t v;
+			memcpy(&v, m + i * 2, 2);
+			c.r[i] = v / 4096.0;
+		}
+		for (int i = 0; i < 3; i++)
+		{
+			int32_t v;
+			memcpy(&v, m + 20 + i * 4, 4);
+			c.t[i] = v;
+		}
+		for (int i = 0; i < 3; i++)
+		{
+			const double* r = c.r;
+			const double length = std::sqrt(r[i * 3] * r[i * 3] + r[i * 3 + 1] * r[i * 3 + 1] + r[i * 3 + 2] * r[i * 3 + 2]);
+			const int j = (i + 1) % 3;
+			if (std::fabs(length - 1.0) > 0.02 || std::fabs(r[i * 3] * r[j * 3] + r[i * 3 + 1] * r[j * 3 + 1] + r[i * 3 + 2] * r[j * 3 + 2]) > 0.02)
+				return false;
+		}
+		if (!(c.distance >= 16.0))
+			return false;
+		camera = c;
+		return true;
+	}
+
+	void CameraDifference(const Camera& a, const Camera& b, double& rotation, double& translation)
+	{
+		rotation = 0;
+		translation = 0;
+		for (int i = 0; i < 9; i++)
+			rotation = std::max(rotation, std::fabs(a.r[i] - b.r[i]));
+		for (int i = 0; i < 3; i++)
+			translation = std::max(translation, std::fabs(a.t[i] - b.t[i]));
 	}
 
 	void DirectionToView(const Camera& c, const double s[3], double v[3])
