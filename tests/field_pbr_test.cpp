@@ -2106,6 +2106,54 @@ static void TestSceneCamera()
 	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.empty());
 }
 
+//DAY_NIGHT_SAVES: one time of day per save file, kept sealed (daynight.dat), and the time a save without one gets
+static void TestSaveSlots()
+{
+	using namespace fieldpbr;
+	SaveClocks k;
+	k.Record("slot1_save01.ff8", 913, 227.0);
+	k.Record("slot1_save02.ff8", 5000, 600.0);
+	k.Record("slot1_save01.ff8", 1500, 100.0); //saved over slot 1, save 1: its entry is replaced
+	CHECK(k.entries.size() == 2);
+	CHECK(k.Find(913, 10) == nullptr); //the old save of that slot is gone
+	const SaveClock* one = k.Find(1495, 10);
+	CHECK(one != nullptr && one->file == "slot1_save01.ff8" && one->clock == 100.0);
+	k.Record(7000, 50.0); //(no file: from v15.14's text)
+	CHECK(k.entries.size() == 3);
+	//sealed: back as it was; a changed byte, another file or the wrong start: nothing
+	const std::string packed = PackSaveClocks(k, 0x1234567u);
+	SaveClocks back;
+	CHECK(UnpackSaveClocks(packed, back) && back.entries.size() == 3);
+	if (back.entries.size() == 3)
+	{
+		CHECK(back.entries[0].file == "slot1_save02.ff8" && back.entries[0].play == 5000 && back.entries[0].clock == 600.0);
+		CHECK(back.entries[2].file.empty() && back.entries[2].play == 7000);
+	}
+	CHECK(packed.find("slot1") == std::string::npos); //not readable as text
+	bool allCaught = true;
+	for (size_t i = 0; i < packed.size(); i++)
+	{
+		std::string changed = packed;
+		changed[i] = static_cast<char>(changed[i] ^ 0x10);
+		SaveClocks none;
+		none.entries.push_back({});
+		const bool read = UnpackSaveClocks(changed, none);
+		allCaught = allCaught && !read && none.entries.size() == 1; //and `out` untouched
+	}
+	CHECK(allCaught);
+	CHECK(!UnpackSaveClocks(packed.substr(0, packed.size() - 1), back));
+	CHECK(!UnpackSaveClocks("play = 913 clock = 227\n", back));
+	CHECK(PackSaveClocks(k, 1) != PackSaveClocks(k, 2)); //the nonce changes every byte after it
+	SaveClocks empty;
+	CHECK(UnpackSaveClocks(PackSaveClocks(empty, 9), back) && back.entries.empty());
+	//a save without a time of its own: the new game's morning, and its play time on from there
+	DayNightCycle cycle;
+	NEAR(ClockFromPlay(cycle, 0), cycle.fade / 2, 1e-9);
+	NEAR(ClockFromPlay(cycle, 100), cycle.fade / 2 + 100, 1e-9);
+	NEAR(ClockFromPlay(cycle, static_cast<uint32_t>(cycle.Length()) * 3 + 7), cycle.fade / 2 + 7, 1e-9);
+	CHECK(ClockFromPlay(cycle, 123456) == ClockFromPlay(cycle, 123456));
+}
+
 //EFFECT_LIGHTS: glows found on the grid, turned into lights of the stage, and kept steady from frame to frame
 static void TestEffectLights()
 {
@@ -2379,6 +2427,7 @@ int main(int argc, char** argv)
 {
 	TestLut();
 	TestEffectLights();
+	TestSaveSlots();
 	TestSceneCamera();
 	TestSceneLight();
 	TestEmissivePicture();

@@ -138,7 +138,7 @@ lamps = 0.900                   ; how much of the painted light stays around the
 
 ## Day and night (v15.8)
 
-One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, with 40-second fades, in fields, on the world map and in menus. Battles run the same clock 3 times slower (24 + 12 minutes, 120-second fades), so when a battle ends the field carries on from wherever the battle left it. It runs while the game draws frames and is kept in `DEMASTER_EXP\daynight.txt` between sessions (written every 30 seconds and after every key). The lengths are in `demaster.conf` (`DAY_NIGHT_DAY`, `_NIGHT`, `_FADE`, `_BATTLE`).
+One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, with 40-second fades, in fields, on the world map and in menus. Battles run the same clock 3 times slower (24 + 12 minutes, 120-second fades), so when a battle ends the field carries on from wherever the battle left it. It runs while the game draws frames. Each save slot has its own time of day (below); with `DAY_NIGHT_SAVES=0` there is one clock for the game, kept in `DEMASTER_EXP\daynight.txt` between sessions (written every 30 seconds and after every key). The lengths are in `demaster.conf` (`DAY_NIGHT_DAY`, `_NIGHT`, `_FADE`, `_BATTLE`).
 
 **What changes at night**, on PBR fields:
 - **The lights.** Lights with `time = day` fade out, `time = night` fade in, `both` stay. Two are on by day and six by night (see "On at a time" above), so both sets fit during a fade. **The evening (v15.14, `DAY_NIGHT_EVENING=0.9`):** the day's own lights start going, and the glows start coming on, at 90% of the day, before the dusk's fade begins; both are done when the fade ends. Dawn is the fade itself. `1` puts them back on the fade.
@@ -148,7 +148,10 @@ One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, w
 - **Characters lit by the room** dim the same way (their light grid times the same level, tint and lamps). Characters the game lights itself (`FIELD_PBR_CHARACTERS=0`, or fields without PBR) don't change.
 - **Not changed:** fields without PBR files, layers without PBR maps (layers with no `_A`, and the game's glow and shadow layers, blend 0-3), and battles and the world map (no PBR there yet: they only move the clock).
 
-**Per save (v15.14, `DAY_NIGHT_SAVES=1`):** when the game writes a save, DEMASTER notes the game's own play time and the time of day in `DEMASTER_EXP\daynight_saves.txt`. A save brings its play time back when it is loaded, and DEMASTER puts the clock back to that save's time of day (the log: `DAY_NIGHT: a save was loaded (play time …): back to the time of day it was saved at`). A new game starts in the morning. Saves made before v15.14 have none: the clock goes on as it is until you save again. DEMASTER sees a save being written by watching the save folder (`Documents\My Games\FINAL FANTASY VIII Remastered`, or `DAY_NIGHT_SAVE_FOLDER`); it doesn't touch the save files.
+**Per save slot (v15.15, `DAY_NIGHT_SAVES=1`):** every save slot has its own time of day, and nothing is shared between saves. When the game writes a save, DEMASTER notes which file it was, the game's own play time and the time of day in `DEMASTER_EXP\daynight.dat`. Saving over a slot replaces that slot's time. A save brings its play time back when it is loaded, and DEMASTER puts the clock back to that save's time of day (the log: `DAY_NIGHT: a save was loaded (slot1_save01.ff8, play time …): back to the time of day it was saved at`). A new game starts in the morning. A save with no time of its own (made before this, or on another computer) gets the time its play time gives: the new game's morning plus its play time, around the cycle, so it is the same every time you load it, until you save it again. DEMASTER sees a save being written by watching the save folder (`Documents\My Games\FINAL FANTASY VIII Remastered`, or `DAY_NIGHT_SAVE_FOLDER`); it doesn't touch the save files.
+- `daynight.dat` is not a text file to edit: it is packed, scrambled and sealed with a checksum, and if it has been changed outside the game DEMASTER uses none of it (the log says so) and writes a new one at the next save. It isn't encryption, only enough that the time of day can't be changed in Notepad.
+- v15.14's `daynight_saves.txt` is read into `daynight.dat` once and then deleted. `daynight.txt` is not used while each save has its own time.
+- The testing keys below still change the time (and the next save keeps it): turn them off (`DAY_NIGHT_KEYS=0`) for players.
 
 **A field's own time:** `time = day` or `time = night` in its `_pbr.txt` fixes it, and the clock waits while you are there (see "Your keys" below). A battle started there is fought by day (v15.14).
 
@@ -158,7 +161,7 @@ One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, w
 - **Ctrl+F9** runs it at 1x, 10x (a fade takes 4 s), 60x (the whole day in 12 s).
 - **Ctrl+F6** jumps to 5 seconds before the next fade, to watch one at normal speed.
 - While the clock is paused or sped up, and for 4 seconds after a key, a thin bar across the top of the screen shows the cycle, starting at dawn on the left: amber day, blue night. The mark on it is where the clock is: white at 1x, yellow at 10x, orange at 60x, red paused, grey in a field that holds the clock. `DAY_NIGHT_BAR=0` turns it off.
-- The log says what each key did and the time: `DAY_NIGHT: swapped: night, 0:00 in (dawn starts in 3:20)`. You can also set the time in `daynight.txt` while the game is closed (`time = 500` is the start of the night).
+- The log says what each key did and the time: `DAY_NIGHT: swapped: night, 0:00 in (dawn starts in 3:20)`. With `DAY_NIGHT_SAVES=0` you can also set the time in `daynight.txt` while the game is closed (`time = 500` is the start of the night).
 
 ## The colour grade (v15.15, `LUT=1`)
 
@@ -432,7 +435,6 @@ Cost: three more textures per page (1 MB each in BC7 at 4x), the room's `_ND` on
 - **Moving lights that the game moves.** The sun and the party light are the first two. Spells, summons, a train's headlights, lightning: each needs its own source of position (a script entity, a particle), which the module's interface takes (`fieldpbr::MovingLight`), but nothing feeds it yet.
 - **The sun on characters' light grid.** Characters get the sun's added light and cast its shadows, but the room light they stand in (the light grid fieldprep bakes) doesn't swing with the relight dial.
 
-- **The day/night clock and your game saves.** The time of day is DEMASTER's own (one `daynight.txt`), not saved with each game save: loading an older save keeps the time it is now. Tying it to the saves needs the game's play-time counter in memory, not found yet.
 - **Night on the rest of the game.** Battles, the world map, non-PBR fields and layers without PBR maps stay as painted at night (the clock still runs through them).
 
 - Particles (fire, sparks, save point glow) as light sources, and status effects: with the battle magic module.

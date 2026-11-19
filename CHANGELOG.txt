@@ -72,6 +72,19 @@ Spells light the stage (fourth step; new: EFFECT_LIGHTS=1, EFFECT_LIGHTS_STRENGT
     take none of the field's eight light places and cost little; reaching three times as far as they spread, 60-320 of
     the field's own pixels. pbr_shader_test: an effect light brightens around it, nothing far away, nothing darker, and
     the picture is as before without it.
+Each save slot keeps its own time of day (sixth step)
+  - The time of day is no longer one clock for the whole game. When the game writes a save, DEMASTER keeps which file it
+    was, the play time and the time of day; one entry per save file, so saving over a slot replaces its time. Loading a
+    save (its play time comes back) brings its time back.
+  - A save without a time of its own (made before this, or on another computer; v15.14 left them to the whole game's
+    clock) gets the time its play time gives: the new game's morning plus its play time, around the cycle. The same every
+    time it is loaded, until it is saved again.
+  - Kept in DEMASTER_EXP\daynight.dat instead of the text daynight_saves.txt: packed, scrambled and sealed with a
+    checksum, so it can't be changed by hand (a changed file is not used, and the log says so). Written beside it and then
+    put in its place. v15.14's text file is read into it once and deleted. daynight.txt is only used with
+    DAY_NIGHT_SAVES=0 (one clock), or when the save folder can't be watched.
+  - Tests: field_pbr_test (one entry per file, saving over a slot, sealed and back, every changed byte caught, the time a
+    save without one gets).
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

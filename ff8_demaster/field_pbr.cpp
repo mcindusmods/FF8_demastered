@@ -1625,10 +1625,13 @@ namespace fieldpbr
 		return Wrap(next - std::max(0.0, lead), c.Length());
 	}
 
-	void SaveClocks::Record(const uint32_t play, const double clock)
+	void SaveClocks::Record(const std::string& file, const uint32_t play, const double clock)
 	{
-		entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const SaveClock& e) { return e.play == play; }), entries.end());
-		entries.push_back({ play, std::isfinite(clock) ? clock : 0.0 });
+		entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const SaveClock& e)
+		{
+			return e.play == play || (!file.empty() && e.file == file);
+		}), entries.end());
+		entries.push_back({ play, std::isfinite(clock) ? clock : 0.0, file.substr(0, 255) });
 		if (entries.size() > MOST)
 			entries.erase(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(entries.size() - MOST));
 	}
@@ -1669,6 +1672,123 @@ namespace fieldpbr
 		for (const SaveClock& e : clocks.entries)
 			out += Format("play = %lu clock = %.2f\n", static_cast<unsigned long>(e.play), e.clock);
 		return out;
+	}
+
+	namespace
+	{
+		constexpr uint64_t SEAL_KEY = 0x6D63696E64757321ull; //"mcindus!": not a secret worth keeping, only enough that edits show
+		constexpr char SEAL_MAGIC[4] = { 'D', 'M', 'T', 'D' };
+
+		uint64_t SplitMix(uint64_t& state)
+		{
+			uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+			z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+			z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+			return z ^ (z >> 31);
+		}
+
+		uint64_t Seal(const std::string& plain, const uint32_t nonce)
+		{
+			uint64_t h = 0xCBF29CE484222325ull ^ SEAL_KEY ^ (static_cast<uint64_t>(nonce) << 17);
+			for (const char c : plain)
+				h = (h ^ static_cast<uint8_t>(c)) * 0x100000001B3ull;
+			uint64_t state = h;
+			return SplitMix(state);
+		}
+
+		void Scramble(std::string& data, const uint32_t nonce)
+		{
+			uint64_t state = SEAL_KEY ^ (static_cast<uint64_t>(nonce) * 0x9E3779B1ull);
+			uint64_t word = 0;
+			for (size_t i = 0; i < data.size(); i++)
+			{
+				if (i % 8 == 0)
+					word = SplitMix(state);
+				data[i] = static_cast<char>(static_cast<uint8_t>(data[i]) ^ static_cast<uint8_t>(word >> (8 * (i % 8))));
+			}
+		}
+
+		template <typename T>
+		void Put(std::string& out, const T value)
+		{
+			out.append(reinterpret_cast<const char*>(&value), sizeof(T));
+		}
+
+		template <typename T>
+		bool Take(const std::string& in, size_t& at, T& value)
+		{
+			if (at + sizeof(T) > in.size())
+				return false;
+			memcpy(&value, in.data() + at, sizeof(T));
+			at += sizeof(T);
+			return true;
+		}
+	}
+
+	std::string PackSaveClocks(const SaveClocks& clocks, const uint32_t nonce)
+	{
+		std::string plain;
+		Put<uint16_t>(plain, static_cast<uint16_t>(std::min(clocks.entries.size(), SaveClocks::MOST)));
+		size_t n = 0;
+		for (const SaveClock& e : clocks.entries)
+		{
+			if (n++ >= SaveClocks::MOST)
+				break;
+			Put<uint32_t>(plain, e.play);
+			Put<double>(plain, e.clock);
+			const std::string name = e.file.substr(0, 255);
+			Put<uint8_t>(plain, static_cast<uint8_t>(name.size()));
+			plain += name;
+		}
+		const uint64_t seal = Seal(plain, nonce);
+		std::string out(SEAL_MAGIC, 4);
+		Put<uint8_t>(out, 1); //the format's version
+		Put<uint32_t>(out, nonce);
+		std::string body = plain;
+		Put<uint64_t>(body, seal);
+		Scramble(body, nonce);
+		return out + body;
+	}
+
+	bool UnpackSaveClocks(const std::string& bytes, SaveClocks& out)
+	{
+		if (bytes.size() < 4 + 1 + 4 + 2 + 8 || memcmp(bytes.data(), SEAL_MAGIC, 4) != 0 || static_cast<uint8_t>(bytes[4]) != 1)
+			return false;
+		uint32_t nonce = 0;
+		size_t at = 5;
+		Take(bytes, at, nonce);
+		std::string body = bytes.substr(at);
+		Scramble(body, nonce);
+		const std::string plain = body.substr(0, body.size() - 8);
+		uint64_t seal = 0;
+		memcpy(&seal, body.data() + body.size() - 8, 8);
+		if (seal != Seal(plain, nonce))
+			return false;
+		SaveClocks result;
+		size_t p = 0;
+		uint16_t count = 0;
+		if (!Take(plain, p, count))
+			return false;
+		for (uint16_t i = 0; i < count; i++)
+		{
+			SaveClock e;
+			uint8_t length = 0;
+			if (!Take(plain, p, e.play) || !Take(plain, p, e.clock) || !Take(plain, p, length) || p + length > plain.size() || !std::isfinite(e.clock))
+				return false;
+			e.file = plain.substr(p, length);
+			p += length;
+			result.entries.push_back(e);
+		}
+		if (p != plain.size())
+			return false;
+		out = result;
+		return true;
+	}
+
+	double ClockFromPlay(const DayNightCycle& cycle, const uint32_t play)
+	{
+		const DayNightCycle c = cycle.Checked();
+		return Wrap(c.fade / 2 + static_cast<double>(play), c.Length());
 	}
 
 	std::string ClockText(const DayNightCycle& cycle, const double time)

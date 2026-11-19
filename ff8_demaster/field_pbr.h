@@ -407,25 +407,37 @@ namespace fieldpbr
 	double BeforeNextFade(const DayNightCycle& cycle, double time, double lead);
 	//"day, 2:15 in (dusk in 5:05)" for the log
 	std::string ClockText(const DayNightCycle& cycle, double time);
-	//The time of day each save was made at (DEMASTER_EXP\daynight_saves.txt, DAY_NIGHT_SAVES): the game's play time when the
-	//save was written, and the clock then. A save that is loaded brings its play time back, and with it its time of day.
+	//The time of day of each save slot (DEMASTER_EXP\daynight.dat, DAY_NIGHT_SAVES): when the game writes a save file, the
+	//file, the game's play time then and the clock. A save that is loaded brings its play time back, and with it its time
+	//of day. One entry per save file: saving over a slot replaces its entry.
 	struct SaveClock
 	{
 		uint32_t play = 0; //the game's play time counter at the save
 		double clock = 0; //seconds into the cycle
+		std::string file; //the save file, lower case, from the save folder down ("": not known, from an older DEMASTER)
 	};
 	struct SaveClocks
 	{
 		std::vector<SaveClock> entries; //oldest first
 		static constexpr size_t MOST = 400;
-		//a save at this play time: one already there for the same play time is replaced; the oldest go past MOST
-		void Record(uint32_t play, double clock);
+		//a save at this play time, into this file: the entry of the same file (or the same play time) is replaced; the
+		//oldest go past MOST
+		void Record(const std::string& file, uint32_t play, double clock);
+		void Record(uint32_t play, double clock) { Record(std::string(), play, clock); }
 		//the save a loaded play time belongs to: its play time at most `tolerance` before ours (the game counts on for a
 		//moment after it makes the save's picture, before the file is written and seen); the nearest. nullptr: none
 		const SaveClock* Find(uint32_t loaded, uint32_t tolerance) const;
 	};
+	//the text of DEMASTER v15.14's daynight_saves.txt (read once, to bring its saves into daynight.dat)
 	bool ParseSaveClocks(const std::string& text, SaveClocks& out);
 	std::string WriteSaveClocks(const SaveClocks& clocks);
+	//daynight.dat: the entries packed, scrambled and sealed with a checksum, so it isn't a file to edit by hand. false: not
+	//such a file, or changed since DEMASTER wrote it (then nothing of it is used)
+	std::string PackSaveClocks(const SaveClocks& clocks, uint32_t nonce);
+	bool UnpackSaveClocks(const std::string& bytes, SaveClocks& out);
+	//The time of day of a save without an entry (made before DEMASTER kept them, or elsewhere): the morning a new game
+	//starts in, and as many seconds on as the save's play time, around the cycle. Always the same for the same save
+	double ClockFromPlay(const DayNightCycle& cycle, uint32_t play);
 	//the clock's file (DEMASTER_EXP\daynight.txt): "time = <seconds into the cycle>"
 	bool ParseClock(const std::string& text, double& time);
 	std::string WriteClock(const DayNightCycle& cycle, double time);

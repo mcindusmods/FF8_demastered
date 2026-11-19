@@ -51,8 +51,17 @@ namespace
 		return std::string(DIRECT_IO_EXPORT_DIR) + "daynight.txt";
 	}
 
+	bool perSlot = false; //DAY_NIGHT_SAVES works: the time of day is each save's (daynight.dat), daynight.txt isn't used
+
+	//the whole game's clock (DAY_NIGHT_SAVES=0, or when the saves can't be watched): daynight.txt
 	void Save()
 	{
+		if (perSlot)
+		{
+			lastSave = realTime;
+			unsaved = false;
+			return;
+		}
 		FILE* file = nullptr;
 		if (fopen_s(&file, ClockPath().c_str(), "wb") != 0 || file == nullptr)
 			return;
@@ -61,6 +70,21 @@ namespace
 		fclose(file);
 		lastSave = realTime;
 		unsaved = false;
+	}
+
+	bool LoadWholeClock()
+	{
+		FILE* file = nullptr;
+		if (fopen_s(&file, ClockPath().c_str(), "rb") != 0 || file == nullptr)
+			return false;
+		std::string text(4096, '\0');
+		text.resize(fread(text.data(), 1, text.size(), file));
+		fclose(file);
+		double t = 0;
+		if (!fieldpbr::ParseClock(text, t))
+			return false;
+		clockTime = fieldpbr::AdvanceClock(cycle, t, 0, false);
+		return true;
 	}
 
 	void Start()
@@ -76,24 +100,13 @@ namespace
 		c.evening = DAY_NIGHT_EVENING;
 		cycle = c.Checked();
 		clockTime = cycle.fade / 2; //a new game: the morning
-		bool fromFile = false;
-		if (FILE* file = nullptr; fopen_s(&file, ClockPath().c_str(), "rb") == 0 && file != nullptr)
-		{
-			std::string text(4096, '\0');
-			text.resize(fread(text.data(), 1, text.size(), file));
-			fclose(file);
-			double t = 0;
-			if (fieldpbr::ParseClock(text, t))
-			{
-				clockTime = fieldpbr::AdvanceClock(cycle, t, 0, false);
-				fromFile = true;
-			}
-		}
+		const bool fromFile = !DAY_NIGHT_SAVES && LoadWholeClock();
 		QueryPerformanceFrequency(&frequency);
 		QueryPerformanceCounter(&lastCount);
-		OutputDebug("DAY_NIGHT: on, %.0f s day + %.0f s night, %.0f s fades, battles %.3g times slower; %s: %s. Keys%s: Ctrl+F7 swap, "
+		OutputDebug("DAY_NIGHT: on, %.0f s day + %.0f s night, %.0f s fades, battles %.3g times slower; %s. Keys%s: Ctrl+F7 swap, "
 			"Ctrl+F8 pause, Ctrl+F9 speed (1x, 10x, 60x), Ctrl+F6 to just before the next fade\n", cycle.day, cycle.night, cycle.fade,
-			cycle.battleSlower, fromFile ? "from DEMASTER_EXP\\daynight.txt" : "new clock (morning)", fieldpbr::ClockText(cycle, clockTime).c_str(),
+			cycle.battleSlower, DAY_NIGHT_SAVES ? "each save has its own time of day (it is set when a save is loaded or a game started)"
+			: fromFile ? ("from DEMASTER_EXP\\daynight.txt: " + fieldpbr::ClockText(cycle, clockTime)).c_str() : "new clock (morning)",
 			DAY_NIGHT_KEYS ? "" : " (off: DAY_NIGHT_KEYS=0)");
 	}
 
@@ -197,7 +210,24 @@ namespace
 
 		std::string Path()
 		{
+			return std::string(DIRECT_IO_EXPORT_DIR) + "daynight.dat";
+		}
+
+		//DEMASTER v15.14 kept them as text: read once into daynight.dat, then deleted
+		std::string OldPath()
+		{
 			return std::string(DIRECT_IO_EXPORT_DIR) + "daynight_saves.txt";
+		}
+
+		bool ReadFile(const std::string& path, std::string& out)
+		{
+			FILE* file = nullptr;
+			if (fopen_s(&file, path.c_str(), "rb") != 0 || file == nullptr)
+				return false;
+			out.assign(1 << 20, '\0');
+			out.resize(fread(out.data(), 1, out.size(), file));
+			fclose(file);
+			return true;
 		}
 
 		bool ReadPlay(uint32_t& out)
@@ -217,8 +247,9 @@ namespace
 			return mode == MODE_FIELD || mode == MODE_WORLDMAP || mode == MODE_MENU || mode == MODE_MENU2;
 		}
 
-		//the save files there now (.ff8, or a name with "save" in it); true when one is new or was written since the last look
-		bool Scan()
+		//the save files there now (.ff8, or a name with "save" in it); changed: the ones new or written since the last look
+		//(lower case, from the save folder down)
+		bool Scan(std::vector<std::string>* changedFiles = nullptr)
 		{
 			bool changed = false;
 			std::error_code error;
@@ -238,20 +269,35 @@ namespace
 					continue;
 				const long long stamp = static_cast<long long>(written.time_since_epoch().count());
 				auto& known = seen[it->path().wstring()];
+				if (known != stamp && changedFiles != nullptr)
+				{
+					std::wstring relative = std::filesystem::relative(it->path(), folder, error).wstring();
+					if (error || relative.empty())
+						relative = name;
+					std::transform(relative.begin(), relative.end(), relative.begin(), [](const wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+					changedFiles->push_back(std::filesystem::path(relative).string());
+				}
 				changed = changed || known != stamp;
 				known = stamp;
 			}
 			return changed;
 		}
 
+		//daynight.dat, sealed (field_pbr.h PackSaveClocks), written beside it and then put in its place
 		void Write()
 		{
+			const std::string bytes = fieldpbr::PackSaveClocks(clocks, static_cast<uint32_t>(GetTickCount64() * 2654435761ull));
+			const std::string temporary = Path() + ".new";
 			FILE* file = nullptr;
-			if (fopen_s(&file, Path().c_str(), "wb") != 0 || file == nullptr)
+			if (fopen_s(&file, temporary.c_str(), "wb") != 0 || file == nullptr)
 				return;
-			const std::string text = fieldpbr::WriteSaveClocks(clocks);
-			fwrite(text.data(), 1, text.size(), file);
+			const bool written = fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
 			fclose(file);
+			if (!written || !MoveFileExA(temporary.c_str(), Path().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			{
+				OutputDebug("DAY_NIGHT: DEMASTER_EXP\\daynight.dat can't be written: the time of day of this save isn't kept\n");
+				DeleteFileA(temporary.c_str());
+			}
 		}
 
 		void Start()
@@ -264,7 +310,8 @@ namespace
 			uint32_t play = 0;
 			if (!ReadPlay(play))
 			{
-				OutputDebug("DAY_NIGHT: the game's play time can't be read here: the time of day isn't kept per save\n");
+				OutputDebug("DAY_NIGHT: the game's play time can't be read here: the time of day isn't kept per save (one clock, daynight.txt)\n");
+				LoadWholeClock();
 				return;
 			}
 			if (!DAY_NIGHT_SAVE_FOLDER.empty())
@@ -279,28 +326,52 @@ namespace
 			std::error_code error;
 			if (folder.empty() || !std::filesystem::is_directory(folder, error))
 			{
-				OutputDebug("DAY_NIGHT: no save folder at %s: the time of day isn't kept per save (DAY_NIGHT_SAVE_FOLDER says where it is)\n",
-					folder.string().c_str());
+				OutputDebug("DAY_NIGHT: no save folder at %s: the time of day isn't kept per save, one clock for the game (daynight.txt; "
+					"DAY_NIGHT_SAVE_FOLDER says where the saves are)\n", folder.string().c_str());
+				LoadWholeClock();
 				return;
 			}
 			watch = FindFirstChangeNotificationW(folder.wstring().c_str(), TRUE,
 				FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE);
 			if (watch == INVALID_HANDLE_VALUE)
 			{
-				OutputDebug("DAY_NIGHT: can't watch the save folder %s: the time of day isn't kept per save\n", folder.string().c_str());
+				OutputDebug("DAY_NIGHT: can't watch the save folder %s: the time of day isn't kept per save (one clock, daynight.txt)\n",
+					folder.string().c_str());
+				LoadWholeClock();
 				return;
 			}
 			Scan();
-			if (FILE* file = nullptr; fopen_s(&file, Path().c_str(), "rb") == 0 && file != nullptr)
+			std::string bytes;
+			const char* from = "none yet";
+			if (ReadFile(Path(), bytes))
 			{
-				std::string text(1 << 16, '\0');
-				text.resize(fread(text.data(), 1, text.size(), file));
-				fclose(file);
-				fieldpbr::ParseSaveClocks(text, clocks);
+				if (fieldpbr::UnpackSaveClocks(bytes, clocks))
+					from = "daynight.dat";
+				else
+				{
+					from = "none: daynight.dat was changed outside the game, so none of it is used";
+					OutputDebug("DAY_NIGHT: DEMASTER_EXP\\daynight.dat isn't as DEMASTER wrote it (changed by hand?): its times are not used; saves "
+						"get the time their play time gives until they are saved again\n");
+				}
+			}
+			else if (std::string text; ReadFile(OldPath(), text) && fieldpbr::ParseSaveClocks(text, clocks))
+			{
+				//DEMASTER v15.14's text file: into daynight.dat, and gone (it could be edited)
+				Write();
+				fieldpbr::SaveClocks check;
+				if (ReadFile(Path(), bytes) && fieldpbr::UnpackSaveClocks(bytes, check) && check.entries.size() == clocks.entries.size())
+				{
+					DeleteFileA(OldPath().c_str());
+					from = "daynight_saves.txt (v15.14), now in daynight.dat";
+				}
+				else
+					from = "daynight_saves.txt (v15.14; daynight.dat couldn't be written)";
 			}
 			on = true;
-			OutputDebug("DAY_NIGHT: the time of day is kept per save (DEMASTER_EXP\\daynight_saves.txt, %zu save(s) known); watching %s "
-				"(%zu save file(s)); the play time reads %u now\n", clocks.entries.size(), folder.string().c_str(), seen.size(), play);
+			perSlot = true;
+			OutputDebug("DAY_NIGHT: each save slot keeps its own time of day (DEMASTER_EXP\\daynight.dat, %zu save(s) known: %s); a save "
+				"without one gets the time its play time gives. Watching %s (%zu save file(s)); the play time reads %u now\n",
+				clocks.entries.size(), from, folder.string().c_str(), seen.size(), play);
 		}
 
 		//once a frame, after the clock moved: a save written, a save loaded. now: seconds of real time (not held back on hitches)
@@ -315,13 +386,17 @@ namespace
 			if (WaitForSingleObject(watch, 0) == WAIT_OBJECT_0)
 			{
 				FindNextChangeNotification(watch);
-				if (Scan() && readable && Saving(mode) && now - lastRecord > 2.0)
+				std::vector<std::string> written;
+				if (Scan(&written) && readable && Saving(mode) && now - lastRecord > 2.0)
 				{
 					lastRecord = now;
-					clocks.Record(play, clockTime);
+					for (const std::string& file : written)
+						clocks.Record(file, play, clockTime);
+					if (written.empty())
+						clocks.Record(play, clockTime);
 					Write();
-					OutputDebug("DAY_NIGHT: a save was written (play time %u): its time of day is %s\n", play,
-						fieldpbr::ClockText(cycle, clockTime).c_str());
+					OutputDebug("DAY_NIGHT: a save was written (%s, play time %u): its time of day is %s\n",
+						written.empty() ? "a file" : written.front().c_str(), play, fieldpbr::ClockText(cycle, clockTime).c_str());
 				}
 			}
 			if (!readable || !Playing(mode))
@@ -344,17 +419,21 @@ namespace
 				{
 					clockTime = fieldpbr::AdvanceClock(cycle, kept->clock, 0, false);
 					unsaved = true;
-					OutputDebug("DAY_NIGHT: a save was loaded (play time %u): back to the time of day it was saved at, %s\n", play,
-						fieldpbr::ClockText(cycle, clockTime).c_str());
+					OutputDebug("DAY_NIGHT: a save was loaded (%s, play time %u): back to the time of day it was saved at, %s\n",
+						kept->file.empty() ? "saved with v15.14" : kept->file.c_str(), play, fieldpbr::ClockText(cycle, clockTime).c_str());
 				}
-				else if (jumped && mode == MODE_FIELD && play < static_cast<uint32_t>(60.0 * rate))
+				else
 				{
-					clockTime = cycle.fade / 2; //a new game starts in the morning
+					//a new game (its play time starts at 0: the morning), or a save without a time of its own: the time its play time
+					//gives, the same every time it is loaded
+					clockTime = fieldpbr::ClockFromPlay(cycle, play);
 					unsaved = true;
-					OutputDebug("DAY_NIGHT: a new game (play time %u): the morning\n", play);
+					if (play < static_cast<uint32_t>(60.0 * rate))
+						OutputDebug("DAY_NIGHT: a new game (play time %u): the morning\n", play);
+					else
+						OutputDebug("DAY_NIGHT: a save was loaded (play time %u) that has no time of day of its own yet: the time its play time "
+							"gives, %s (kept from its next save on)\n", play, fieldpbr::ClockText(cycle, clockTime).c_str());
 				}
-				else if (jumped && FIELD_DEBUG)
-					OutputDebug("DAY_NIGHT: the play time jumped to %u (a save loaded?), none kept for it: the clock goes on\n", play);
 				segmentPlay = play;
 				segmentAt = now;
 			}
