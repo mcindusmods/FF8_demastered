@@ -352,6 +352,11 @@ namespace scenelight
 			"day_tint = 1 1 1\n"
 			"night_tint = 0.55 0.65 1\n"
 			"night_level = 0.3\n"
+			"; The sun and the moon cross the world map by the clock too (its camera is read from the game): sun, sun_azimuth\n"
+			"; and sun_height as for battles. The ground is big flat triangles, each lit flat, so it darkens less here\n"
+			"sun = 0.25\n"
+			"sun_azimuth = 30\n"
+			"sun_height = 60\n"
 			"\n"
 			"; Rules change the settings above where their conditions hold. Only the keys written in a rule change anything.\n"
 			";   where  = battle | world | both     (left out: both)\n"
@@ -558,6 +563,49 @@ namespace scenelight
 		view[0] = (x * 0.5 - camera.centreX) * z / d;
 		view[1] = (y * 0.5 - camera.centreY) * z / d;
 		view[2] = z;
+	}
+
+	void AddFacing(const Camera& camera, const std::vector<double>& corners, double sum[3])
+	{
+		for (size_t i = 0; i + 9 <= corners.size(); i += 9)
+		{
+			double p[3][3];
+			bool ok = true;
+			for (int k = 0; k < 3; k++)
+			{
+				const double rhw = corners[i + k * 3 + 2];
+				ok = ok && rhw > 0;
+				ScreenToView(camera, corners[i + k * 3], corners[i + k * 3 + 1], rhw, p[k]);
+			}
+			if (!ok)
+				continue;
+			const double a[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] };
+			const double b[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
+			double n[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+			const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+			if (!(length > 0) || !std::isfinite(length))
+				continue;
+			//towards the camera (the camera is at 0); the area is |n| / 2, so n itself is the weighted facing
+			if (n[0] * p[0][0] + n[1] * p[0][1] + n[2] * p[0][2] > 0)
+				for (double& v : n)
+					v = -v;
+			//one triangle counts no more than one of a thousandth of the camera's distance squared (a huge one up close)
+			const double most = 1e-3 * (p[0][2] * p[0][2]);
+			const double scale = length > most && most > 0 ? most / length : 1.0;
+			for (int k = 0; k < 3; k++)
+				sum[k] += n[k] * scale;
+		}
+	}
+
+	double FacingAlongUp(const Camera& camera, const double facing[3])
+	{
+		const double length = std::sqrt(facing[0] * facing[0] + facing[1] * facing[1] + facing[2] * facing[2]);
+		if (!(length > 0))
+			return 0;
+		const double up[3] = { 0, -1, 0 };
+		double view[3];
+		DirectionToView(camera, up, view);
+		return (facing[0] * view[0] + facing[1] * view[1] + facing[2] * view[2]) / length;
 	}
 
 	const char* const GLOW_VERTEX_SHADER = "#version 120\nvarying float demasterGlowDepth;\nvoid main() {\n\tvec4 p = gl_Vertex;\n"

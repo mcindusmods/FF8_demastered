@@ -8,16 +8,20 @@
 //	                   (<page>_ORM: its red channel, AO), which DEMASTER then has on texture units 10 and 11
 //and sets them back to zero for every other draw of that program (the menus, the text, effects that are light themselves).
 //
-//Which draws: by the kind of texture bound (the game's own texture type, remembered when the texture is filled):
-//	battle     the stage and the enemies (type 11), the party (35) and, in a battle on the world map, the world's ground
-//	           and sky the stage is made of (18, 27); not draws that add light (blend ONE, ONE: spells, glows)
-//	world map  the world's own textures (18, 27): the ground, the sky, the haze, the people and vehicles on it
+//Which draws:
+//	battle     by the kind of texture bound (the game's own texture type, remembered when the texture is filled): the
+//	           stage and the enemies (type 11), the party (35) and, in a battle on the world map, the world's ground and
+//	           sky the stage is made of (18, 27); not draws that add light (blend ONE, ONE: spells, glows)
+//	world map  by depth: whatever is drawn at a depth of its own (the ground, the sea, the sky, the haze, the people and
+//	           vehicles: its HD textures come in without the game's type), not the map, the menus or the screen's flashes
+//	           (rhw 1/3 or 1). Its plain-colour sky and haze (main_notex.frag, DEMASTER's version) too
 //
-//Battles are also lit from the stage's own space (scene_light.h, "the battle camera"): the sun and the moon cross the
-//stage by the clock, a stage page's normal map (<page>_N) and ORM map answer to them, and a stage can have four lights of
-//its own (scene_light.txt). For that the shader gets, once a frame, the numbers the game's projection used (read from the
-//game's memory when the first battle draw of the frame arrives) and the sun and the lights in view space. The world map
-//is only dimmed and tinted.
+//Battles and the world map are also lit from their own space (scene_light.h, "the battle camera", "the world map"): the sun
+//and the moon cross them by the clock. In battle a stage page's normal map (<page>_N) and ORM map answer to them, and a
+//stage can have four lights of its own (scene_light.txt) and four from the effects (EFFECT_LIGHTS). For that the shader
+//gets, once a frame, the camera the game built (BATTLE_CAMERA, WORLD_CAMERA) and the numbers its projection used, and the
+//sun and the lights in view space. On the world map the sky isn't lit by the sun, and which way is up in its space is
+//measured from its ground in its first frames (MeasureWorldUp).
 //
 //Battles: the night only comes where "night = auto" allows it (scene_light.h): battles started on the world map, in a
 //field open to the sky, or in a field that is always night.
@@ -32,6 +36,7 @@
 #include "image.h"
 #include "mymemory.h"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -66,6 +71,7 @@ namespace
 		GLint scene = -1, maps = -1, draw = -1, proj = -1, centre = -1, rot = -1, trans = -1, sun = -1, sunLight = -1, lightAt = -1,
 			lightColour = -1, shadowMatrix = -1, shadowInfo = -1;
 		uint64_t shadowSent = 0; //the serial of the shadow map this program has (0: none)
+		bool plain = false; //main_notex.frag: only demasterScene
 		float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 }; //as last sent
 		uint64_t stageSent = 0; //the serial of the stage's light (below) this program has
 	};
@@ -124,6 +130,16 @@ namespace
 	uint64_t sceneFrame = 0; //counts SwapBuffers
 	scenelight::CameraFilter cameraFilter;
 	scenelight::Look battleLook; //this moment's, for the stage's light
+	scenelight::Look worldLook; //the world map's, for its sun
+	//the world map's up (scenelight::FacingAlongUp): measured from its first frames; +1: -y of its space (the PlayStation's),
+	//-1: +y. Until it is measured: +1
+	struct WorldUp
+	{
+		double facing[3] = { 0, 0, 0 };
+		int triangles = 0, draws = 0;
+		int sign = 1;
+		bool decided = false;
+	} worldUp;
 	std::unordered_map<GLint, ProgramState> programs;
 	int programsOn = 0; //programs whose demasterScene is not zero right now
 
@@ -248,6 +264,8 @@ namespace
 		now.timeHere = scenelight::TimeHere(look, fixedPlace, outdoors);
 		if (battle)
 			battleLook = look;
+		else
+			worldLook = look;
 	}
 
 	//Once a frame in battle: the camera from the game's projection registers, the sun and the stage's lights in view space
@@ -268,6 +286,28 @@ namespace
 		//it is, whatever model's matrix the registers hold. The distance and the screen's centre are the registers' (they
 		//don't change in a battle). On the world map (and if it can't be read) the registers, through the filter
 		bool own = false;
+		const bool world = currentMode == MODE_WORLDMAP;
+		const scenelight::Look& look = world ? worldLook : battleLook;
+		if (world && registersRead)
+		{
+			//the world map's camera (WORLD_CAMERA), with the registers' distance and centre; its picture starts 16 lines down
+			static const DWORD worldAt = HasAddress(WORLD_CAMERA) ? GetAddress(WORLD_CAMERA) : 0;
+			uint8_t matrix[32];
+			scenelight::Camera projection;
+			projection.centreX = registers[24] / 65536.0;
+			projection.centreY = registers[25] / 65536.0 + scenelight::WORLD_CENTRE_DOWN;
+			projection.distance = static_cast<double>(registers[26] & 0xFFFF);
+			own = worldAt != 0 && GuestRead(matrix, worldAt, sizeof(matrix)) && scenelight::CameraFromMatrix(matrix, projection, camera);
+			static int said = 0;
+			if (SCENE_DEBUG && said < 3)
+			{
+				said++;
+				OutputDebug("SCENE_LIGHT: the world map's camera (WORLD_CAMERA) %s: rotation %.3f %.3f %.3f / %.3f %.3f %.3f / %.3f %.3f %.3f, "
+					"translation %.0f %.0f %.0f, distance %.0f, centre %.1f %.1f\n", own ? "read" : "can't be read", camera.r[0], camera.r[1],
+					camera.r[2], camera.r[3], camera.r[4], camera.r[5], camera.r[6], camera.r[7], camera.r[8], camera.t[0], camera.t[1], camera.t[2],
+					projection.distance, projection.centreX, projection.centreY);
+			}
+		}
 		if (currentMode == MODE_BATTLE && registersRead)
 		{
 			static const DWORD matrixAt = HasAddress(BATTLE_CAMERA) ? GetAddress(BATTLE_CAMERA) : 0;
@@ -294,7 +334,8 @@ namespace
 		}
 		GLint viewport[4] = { 0, 0, 0, 0 };
 		glGetIntegerv(GL_VIEWPORT, viewport);
-		if ((own || cameraFilter.Frame(readable, read, camera)) && viewport[2] > 0 && viewport[3] > 0)
+		//(the world map: only its own camera; its registers hold the models' matrices as often as not)
+		if ((own || (!world && cameraFilter.Frame(readable, read, camera))) && viewport[2] > 0 && viewport[3] > 0)
 		{
 			next.camera = true;
 			next.view = camera;
@@ -305,33 +346,38 @@ namespace
 			next.proj[3] = static_cast<float>(camera.distance);
 			next.centre[0] = static_cast<float>(camera.centreX);
 			next.centre[1] = static_cast<float>(camera.centreY);
-			next.centre[2] = battleLook.specular;
-			next.centre[3] = SKY_DISTANCE;
+			next.centre[2] = look.specular;
+			next.centre[3] = world ? 1e9f : SKY_DISTANCE; //(the world map's sky is told by its depth, draw by draw)
 			for (int i = 0; i < 9; i++)
 				next.rot[i] = static_cast<float>(camera.r[i]); //rows sent as columns: the transpose, view to stage
 			for (int i = 0; i < 3; i++)
 				next.trans[i] = static_cast<float>(camera.t[i]);
 			//where the night doesn't come (or the time is fixed) the sun, or the moon, stands at its highest
 			fieldpbr::SkyTime sky;
-			sky.night = battleLook.time == scenelight::Time::Night;
+			sky.night = look.time == scenelight::Time::Night;
 			if (now.sunByClock)
 				sky = DayNightSky();
-			const scenelight::Sun sun = scenelight::SunOver(battleLook, sky.night, sky.phase);
+			scenelight::Sun sun = scenelight::SunOver(look, sky.night, sky.phase);
+			if (world && worldUp.sign < 0)
+				sun.direction[1] = -sun.direction[1]; //the world map's up is +y of its space
+			if (world)
+				sun.strength *= worldUp.decided ? 1.0 : 0.0; //no sun until up is known
 			double towards[3];
 			scenelight::DirectionToView(camera, sun.direction, towards);
 			const double strength = sun.strength;
 			for (int i = 0; i < 3; i++)
 				next.sunStage[i] = sun.direction[i];
-			next.sunShadow = battleLook.shadow * static_cast<float>(strength);
+			next.sunShadow = world ? 0.0f : look.shadow * static_cast<float>(strength);
 			for (int i = 0; i < 3; i++)
 			{
 				next.sun[i] = static_cast<float>(towards[i]);
 				next.sunLight[i] = sun.colour[i] * static_cast<float>(strength);
 			}
-			next.sun[3] = battleLook.sun * static_cast<float>(strength);
-			next.sunLight[3] = battleLook.relief * static_cast<float>(strength);
+			next.sun[3] = look.sun * static_cast<float>(strength);
+			next.sunLight[3] = look.relief * static_cast<float>(strength);
 			size_t count = 0;
-			for (const scenelight::Light& light : battleLook.lights)
+			static const std::vector<scenelight::Light> noLights;
+			for (const scenelight::Light& light : world ? noLights : battleLook.lights)
 			{
 				const float on = light.when == 1 ? now.night : light.when == 2 ? 1.0f - now.evening : 1.0f;
 				if (on <= 0.0f || count >= scenelight::MAX_LIGHTS)
@@ -369,6 +415,38 @@ namespace
 		if (memcmp(next.proj, stageLight.proj, sizeof(float) * (4 + 4 + 9 + 3 + 4 + 4 + 32 + 32)) != 0 || next.camera != stageLight.camera)
 			next.serial = stageLight.serial + 1;
 		stageLight = next;
+	}
+
+	//The world map's up, from its ground: the facing of the opaque draws of its first frames, in its own space, summed. The
+	//terrain faces up on the whole, so the sum says whether up is -y of its space (the PlayStation's way) or +y
+	void MeasureWorldUp(const GLenum drawMode, const int count, const GLenum indexType, const void* indices)
+	{
+		WorldUp& w = worldUp;
+		if (w.decided || drawMode != GL_TRIANGLES || count < 3 || count % 3 != 0 || count > 3000)
+			return;
+		static std::vector<fieldchars::GameVertex> corners;
+		if (!ReadDrawCorners(count, indexType, indices, corners) || corners.size() != static_cast<size_t>(count))
+			return;
+		static std::vector<double> screen;
+		screen.clear();
+		for (const fieldchars::GameVertex& c : corners)
+			screen.insert(screen.end(), { static_cast<double>(c.x), static_cast<double>(c.y), static_cast<double>(c.rhw) });
+		double view[3] = { 0, 0, 0 };
+		scenelight::AddFacing(stageLight.view, screen, view);
+		//into the world's own space (the camera turns from frame to frame): the rotation's transpose
+		const scenelight::Camera& c = stageLight.view;
+		for (int i = 0; i < 3; i++)
+			w.facing[i] += c.r[i] * view[0] + c.r[3 + i] * view[1] + c.r[6 + i] * view[2];
+		w.triangles += count / 3;
+		w.draws++;
+		if (w.triangles < 600 || w.draws < 30)
+			return;
+		const double length = std::sqrt(w.facing[0] * w.facing[0] + w.facing[1] * w.facing[1] + w.facing[2] * w.facing[2]);
+		const double along = length > 0 ? -w.facing[1] / length : 0.0; //along -y
+		w.decided = true;
+		w.sign = along < -0.5 ? -1 : 1;
+		OutputDebug("SCENE_LIGHT: the world map's up, from its ground (%d triangles): %s of its space (the ground faces %.2f along it)%s\n",
+			w.triangles, w.sign > 0 ? "-y" : "+y", std::fabs(along), std::fabs(along) < 0.5 ? "; not clear: -y taken" : "");
 	}
 
 	//one of a stage page's maps in a texture of DEMASTER's own (0: no such file, or it can't be read)
@@ -1449,12 +1527,22 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 	if (!p.looked)
 	{
 		p.looked = true;
-		if (GameProgramOf(program).kind == ProgramKind::Main)
+		const ProgramKind kind = GameProgramOf(program).kind;
+		if (kind == ProgramKind::Main)
 		{
 			LookUpUniforms(program, p);
 			if (p.scene < 0)
 				OutputDebug("SCENE_LIGHT: the game's main.frag (program %d) is not this release's: battles and the world map stay as they "
 					"are. Copy DEMASTER_EXP\\shaders\\main.frag from this release.\n", program);
+		}
+		else if (kind == ProgramKind::NoTexture)
+		{
+			//main_notex.frag (plain colour: the world map's sky and haze): only the night's multiplier (DEMASTER's version)
+			p.scene = glGetUniformLocation(static_cast<GLuint>(program), "demasterScene");
+			p.plain = true;
+			if (p.scene < 0)
+				OutputDebug("SCENE_LIGHT: the game's main_notex.frag (program %d) is not this release's: the world map's sky stays as it is "
+					"at night. Copy DEMASTER_EXP\\shaders\\main_notex.frag from this release.\n", program);
 		}
 		else
 			p.scene = -1;
@@ -1463,13 +1551,28 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 		return false;
 	float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 };
 	bool stageLit = false, knownFighter = false;
-	if (scene)
+	if (scene && (!p.plain || mode == MODE_WORLDMAP))
 	{
-		//(a battle on the world map stands on the world's own textures)
 		const auto known = textures.find(glstate::BoundTexture2D());
-		const bool world = known != textures.end() && (known->second.type == TYPE_WORLD || known->second.type == TYPE_WORLD_SKY);
-		bool lit = world || (known != textures.end() && mode == MODE_BATTLE
-			&& (known->second.type == TYPE_BATTLE_STAGE || known->second.type == TYPE_BATTLE_CHARACTER));
+		static const SceneTexture none;
+		const SceneTexture& t = known != textures.end() ? known->second : none;
+		bool world = false, lit = false, sky = false;
+		if (mode == MODE_WORLDMAP)
+		{
+			//the world map: what is drawn at a depth of its own is the scene (the ground, the sea, the sky, the vehicles, the
+			//people, the haze), whatever its texture (the HD ones come in without the game's type); the map, the menus and the
+			//screen's flashes are at rhw 1/3 or 1. The sky stands 4096 away: it isn't lit by the sun (only darkened at night)
+			float rhw = 0;
+			world = fieldrt::FirstCornerRhw(indexType, indices, rhw) && rhw > 0.0f && rhw < fieldrt::SCENE_MOST_RHW;
+			sky = world && rhw < 1.0f / 4000.0f; //(the sky at 4096; the farthest ground seen from the Ragnarok about 3000)
+			lit = world;
+		}
+		else
+		{
+			//(a battle on the world map stands on the world's own textures)
+			world = known != textures.end() && (t.type == TYPE_WORLD || t.type == TYPE_WORLD_SKY);
+			lit = world || (known != textures.end() && (t.type == TYPE_BATTLE_STAGE || t.type == TYPE_BATTLE_CHARACTER));
+		}
 		//(on the world map what is added is its haze and clouds: scenery, dimmed with the rest)
 		if (lit && mode == MODE_BATTLE && glstate::BlendOn())
 		{
@@ -1484,7 +1587,15 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 			sceneValue[1] = now.multiplier[1];
 			sceneValue[2] = now.multiplier[2];
 			sceneValue[3] = 1.0f;
-			const SceneTexture& t = known->second;
+			if (mode == MODE_WORLDMAP && !p.plain)
+			{
+				//lit from the world's own space: the sun, or the moon, by the clock (not the sky)
+				WorkStageLight();
+				stageLit = true;
+				drawValue[0] = sky ? 0.0f : 1.0f;
+				if (!sky && stageLight.camera && !worldUp.decided && !glstate::BlendOn())
+					MeasureWorldUp(drawMode, count, indexType, indices);
+			}
 			if (mode == MODE_BATTLE)
 			{
 				//the party (35) and the enemies (11 without a stage page of DEMASTER's: a stage page without an HD picture comes

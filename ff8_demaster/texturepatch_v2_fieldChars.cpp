@@ -1909,6 +1909,41 @@ void FieldCharsSwap()
 	}
 }
 
+bool fieldrt::FirstCornerRhw(const GLenum type, const void* indices, float& rhw)
+{
+	if (LastVerticesPointer.pointer == nullptr || LastVerticesPointer.size != 4 || glstate::VertexArrayBuffer() != 0)
+		return false;
+	uint32_t first = 0;
+	if (glstate::ElementBuffer() == 0 && indices != nullptr)
+	{
+		if (type == GL_UNSIGNED_SHORT)
+		{
+			uint16_t v = 0;
+			if (!SafeRead(&v, indices, 2))
+				return false;
+			first = v;
+		}
+		else if (type == GL_UNSIGNED_INT)
+		{
+			if (!SafeRead(&first, indices, 4))
+				return false;
+		}
+		else
+		{
+			uint8_t v = 0;
+			if (!SafeRead(&v, indices, 1))
+				return false;
+			first = v;
+		}
+	}
+	const int stride = LastVerticesPointer.stride != 0 ? LastVerticesPointer.stride : 16;
+	float position[4];
+	if (!SafeRead(position, static_cast<const uint8_t*>(LastVerticesPointer.pointer) + static_cast<size_t>(first) * stride, sizeof(position)))
+		return false;
+	rhw = position[3];
+	return std::isfinite(rhw);
+}
+
 bool fieldrt::ReadDrawCorners(const GLsizei count, const GLenum type, const void* indices, std::vector<GameVertex>& corners)
 {
 	static std::vector<uint32_t> list;

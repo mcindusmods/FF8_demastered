@@ -256,6 +256,8 @@ namespace
 		if (source.find("effectoption") != std::string::npos)
 			return source.find("demasterPbr") != std::string::npos ? "main.frag (DEMASTER v13/v14, PBR inside: old)"
 				: source.find("demasterTileClamp") != std::string::npos ? "main.frag (DEMASTER)" : "main.frag (the game's)";
+		if (source.find("DEMASTER (main_notex.frag)") != std::string::npos)
+			return "main_notex.frag (DEMASTER)";
 		if (source.find("uniform sampler2D demasterCells") != std::string::npos)
 			return "demaster_field.frag (DEMASTER, PBR pages)";
 		if (source.find("uniform vec4 demasterCharMode") != std::string::npos)

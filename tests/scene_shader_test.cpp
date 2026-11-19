@@ -9,6 +9,7 @@
 //	   the floor's place and direction again from that: the sun's part, one of the stage's own lights, a flat normal map.
 //	6. the colour grade (LUT): two LUTs mixed, part of the grade, in main.frag and main_char.frag, as lut_grade.h has it.
 //	7. EFFECT_LIGHTS: the gathering pass (two glowing quads drawn as the game does, found again where and how deep they are).
+//	8. the world map's sky: DEMASTER's main_notex.frag, the game's plain colour, darkened at night as main.frag does.
 //Run: scene_shader_test <DEMASTER_EXP/shaders folder>
 #define GL_GLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -713,6 +714,53 @@ int main(int argc, char** argv)
 			}
 			glDisable(GL_BLEND);
 			glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+		}
+	}
+
+	//8. the world map's sky (DEMASTER's main_notex.frag: plain colour): the night's multiplier and the grade, nothing else
+	{
+		const std::string plainSource = ReadFile(folder + "main_notex.frag");
+		Check(!plainSource.empty(), "main_notex.frag is there");
+		Check(plainSource.find("DEMASTER (main_notex.frag)") != std::string::npos, "main_notex.frag says it is DEMASTER's (so it stays the plain-colour kind)");
+		const GLuint plain = glCreateProgram();
+		glAttachShader(plain, Compile(GL_VERTEX_SHADER, "#version 120\nvoid main(){gl_Position=gl_Vertex;gl_TexCoord[0]=gl_MultiTexCoord0;gl_FrontColor=gl_Color;}\n"));
+		glAttachShader(plain, Compile(GL_FRAGMENT_SHADER, plainSource));
+		glLinkProgram(plain);
+		GLint ok = 0;
+		glGetProgramiv(plain, GL_LINK_STATUS, &ok);
+		Check(ok != 0, "main_notex.frag links");
+		if (ok)
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+			glViewport(0, 0, 4, 4);
+			glUseProgram(plain);
+			const auto u = [&](const char* name) { return glGetUniformLocation(plain, name); };
+			const auto drawPlain = [&](uint8_t out[4])
+			{
+				glClearColor(0, 0, 0, 0);
+				glClear(GL_COLOR_BUFFER_BIT);
+				glBegin(GL_QUADS);
+				glColor4ub(120, 170, 230, 255);
+				glVertex2f(-1, -1); glVertex2f(1, -1); glVertex2f(1, 1); glVertex2f(-1, 1);
+				glEnd();
+				glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+			};
+			const uint8_t sky[3] = { 120, 170, 230 };
+			glUniform4f(u("demasterScene"), 0, 0, 0, 0);
+			glUniform4f(u("demasterLut"), 0, 0, 0, 0);
+			drawPlain(got);
+			Check(std::abs(got[0] - sky[0]) <= 1 && std::abs(got[1] - sky[1]) <= 1 && std::abs(got[2] - sky[2]) <= 1, "main_notex.frag off: the game's colour");
+			scenelight::Look nightLook;
+			float nm[3];
+			scenelight::Multiplier(nightLook, 1.0, nm);
+			glUniform4f(u("demasterScene"), nm[0], nm[1], nm[2], 1);
+			drawPlain(got);
+			int skyWant[3];
+			for (int c = 0; c < 3; c++)
+				skyWant[c] = level(linear(sky[c]) * nm[c]);
+			Check(near(got, skyWant), "main_notex.frag at night: the sky x night_level x night_tint in linear light");
+			printf("world sky at night: %d %d %d -> %d %d %d (want %d %d %d)\n", sky[0], sky[1], sky[2], got[0], got[1], got[2], skyWant[0], skyWant[1], skyWant[2]);
 		}
 	}
 

@@ -115,7 +115,7 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
     }
 #endif
     FrameLogDraw(mode, count, type, indices); //FIELD_FRAME_LOG, the game's own state, before DEMASTER changes any
-    LutBeforeDraw(); //LUT: the game's draw graded with the time of day or not (main.frag's, main_char.frag's uniform)
+    LutBeforeDraw(type, indices); //LUT: the game's draw graded with the time of day or not (main.frag's, main_char.frag's uniform)
     //SCENE_LIGHT: battles and the world map (main.frag's uniforms); a fighter DEMASTER draws itself with smooth normals
     if (SceneLightBeforeDraw(mode, static_cast<int>(count), type, indices))
         return;

@@ -278,6 +278,11 @@ namespace fieldrt
 	//--- the game's draw (texturepatch_v2_fieldChars.cpp): its corners, one per index (TLVERTEX in client memory; false: not
 	//readable, or not that kind of draw)
 	bool ReadDrawCorners(GLsizei count, GLenum type, const void* indices, std::vector<fieldchars::GameVertex>& corners);
+	//only the rhw (1 / depth) of the draw's first corner (cheap: one index, one vertex). false: not readable
+	bool FirstCornerRhw(GLenum type, const void* indices, float& rhw);
+	//a draw of the game at a depth of its own, as the scene is (the menus, the world map's map, the screen's flashes are at
+	//rhw 1 or 1/3: those are not); `rhw` set when readable
+	constexpr float SCENE_MOST_RHW = 0.05f;
 
 	//--- memory (texturepatch_v2_fieldLayers.cpp)
 	bool SafeRead(void* destination, const void* source, size_t length); //false: not readable

@@ -23,6 +23,7 @@ BGRESPATCH1, GLFWINIT, GLFWWINDOWHINT, CHANGEMODE, STEAMADDR, FIELD_CHAR_BLINK, 
 	FIELD_CULL_TRI, FIELD_CULL_QUAD, FIELD_ENTITIES, FIELD_ENTITY_COUNT, FIELD_BG_GROUPS,
 	ANALOG_GET_VALUE, ANALOG_FIELD_TEST, ANALOG_FIELD_X, ANALOG_FIELD_Y,
 	ANALOG_WORLD_FIRST, WM_KEYS, WM_KEY_INDEX, FIELD_PLAYER_ENTITY, GTE_CONTROL, GAME_MOMENT, GAME_TIME, BATTLE_CAMERA,
+	WORLD_CAMERA,
 	ADDRESS_NAME_COUNT //keep last
 };
 
@@ -158,6 +159,11 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_EFIGS =
 	//MATRIX, nine Q12 shorts (rows), two bytes, three ints of translation. Read from FFVIII_EN.exe.dat; the Remastered code
 	//uses it at 1,535 places. The projection's registers hold it only until a model's own matrix is set
 	{ BATTLE_CAMERA        , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x1D97778,} },
+	//WORLD_CAMERA: the world map's camera, built once a world frame by the original code's 0x552AD0 (called from the frame
+	//function 0x53FAC0 with the struct at 0x2040130: the camera's angles turned into a rotation, transposed, and the
+	//translation from the camera's place) into its MATRIX at +0x10, the same layout as BATTLE_CAMERA. The terrain and the
+	//models are drawn with it (SetRotMatrix 0x45DE00, SetTransMatrix 0x45DEF0); 56 places use it in each language
+	{ WORLD_CAMERA         , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x2040140,} },
 	//FIELD_PBR_*: the back-face cull in the field model code, two 6-byte jumps (jz / jnz rel32) that skip a polygon facing away:
 	//in the hosts of 0x533920 (triangles, its own cross product) and 0x533A90 (quads, NCLIP 0x45EE10)
 	{ FIELD_CULL_TRI       , std::vector<unsigned int>{ 0x0       , 0x0       , 0x0       ,0x0889ED2,} },
@@ -327,6 +333,8 @@ const std::map<ADDRESS_NAME, std::vector<unsigned int>> PATCHADDRESS_JP =
 { GAME_TIME            , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x22048C0 }},
 //BATTLE_CAMERA: FFVIII_JP.exe.dat's 0x5072A0 builds it there (not 0x505F98 on: the JP data moved differently here)
 { BATTLE_CAMERA        , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x229B858 }},
+//WORLD_CAMERA: 0x5040E0 on, as the world map's other data (WM_KEYS, WMSET_GUEST); 56 references in FFVIII_JP.exe.dat too
+{ WORLD_CAMERA         , std::vector<unsigned int>{ 0x0 , 0x0 , 0x0 , 0x2544220 }},
 };
 
 

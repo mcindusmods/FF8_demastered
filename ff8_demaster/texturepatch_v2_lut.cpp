@@ -3,11 +3,13 @@
 //The LUTs are textures of DEMASTER's own (the strips, 16 bits a value, filtered linearly) on texture units 14 and 15, and a
 //program that grades has three uniforms: demasterLut (x: how much of the second LUT, y: how much of the grade, 0 = none,
 //z: the LUT's points along each colour) and demasterLutA, demasterLutB (the two strips). The shaders do the grading:
-//	main.frag, main_char.frag  (DEMASTER's versions of the game's two shaders) before every draw of the game, y is set
-//	                           for draws of the scene, by the kind of texture bound (the game's texture type, remembered
-//	                           when it is filled): battle stages and enemies (11), the party (35), the world map (18, 27),
-//	                           field backgrounds (25, 41), field models (57); not draws that add light or take it away
-//	                           (blend ONE, ONE; reverse subtract). Zero for everything else: the menus, the text, effects
+//	main.frag, main_char.frag, main_notex.frag   (DEMASTER's versions of the game's shaders) before every draw of the
+//	                           game, y is set for draws of the scene: in battles and fields by the kind of texture bound
+//	                           (the game's texture type, remembered when it is filled): battle stages and enemies (11), the
+//	                           party (35), the world's ground in a battle there (18, 27), field backgrounds (25, 41), field
+//	                           models (57); on the world map by depth (what is drawn at a depth of its own: the ground, the
+//	                           sea, the sky, whatever its texture; not the map or the menus); never draws that add light or
+//	                           take it away (blend ONE, ONE; reverse subtract). Zero for everything else
 //	demaster_field.frag, demaster_chara.frag, the fighters' main.frag   DEMASTER's own draws (LutUse)
 //
 //Which grade: by the clock, as the place has its time (a field's _pbr.txt time = day | night; a battle's as SCENE_LIGHT has
@@ -515,7 +517,7 @@ bool LutDrawAddsLight()
 	return destination == GL_ONE || glstate::BlendEquationRgb() == GL_FUNC_REVERSE_SUBTRACT;
 }
 
-void LutBeforeDraw()
+void LutBeforeDraw(const unsigned int indexType, const void* indices)
 {
 	if (!LUT)
 		return;
@@ -535,7 +537,7 @@ void LutBeforeDraw()
 	if (!p.looked)
 	{
 		const ProgramKind kind = GameProgramOf(program).kind;
-		if (kind != ProgramKind::Main && kind != ProgramKind::Character)
+		if (kind != ProgramKind::Main && kind != ProgramKind::Character && kind != ProgramKind::NoTexture)
 		{
 			p.looked = true;
 			p.lut = -1;
@@ -546,7 +548,13 @@ void LutBeforeDraw()
 		return;
 	WorkGrade();
 	bool graded = false;
-	if (grade.on)
+	if (grade.on && mode == MODE_WORLDMAP)
+	{
+		float rhw = 0;
+		graded = fieldrt::FirstCornerRhw(static_cast<GLenum>(indexType), indices, rhw) && rhw > 0.0f && rhw < fieldrt::SCENE_MOST_RHW
+			&& !LutDrawAddsLight();
+	}
+	else if (grade.on && GameProgramOf(program).kind != ProgramKind::NoTexture)
 	{
 		const auto known = types.find(glstate::BoundTexture2D());
 		graded = known != types.end() && SceneType(known->second, mode) && !LutDrawAddsLight();

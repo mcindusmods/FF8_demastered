@@ -163,7 +163,7 @@ int SceneLightMoment(); //the story's progress (the game's counter); -1: not kno
 void LutTextureFilled(unsigned int texture, bool whole); //as SceneLightTextureFilled
 void LutTextureForget(unsigned int texture);
 void LutFieldEntered(const char* field, bool sky); //game thread, a field's .map is read
-void LutBeforeDraw(); //before every draw of the game: the game's main.frag / main_char.frag graded or not
+void LutBeforeDraw(unsigned int indexType, const void* indices); //before every draw of the game (its indices): graded or not
 void LutUse(unsigned int program, bool scene); //one of DEMASTER's programs, in use: its draws are the scene (graded) or not
 bool LutDrawAddsLight(); //the blend set adds light or takes it away (such draws are not graded)
 void LutFrameEnd(); //SwapBuffers

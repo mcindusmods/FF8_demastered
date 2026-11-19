@@ -19,10 +19,11 @@
 //	  night_level = 0-1
 //	  ao          = 0-1     how much of an ORM map's AO is used
 //	  glow        = 0-4     how bright the glows' picture is (1: as painted)
-//	  [battle] only, lit from the stage's own space (the camera's place in it is read from the game each frame):
+//	  lit from the stage's own space, or the world's (the camera is read from the game each frame):
 //	  sun         = 0-1     how much a surface turned away from the sun (or moon) darkens; 0: the stage as painted
-//	  relief      = 0-4     how strongly a stage page's normal map (<page>_N) shows in the sun's light
-//	  specular    = 0-4     the sun's highlight on pages with an ORM map
+//	                        ([world]: 0.25 by default)
+//	  relief      = 0-4     how strongly a stage page's normal map (<page>_N) shows in the sun's light ([battle] only)
+//	  specular    = 0-4     the sun's highlight on pages with an ORM map ([battle] only for now)
 //	  sun_azimuth = degrees, sun_height = degrees   where it rises (0: along the stage's +x) and how high it climbs
 //	[rule <name>]        the same keys (only the ones written change anything), for where its conditions hold:
 //	  where  = battle | world | both      (left out: both)
@@ -84,6 +85,8 @@ namespace scenelight
 	{
 		Look battle, world;
 		std::vector<Rule> rules;
+		//the world map's ground is big flat triangles: its sun darkens less by default (each triangle is lit flat)
+		Settings() { world.sun = 0.25f; }
 	};
 
 	//warnings: one line each ("line 12: ..."), empty when all was understood. Unknown keys are skipped
@@ -145,6 +148,18 @@ namespace scenelight
 		Camera current, pending;
 		bool has = false, hasPending = false;
 	};
+
+	//--- the world map: its camera is the game's own too (WORLD_CAMERA, the same layout as BATTLE_CAMERA), with the
+	//registers' distance and centre; its picture is 224 lines of the PlayStation's starting 16 down the game's 480, so the
+	//centre DEMASTER uses is the registers' + 8 (WORLD_CENTRE_DOWN). Which way is up in its space is measured: most of the
+	//world map is ground, so the triangles it draws face up on the whole.
+	constexpr double WORLD_CENTRE_DOWN = 8.0;
+	//adds the facing (towards the camera, area-weighted, view space) of triangles: three corners each, x and y on the game's
+	//screen and rhw (1 / depth), as the game hands them over
+	void AddFacing(const Camera& camera, const std::vector<double>& corners, double sum[3]);
+	//how far a facing summed in view space agrees with the world space's -y (up, as the PlayStation has it): -1 to 1, 0 when
+	//there is none
+	double FacingAlongUp(const Camera& camera, const double facing[3]);
 
 	//--- lights from the effects (EFFECT_LIGHTS): a spell, a GF's fire, a limit's flash lights the stage and the fighters
 	//What the frame's glowing draws (the ones that add light) put on the screen, gathered on a small grid over the game's

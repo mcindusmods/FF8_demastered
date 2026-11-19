@@ -2106,6 +2106,64 @@ static void TestSceneCamera()
 	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.empty());
 }
 
+//The world map: which way is up in its space, from the facing of its ground as the camera sees it
+static void TestWorldUp()
+{
+	//a camera above the ground looking down 35 degrees, turned 40 degrees about the world's up (the PlayStation's: -y)
+	const double pitch = 35 * 3.14159265358979 / 180, yaw = 40 * 3.14159265358979 / 180;
+	scenelight::Camera camera;
+	camera.distance = 1024;
+	camera.centreX = 160;
+	camera.centreY = 112 + scenelight::WORLD_CENTRE_DOWN;
+	//view = R x (world - eye): R = pitch about x after yaw about y (x right, y down, z ahead)
+	const double cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch);
+	const double yawM[9] = { cy, 0, -sy, 0, 1, 0, sy, 0, cy };
+	const double pitchM[9] = { 1, 0, 0, 0, cp, -sp, 0, sp, cp };
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++)
+		{
+			double v = 0;
+			for (int k = 0; k < 3; k++)
+				v += pitchM[i * 3 + k] * yawM[k * 3 + j];
+			camera.r[i * 3 + j] = v;
+		}
+	const double eye[3] = { 1000, -2000, -500 }; //2000 above the ground (y = 0; up is -y)
+	for (int i = 0; i < 3; i++)
+		camera.t[i] = -(camera.r[i * 3] * eye[0] + camera.r[i * 3 + 1] * eye[1] + camera.r[i * 3 + 2] * eye[2]);
+	//the ground ahead of the camera, triangles of a gently rolling field, as the game hands them over
+	std::vector<double> corners;
+	const auto corner = [&](const double x, const double z)
+	{
+		const double world[3] = { x, -40.0 * std::sin(x / 300.0) * std::cos(z / 400.0), z };
+		double view[3];
+		scenelight::PlaceToView(camera, world, view);
+		corners.insert(corners.end(), { 2.0 * (camera.centreX + camera.distance * view[0] / view[2]),
+			2.0 * (camera.centreY + camera.distance * view[1] / view[2]), 1.0 / view[2] });
+		return view[2] > 10;
+	};
+	const double forward[3] = { camera.r[6], camera.r[7], camera.r[8] }; //the view's z in the world
+	bool allAhead = true;
+	for (int a = 0; a < 12; a++)
+		for (int b = 0; b < 12; b++)
+		{
+			const double x = eye[0] + forward[0] * 3000 + (a - 6) * 200, z = eye[2] + forward[2] * 3000 + (b - 6) * 200;
+			allAhead = corner(x, z) && corner(x + 200, z) && corner(x, z + 200) && allAhead;
+		}
+	CHECK(allAhead);
+	double facing[3] = { 0, 0, 0 };
+	scenelight::AddFacing(camera, corners, facing);
+	const double along = scenelight::FacingAlongUp(camera, facing);
+	CHECK(along > 0.95);
+	//the same picture from a camera whose space has up at +y (y flipped): the ground faces the other way along its y
+	scenelight::Camera flipped = camera;
+	for (int i = 0; i < 3; i++)
+		flipped.r[i * 3 + 1] = -flipped.r[i * 3 + 1];
+	CHECK(scenelight::FacingAlongUp(flipped, facing) < -0.95);
+	double nothing[3] = { 0, 0, 0 };
+	CHECK(scenelight::FacingAlongUp(camera, nothing) == 0);
+	printf("world up: the ground faces %.3f along -y\n", along);
+}
+
 //DAY_NIGHT_SAVES: one time of day per save file, kept sealed (daynight.dat), and the time a save without one gets
 static void TestSaveSlots()
 {
@@ -2428,6 +2486,7 @@ int main(int argc, char** argv)
 	TestLut();
 	TestEffectLights();
 	TestSaveSlots();
+	TestWorldUp();
 	TestSceneCamera();
 	TestSceneLight();
 	TestEmissivePicture();

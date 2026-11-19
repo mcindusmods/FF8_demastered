@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - the battle camera from the game, LUT colour grading, island padding, spells light
----------------------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun
+----------------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -85,6 +85,27 @@ Each save slot keeps its own time of day (sixth step)
     DAY_NIGHT_SAVES=0 (one clock), or when the save folder can't be watched.
   - Tests: field_pbr_test (one entry per file, saving over a slot, sealed and back, every changed byte caught, the time a
     save without one gets).
+The world map, first step of its PBR (seventh step; from the world logs: on foot, the Garden at sea, the Ragnarok)
+  - Its camera: found in the original code. Once a world frame 0x552AD0 turns the camera's angles into a rotation and
+    builds the camera's MATRIX at 0x2040140 (WORLD_CAMERA; JP 0x2544220, 0x5040E0 on like the world's other data), which
+    the terrain and the models are drawn with. DEMASTER reads it with the registers' distance and centre; the world's
+    picture is 224 PlayStation lines from 16 down the game's 480, so the centre is 8 lower than the registers'.
+    Rebuilding the logged frames' ground with it gives the same ground facing in every frame (a camera about 35 degrees
+    down on foot, 37 from the Ragnarok).
+  - Which way is up in the world's space is measured from its ground in its first frames (the terrain faces up on the
+    whole; the log says what it found and how clearly). Until then no sun.
+  - The sun and the moon now cross the world map by the clock as they cross battle stages: what faces away from them
+    darkens. [world] sun = 0.25 by default (its ground is big flat triangles, each lit flat), sun_azimuth, sun_height. The
+    sky (4096 away) is darkened at night but not lit by the sun.
+  - Which draws are the world: by depth, not by texture type. The frame logs showed the HD ground textures arrive without
+    the game's type (so the night darkened only some of the world), and the map in the corner drawn with a world texture
+    at the menus' depth (so it darkened and was graded with the world). Now everything drawn at a depth of its own is the
+    world, and the map, the menus and the screen's flashes are not: for the night, the sun and the colour grade alike.
+  - The world's sky and haze are plain colour (the game's main_notex.frag), which nothing darkened at night. This release
+    has its own main_notex.frag: the game's, with the night's multiplier and the colour grade, both zero except for the
+    world map's scene (the round shadows under field characters, drawn with it too, are unchanged).
+  - Tests: field_pbr_test (up measured from a rolling ground seen at an angle, and from a flipped space), scene_shader_test
+    (main_notex.frag as the game's when off, the sky at night as main.frag darkens).
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

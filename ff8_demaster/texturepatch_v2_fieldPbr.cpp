@@ -404,8 +404,8 @@ const GameProgram& fieldrt::GameProgramOf(const GLint program)
 		p.kind = ProgramKind::Demaster;
 	else if (fragment.find("ambientColor0") == std::string::npos && fragment.find("ambientColor") != std::string::npos)
 		p.kind = ProgramKind::Character;
-	else if (fragment.find("texture2D") == std::string::npos)
-		p.kind = ProgramKind::NoTexture;
+	else if (fragment.find("texture2D") == std::string::npos || fragment.find("DEMASTER (main_notex.frag)") != std::string::npos)
+		p.kind = ProgramKind::NoTexture; //(DEMASTER's main_notex.frag reads textures only for the colour grade)
 	else
 		p.kind = ProgramKind::Other;
 	p.vertexType = glGetUniformLocation(id, "vertextype");
