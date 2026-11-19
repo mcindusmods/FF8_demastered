@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story
-------------------------------------------------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -124,6 +124,26 @@ Deling City by the story (eighth step; new: DEMASTER_EXP\field_time.txt)
     them its night paintings show by day and darken at night.
   - Tests: the rules in field_pbr_test (the patterns, the defaults at the edges of their ranges, a field that isn't
     Deling, the counter not known, warnings), and the shipped field_time.txt is the defaults.
+The world map's textures get maps (ninth step; new in scene_light.txt: parallax)
+  - Next to each HD world page DEMASTER loads (textures\world\dat\texl\texl_NNN_P, wmset\wmset_NNN_P: the ground,
+    the far land, the sea, the moon) it now reads <page>_N (normals, green up), <page>_ORMH (AO, roughness, metalness,
+    and the height in the alpha: 1 the surface, 0 the deepest; or _ORM without the height) and the glows at night:
+    <page>_E (their colour on black, added: a coloured emissive) or <page>_EC (a picture of the glows with their
+    coverage, as battle stages have). A palette's own (texl_003_2_N), else the first palette's (texl_003_0_N). DDS or
+    PNG; every mip level (the file's, else made when it's read), so the ground far off doesn't sparkle.
+  - On the world map's ground they answer to the sun and the moon as on battle stages: the normal map's slopes, the
+    AO, the highlight by roughness and metalness, and the emissive map at night (from the evening, with the place's
+    glow). Not on the sky. The log says which maps each page has (SCENE_DEBUG=1 also the pages without).
+  - Parallax from the height: what is lower is read further along the view's slant across the surface, offset
+    limited so a glancing view doesn't tear it (main.frag). parallax = how deep the height goes in the place's units
+    (0-64, default 4, [world] and [battle]); an ORMH map whose alpha is all 1 moves nothing. Battle stage pages can
+    have _ORMH too now.
+  - [world] in scene_light.txt now has ao, glow, relief, specular and parallax as [battle] does. The shipped
+    scene_light.txt is the defaults again (it missed step seven's world sun).
+  - Tests: main.frag through Mesa (scene_shader_test): an emissive map adds its colour at night and nothing by day; an
+    ORMH height of 1 moves nothing, the deepest moves the texture where the CPU's arithmetic says (within 1 level on a
+    256 x 256 ramp). field_pbr_test: parallax in the file and in rules, and the shipped scene_light.txt is the
+    defaults.
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

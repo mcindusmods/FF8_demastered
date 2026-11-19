@@ -184,6 +184,14 @@ namespace scenelight
 				if (rule != nullptr)
 					(key == "relief" ? rule->hasRelief : rule->hasSpecular) = true;
 			}
+			else if (key == "parallax")
+			{
+				if (!Numbers(value, v, 1) || v[0] < 0 || v[0] > 64)
+					return -1;
+				look.parallax = static_cast<float>(v[0]);
+				if (rule != nullptr)
+					rule->hasParallax = true;
+			}
 			else if (key == "sun_azimuth")
 			{
 				if (!Numbers(value, v, 1) || v[0] < -360 || v[0] > 360)
@@ -320,8 +328,12 @@ namespace scenelight
 			"; time        = cycle | day | night   cycle: the day/night clock; day or night: always that\n"
 			"; day_tint    = what the picture is multiplied by in daylight\n"
 			"; night_tint, night_level = by night the picture is multiplied by night_level x night_tint\n"
-			"; ao          = how much of a stage page's ORM map's AO is used (0-1)\n"
-			"; glow        = how bright a stage page's picture of its glows is (<page>_EC; 1: as painted)\n"
+			"; ao          = how much of a page's ORM map's AO is used (0-1)\n"
+			"; glow        = how bright a page's glows are at night (<page>_EC, a world page's _E; 1: as painted)\n"
+			"; A page's maps are next to its picture: a battle stage page's <page>_N (normals, green up), _ORMH (AO, roughness,\n"
+			"; metalness, and the height in its alpha: 1 the surface; or _ORM without it) and _EC (a picture of its glows, with\n"
+			"; their coverage); a world map page's (texl_003_0, wmset_016_0 ...) _N, _ORMH and _E (the glows' colour on black,\n"
+			"; added at night) or _EC. A palette's own world maps (texl_003_2_N), else the first palette's (texl_003_0_N).\n"
 			"\n"
 			"[battle]\n"
 			"night = auto\n"
@@ -333,8 +345,10 @@ namespace scenelight
 			"glow = 1\n"
 			"; The sun and the moon cross the stage by the clock (the camera's place in the stage is read from the game):\n"
 			"; sun         = how much a surface turned away from it darkens (0-1; 0: the stage as painted)\n"
-			"; relief      = how strongly a stage page's normal map (<page>_N) shows in its light (0-4)\n"
+			"; relief      = how strongly a page's normal map (<page>_N) shows in its light (0-4)\n"
 			"; specular    = its highlight on pages with an ORM map (0-4)\n"
+			"; parallax    = how deep the height of an ORMH map goes, in the place's units (0-64; 0: off): lower parts shift\n"
+			";               with the view\n"
 			"; sun_azimuth = where it rises, degrees around the stage (0: along the stage's +x); sun_height = how high it climbs\n"
 			"; fighter_sun = how much of that darkening the fighters get (0-1; their normals are smoothed; 0: as the game lights them)\n"
 			"; shadow      = how much of the sun the fighters' shadows take off the stage (0-1; 0: no shadows)\n"
@@ -343,6 +357,7 @@ namespace scenelight
 			"shadow = 0.5\n"
 			"relief = 1\n"
 			"specular = 0.5\n"
+			"parallax = 4\n"
 			"sun_azimuth = 30\n"
 			"sun_height = 60\n"
 			"\n"
@@ -357,6 +372,12 @@ namespace scenelight
 			"sun = 0.25\n"
 			"sun_azimuth = 30\n"
 			"sun_height = 60\n"
+			"; its pages' maps, as for battles\n"
+			"ao = 0.5\n"
+			"glow = 1\n"
+			"relief = 1\n"
+			"specular = 0.5\n"
+			"parallax = 4\n"
 			"\n"
 			"; Rules change the settings above where their conditions hold. Only the keys written in a rule change anything.\n"
 			";   where  = battle | world | both     (left out: both)\n"
@@ -437,6 +458,8 @@ namespace scenelight
 				look.shadow = rule.look.shadow;
 			if (rule.hasSpecular)
 				look.specular = rule.look.specular;
+			if (rule.hasParallax)
+				look.parallax = rule.look.parallax;
 			if (rule.hasSunAzimuth)
 				look.sunAzimuth = rule.look.sunAzimuth;
 			if (rule.hasSunHeight)

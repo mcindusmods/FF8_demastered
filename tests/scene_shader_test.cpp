@@ -251,6 +251,22 @@ int main(int argc, char** argv)
 	for (int c = 0; c < 3; c++)
 		want[c] = static_cast<int>(std::lround(painted[c]));
 	Check(near(got, want), "glow by day: nothing");
+	//an emissive map without coverage (a world page's _E: x = 2) only adds, even where its alpha is 1
+	glActiveTexture(GL_TEXTURE10);
+	glBindTexture(GL_TEXTURE_2D, over);
+	scenelight::Multiplier(look, 1.0, m);
+	glUniform4f(at("demasterScene"), m[0], m[1], m[2], 1);
+	glUniform4f(at("demasterSceneMaps"), 2, 1, 1, 0);
+	draw(got);
+	for (int c = 0; c < 3; c++)
+		want[c] = std::min(255, level(linear(painted[c]) * m[c] + linear(glowOver[c])));
+	Check(near(got, want), "an emissive map (_E) at night: its colour added to the darkened picture");
+	glUniform4f(at("demasterSceneMaps"), 2, 0, 1, 0);
+	glUniform4f(at("demasterScene"), 1, 1, 1, 1);
+	draw(got);
+	for (int c = 0; c < 3; c++)
+		want[c] = static_cast<int>(std::lround(painted[c]));
+	Check(near(got, want), "an emissive map by day: nothing");
 
 	//5. the stage, lit from its own space
 	{
@@ -465,6 +481,86 @@ int main(int argc, char** argv)
 		for (int c = 0; c < 3; c++)
 			want[c] = static_cast<int>(std::lround(painted[c]));
 		Check(near(got, want), "beyond the sky's distance: as painted");
+
+		//9. an ORMH map's height (its alpha): parallax. A texture whose red climbs along u and green along v shows where the
+		//floor is read
+		{
+			glUniform4f(at("demasterSceneCentre"), static_cast<float>(camera.centreX), static_cast<float>(camera.centreY), 0.0f, 20000.0f);
+			sun(0, -1, 0, 0.0f, 0.0f);
+			float none32[32]{};
+			glUniform4fv(at("demasterSceneLightAt[0]"), 8, none32);
+			glUniform4fv(at("demasterSceneLightColour[0]"), 8, none32);
+			glUniform4f(at("demasterSceneMaps"), 0, 0, 0, 0);
+			glUniform4f(at("demasterSceneDraw"), 0, 0, 0, 0);
+			std::vector<uint8_t> ramp(256 * 256 * 4);
+			for (int y = 0; y < 256; y++)
+				for (int x = 0; x < 256; x++)
+				{
+					uint8_t* t = &ramp[(y * 256 + x) * 4];
+					t[0] = static_cast<uint8_t>(x);
+					t[1] = static_cast<uint8_t>(y);
+					t[2] = 128;
+					t[3] = 255;
+				}
+			GLuint rampTexture = 0;
+			glGenTextures(1, &rampTexture);
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, rampTexture);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, ramp.data());
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			const auto drawRamp = [&](uint8_t out[4])
+			{
+				glActiveTexture(GL_TEXTURE0);
+				glBindTexture(GL_TEXTURE_2D, rampTexture);
+				glClearColor(0, 0, 0, 0);
+				glClear(GL_COLOR_BUFFER_BIT);
+				glBegin(GL_QUADS);
+				glColor4ub(255, 255, 255, 255);
+				for (int i = 0; i < 4; i++)
+				{
+					glTexCoord2f(i == 1 || i == 2 ? 1.0f : 0.0f, i >= 2 ? 1.0f : 0.0f);
+					glVertex4fv(vertices[i]);
+				}
+				glEnd();
+				glReadPixels(px, H - 1 - py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+			};
+			uint8_t plain[4], level1[4], deep[4];
+			glUniform4f(at("demasterSceneSurface"), 0, 0, 0, 0);
+			drawRamp(plain);
+			//the surface everywhere (alpha 1: an ORM map without a height, packed as ORMH): nothing moves
+			const GLuint top = Texture1(255, 128, 0, 255), bottom = Texture1(255, 128, 0, 0);
+			glActiveTexture(GL_TEXTURE11);
+			glBindTexture(GL_TEXTURE_2D, top);
+			const float depth = 300.0f;
+			glUniform4f(at("demasterSceneSurface"), depth, 0, 0, 0);
+			drawRamp(level1);
+			Check(level1[0] == plain[0] && level1[1] == plain[1], "parallax with the height 1 everywhere: the floor is read where it was");
+			//the deepest everywhere: read further along the view's slant, by the depth (u runs along the stage's x over 2500,
+			//v along its z over 3000)
+			glActiveTexture(GL_TEXTURE11);
+			glBindTexture(GL_TEXTURE_2D, bottom);
+			drawRamp(deep);
+			const double length = std::sqrt(place[0] * place[0] + place[1] * place[1] + place[2] * place[2]);
+			const double toEye[3] = { -place[0] / length, -place[1] / length, -place[2] / length };
+			const double facing = toEye[0] * normal[0] + toEye[1] * normal[1] + toEye[2] * normal[2];
+			const double along[3] = { toEye[0] - normal[0] * facing, toEye[1] - normal[1] * facing, toEye[2] - normal[2] * facing };
+			const double xAxis[3] = { 1, 0, 0 }, zAxis[3] = { 0, 0, 1 };
+			double gu[3], gv[3];
+			scenelight::DirectionToView(camera, xAxis, gu);
+			scenelight::DirectionToView(camera, zAxis, gv);
+			const double du = -(along[0] * gu[0] + along[1] * gu[1] + along[2] * gu[2]) / 2500.0 * depth;
+			const double dv = -(along[0] * gv[0] + along[1] * gv[1] + along[2] * gv[2]) / 3000.0 * depth;
+			const double wantRed = plain[0] + du * 256.0, wantGreen = plain[1] + dv * 256.0;
+			Check(std::fabs(deep[0] - wantRed) <= 1.5 && std::fabs(deep[1] - wantGreen) <= 1.5 && std::hypot(du, dv) * 256.0 > 4.0,
+				"parallax at the deepest: the floor read where the view's slant takes it");
+			printf("parallax: plain red %d green %d; at depth %.0f %d %d (want %.1f %.1f: moved by %.4f %.4f)\n", plain[0], plain[1], depth,
+				deep[0], deep[1], wantRed, wantGreen, du, dv);
+			glUniform4f(at("demasterSceneSurface"), 0, 0, 0, 0);
+			glActiveTexture(GL_TEXTURE0);
+		}
 	}
 
 	//6. LUT: the colour grade in main.frag (and main_char.frag) against lut_grade.h's arithmetic: a 16 x 16 picture of

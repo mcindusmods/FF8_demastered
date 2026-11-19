@@ -23,8 +23,12 @@
 //	  lit from the stage's own space, or the world's (the camera is read from the game each frame):
 //	  sun         = 0-1     how much a surface turned away from the sun (or moon) darkens; 0: the stage as painted
 //	                        ([world]: 0.25 by default)
-//	  relief      = 0-4     how strongly a stage page's normal map (<page>_N) shows in the sun's light ([battle] only)
-//	  specular    = 0-4     the sun's highlight on pages with an ORM map ([battle] only for now)
+//	  relief      = 0-4     how strongly a page's normal map (<page>_N) shows in the sun's light
+//	  specular    = 0-4     the sun's highlight on pages with an ORM map
+//	  parallax    = 0-64    how deep the height in a page's ORMH map (its alpha: 1 the surface) goes, in the place's
+//	                        units: what is lower shifts with the view (0: off)
+//	A battle stage page's maps are <page>_N, _ORMH (or _ORM), _EC; a world map page's (texl_NNN_P, wmset_NNN_P) _N,
+//	_ORMH (or _ORM) and _E (the glows' colour on black, added at night) or _EC
 //	  sun_azimuth = degrees, sun_height = degrees   where it rises (0: along the stage's +x) and how high it climbs
 //	[rule <name>]        the same keys (only the ones written change anything), for where its conditions hold:
 //	  where  = battle | world | both      (left out: both)
@@ -67,6 +71,7 @@ namespace scenelight
 		float sun = 0.35f, relief = 1.0f, specular = 0.5f, sunAzimuth = 30.0f, sunHeight = 60.0f;
 		float fighterSun = 0.5f; //the fighters' share of the sun's darkening (their smooth normals; 0: as the game lights them)
 		float shadow = 0.5f; //how much of the sun the fighters' shadows take off the stage (0: none)
+		float parallax = 4.0f; //how deep a page's ORMH height goes (the place's units; 0: no parallax)
 		std::vector<Light> lights; //the stage's own (from rules), four at most
 	};
 
@@ -79,7 +84,7 @@ namespace scenelight
 		Look look; //only the members flagged below are used
 		bool hasNight = false, hasTime = false, hasDayTint = false, hasNightTint = false, hasNightLevel = false, hasAo = false,
 			hasGlow = false, hasSun = false, hasRelief = false, hasSpecular = false, hasSunAzimuth = false, hasSunHeight = false,
-			hasFighterSun = false, hasShadow = false;
+			hasFighterSun = false, hasShadow = false, hasParallax = false;
 	};
 
 	struct Settings

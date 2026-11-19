@@ -53,26 +53,36 @@ namespace
 	constexpr double FIGHTER_SIZE = 4000.0; //a draw larger than this (the stage's units) casts no shadow: it is the stage's
 	constexpr float SKY_DISTANCE = 20000.0f; //a stage's sky stands about 30,000 units from its middle; the fighters within a few thousand
 
+	constexpr int WORLD_PAGE = -2; //SceneTexture::stage of a world map page DEMASTER replaced (texl_, wmset_)
 	struct SceneTexture
 	{
 		int type = 0; //the game's texture type at its last upload
-		int stage = -1, page = -1; //a battle stage page DEMASTER replaced
-		GLuint glows = 0, orm = 0, normal = 0; //its maps (0: none); the textures belong to `maps` below
+		int stage = -1, page = -1; //a battle stage page DEMASTER replaced (stage WORLD_PAGE: a world map page)
+		GLuint glows = 0, orm = 0, normal = 0; //its maps (0: none); the textures belong to `maps` or `worldMaps` below
+		bool additive = false; //glows is an emissive map without coverage (_E without alpha): its light is only added
+		bool height = false; //orm is an ORMH map: its alpha is the height (1 the surface, 0 the deepest)
 	};
 	std::unordered_map<GLuint, SceneTexture> textures;
 	bool loadingOwn = false; //DEMASTER is filling one of its own map textures: not the game's
 	//a stage's map files, read once per battle stage (an animated page comes back every few frames); 0: no such file
-	std::unordered_map<std::string, GLuint> maps;
+	struct MapFile
+	{
+		GLuint texture = 0;
+		bool alpha = false; //the file has an alpha channel
+	};
+	std::unordered_map<std::string, MapFile> maps;
 	int mapsStage = -1;
+	//the world map's (kept while the game runs: its pages are filled again every time the world map comes back)
+	std::unordered_map<std::string, MapFile> worldMaps;
 
 	struct ProgramState
 	{
 		bool looked = false;
 		GLint scene = -1, maps = -1, draw = -1, proj = -1, centre = -1, rot = -1, trans = -1, sun = -1, sunLight = -1, lightAt = -1,
-			lightColour = -1, shadowMatrix = -1, shadowInfo = -1;
+			lightColour = -1, shadowMatrix = -1, shadowInfo = -1, surface = -1;
 		uint64_t shadowSent = 0; //the serial of the shadow map this program has (0: none)
 		bool plain = false; //main_notex.frag: only demasterScene
-		float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 }; //as last sent
+		float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 }, surfaceValue[4] = { 0, 0, 0, 0 }; //as last sent
 		uint64_t stageSent = 0; //the serial of the stage's light (below) this program has
 	};
 
@@ -167,14 +177,19 @@ namespace
 		scenelight::Time timeHere = scenelight::Time::Cycle; //for the colour grade (LUT)
 	} now;
 
+	//a battle stage's maps go (not the world map's)
 	void ForgetMaps()
 	{
-		for (auto& [path, texture] : maps)
-			if (texture != 0)
-				glDeleteTextures(1, &texture);
+		for (auto& [path, file] : maps)
+			if (file.texture != 0)
+				glDeleteTextures(1, &file.texture);
 		maps.clear();
 		for (auto& [id, t] : textures)
-			t.glows = t.orm = t.normal = 0;
+			if (t.stage != WORLD_PAGE)
+			{
+				t.glows = t.orm = t.normal = 0;
+				t.additive = t.height = false;
+			}
 	}
 
 	void ReadSettings()
@@ -449,43 +464,59 @@ namespace
 			w.triangles, w.sign > 0 ? "-y" : "+y", std::fabs(along), std::fabs(along) < 0.5 ? "; not clear: -y taken" : "");
 	}
 
-	//one of a stage page's maps in a texture of DEMASTER's own (0: no such file, or it can't be read)
-	GLuint LoadMap(const std::string& stem, const char* suffix)
+	//one of a page's maps in a texture of DEMASTER's own (texture 0: no such file, or it can't be read). With every mip level
+	//(the file's, else made here), so the world's ground far off doesn't sparkle
+	MapFile LoadMap(const std::string& stem, const char* suffix, std::unordered_map<std::string, MapFile>& cache = maps)
 	{
 		const std::string key = stem + suffix;
-		if (const auto known = maps.find(key); known != maps.end())
+		if (const auto known = cache.find(key); known != cache.end())
 			return known->second;
-		GLuint& made = maps[key];
+		MapFile& made = cache[key];
 		char path[MAX_PATH]{ 0 };
 		if (DDSorPNG(path, MAX_PATH, "%s%s", stem.c_str(), suffix))
-			return 0;
+			return made;
 		const SafeBimg image = LoadImageFromFile(path);
 		if (!image)
-			return 0;
+			return made;
 		GLuint texture = 0;
 		glGenTextures(1, &texture);
 		glBindTexture(GL_TEXTURE_2D, texture);
 		loadingOwn = true;
 		RenderTexture(image.get());
 		loadingOwn = false;
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		const bool levels = image->m_numMips > 1;
+		if (!levels && !bimg::isCompressed(image->m_format))
+			glGenerateMipmap(GL_TEXTURE_2D);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, levels || !bimg::isCompressed(image->m_format) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		made = texture;
-		return texture;
+		made.texture = texture;
+		made.alpha = image->m_hasAlpha;
+		return made;
 	}
 
 	//a page's map: the one of this frame of an animated page (a0stg012_16_3_EC), else the page's (a0stg012_16_EC)
-	GLuint PageMap(const std::string& stem, const int stage, const int page, const char* suffix)
+	MapFile PageMap(const std::string& stem, const int stage, const int page, const char* suffix)
 	{
-		if (const GLuint own = LoadMap(stem, suffix))
+		if (const MapFile own = LoadMap(stem, suffix); own.texture != 0)
 			return own;
 		char name[64];
 		snprintf(name, sizeof(name), "a0stg%03d_%d", stage, page);
 		const size_t slash = stem.find_last_of("\\/");
 		const std::string plain = (slash == std::string::npos ? std::string() : stem.substr(0, slash + 1)) + name;
-		return plain == stem ? 0 : LoadMap(plain, suffix);
+		return plain == stem ? MapFile() : LoadMap(plain, suffix);
+	}
+
+	//a world page's map: its own (texl_003_2_N), else its first palette's (texl_003_0_N: the same ground in other colours)
+	MapFile WorldMap(const std::string& stem, const char* suffix)
+	{
+		if (const MapFile own = LoadMap(stem, suffix, worldMaps); own.texture != 0)
+			return own;
+		const size_t underscore = stem.find_last_of('_');
+		if (underscore == std::string::npos || underscore + 1 >= stem.size() || stem.substr(underscore + 1) == "0")
+			return MapFile();
+		return LoadMap(stem.substr(0, underscore + 1) + "0", suffix, worldMaps);
 	}
 
 	//SCENE_DEBUG: what a later build needs to light stages from a sun that stands still in the world: the projection's
@@ -555,12 +586,22 @@ namespace
 			glUniform4fv(p.shadowInfo, 1, none);
 	}
 
-	void Send(const GLint program, ProgramState& p, const float scene[4], const float maps[4], const float draw[4], const bool stage)
+	//surface: demasterSceneSurface (the parallax's depth); nullptr: none
+	void Send(const GLint program, ProgramState& p, const float scene[4], const float maps[4], const float draw[4], const bool stage,
+		const float* surface = nullptr)
 	{
 		if (p.draw >= 0 && memcmp(p.drawValue, draw, sizeof(p.drawValue)) != 0)
 		{
 			memcpy(p.drawValue, draw, sizeof(p.drawValue));
 			glUniform4fv(p.draw, 1, draw);
+		}
+		static const float flat[4] = { 0, 0, 0, 0 };
+		if (surface == nullptr)
+			surface = flat;
+		if (p.surface >= 0 && memcmp(p.surfaceValue, surface, sizeof(p.surfaceValue)) != 0)
+		{
+			memcpy(p.surfaceValue, surface, sizeof(p.surfaceValue));
+			glUniform4fv(p.surface, 1, surface);
 		}
 		//the stage's light: when it changed since this program last got it (once a frame while the camera moves). Outside
 		//battles the distance goes to zero and the shader skips all of it
@@ -613,6 +654,7 @@ namespace
 		p.lightColour = at("demasterSceneLightColour[0]");
 		p.shadowMatrix = at("demasterSceneShadowMatrix");
 		p.shadowInfo = at("demasterSceneShadowInfo");
+		p.surface = at("demasterSceneSurface");
 		if (p.scene < 0 || p.proj < 0)
 		{
 			p.scene = -1;
@@ -1422,8 +1464,9 @@ void SceneLightTextureFilled(const unsigned int texture, const bool whole)
 	}
 	if (whole)
 	{
-		//a new picture: the maps of the page it was are not its maps
-		known->second.glows = known->second.orm = 0;
+		//a new picture: the maps of the page it was are not its maps (DEMASTER's replacement sets its own after this)
+		known->second.glows = known->second.orm = known->second.normal = 0;
+		known->second.additive = known->second.height = false;
 		known->second.stage = known->second.page = -1;
 	}
 	known->second.type = type;
@@ -1462,22 +1505,73 @@ void SceneLightStagePage(const int stage, const int page, const char* file)
 		std::string stem = file;
 		if (const size_t dot = stem.find_last_of('.'); dot != std::string::npos)
 			stem.resize(dot);
-		t.glows = PageMap(stem, stage, page, "_EC");
-		t.orm = PageMap(stem, stage, page, "_ORM");
-		t.normal = PageMap(stem, stage, page, "_N");
+		t.glows = PageMap(stem, stage, page, "_EC").texture;
+		t.additive = false;
+		const MapFile ormh = PageMap(stem, stage, page, "_ORMH");
+		t.orm = ormh.texture != 0 ? ormh.texture : PageMap(stem, stage, page, "_ORM").texture;
+		t.height = ormh.texture != 0;
+		t.normal = PageMap(stem, stage, page, "_N").texture;
 		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(bound));
 		static std::string said;
 		if ((t.glows != 0 || t.orm != 0 || t.normal != 0 || SCENE_DEBUG) && said != stem)
 		{
 			said = stem;
 			OutputDebug("SCENE_LIGHT: stage %d page %d: %s%s%s%s\n", stage, page, t.normal != 0 ? "a normal map (_N)" : "no _N",
-				t.glows != 0 ? ", a picture of its glows (_EC)" : ", no _EC", t.orm != 0 ? ", an ORM map" : ", no _ORM",
+				t.glows != 0 ? ", a picture of its glows (_EC)" : ", no _EC", t.orm != 0 ? (t.height ? ", an ORMH map (the height in its alpha)" : ", an ORM map") : ", no _ORM",
 				t.glows == 0 && t.orm == 0 && t.normal == 0 ? " (next to its picture; the time of day and the stage's lights work without them)" : "");
 		}
 	}
 	catch (...)
 	{
 		OutputDebug("SCENE_LIGHT: reading a stage page's maps failed\n");
+	}
+}
+
+//texturepatch_v2_world.cpp: DEMASTER just put its own picture of a world map page (texl_NNN_P, wmset_NNN_P) into the bound
+//texture. Its maps are next to it: <file without extension>_N (normals, green up), _ORMH (AO, roughness, metalness, height in
+//the alpha: 1 the surface; or _ORM, without the height), and the glows at night: _E (their colour on black: added) or _EC (a
+//picture of the glows with its coverage, as battle stages have). A palette's own (texl_003_2_N), else the first palette's
+void SceneLightWorldPage(const char* file)
+{
+	if (!SCENE_LIGHT || file == nullptr)
+		return;
+	try
+	{
+		CheckGlew();
+		GLint bound = 0;
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+		if (bound == 0)
+			return;
+		SceneTexture& t = textures[static_cast<GLuint>(bound)];
+		t.type = TYPE_WORLD;
+		t.stage = WORLD_PAGE;
+		t.page = -1;
+		std::string stem = file;
+		if (const size_t dot = stem.find_last_of('.'); dot != std::string::npos)
+			stem.resize(dot);
+		t.normal = WorldMap(stem, "_N").texture;
+		const MapFile ormh = WorldMap(stem, "_ORMH");
+		t.orm = ormh.texture != 0 ? ormh.texture : WorldMap(stem, "_ORM").texture;
+		t.height = ormh.texture != 0;
+		const MapFile covered = WorldMap(stem, "_EC");
+		const MapFile emissive = covered.texture != 0 ? covered : WorldMap(stem, "_E");
+		t.glows = emissive.texture;
+		t.additive = covered.texture == 0 && emissive.texture != 0 && !emissive.alpha;
+		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(bound));
+		static std::unordered_map<std::string, bool> said;
+		if ((t.glows != 0 || t.orm != 0 || t.normal != 0 || SCENE_DEBUG) && !said[stem])
+		{
+			said[stem] = true;
+			const size_t slash = stem.find_last_of("\\/");
+			OutputDebug("SCENE_LIGHT: world page %s: %s%s%s\n", stem.c_str() + (slash == std::string::npos ? 0 : slash + 1),
+				t.normal != 0 ? "a normal map (_N)" : "no _N", t.orm != 0 ? (t.height ? ", an ORMH map (the height in its alpha)" : ", an ORM map")
+				: ", no _ORMH", t.glows != 0 ? (covered.texture != 0 ? ", its glows' picture (_EC)" : t.additive ? ", an emissive map (_E, added)"
+				: ", an emissive map (_E, with its coverage)") : ", no _E");
+		}
+	}
+	catch (...)
+	{
+		OutputDebug("SCENE_LIGHT: reading a world page's maps failed\n");
 	}
 }
 
@@ -1549,7 +1643,7 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 	}
 	if (p.scene < 0)
 		return false;
-	float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 };
+	float sceneValue[4] = { 0, 0, 0, 0 }, mapsValue[4] = { 0, 0, 0, 0 }, drawValue[4] = { 0, 0, 0, 0 }, surfaceValue[4] = { 0, 0, 0, 0 };
 	bool stageLit = false, knownFighter = false;
 	if (scene && (!p.plain || mode == MODE_WORLDMAP))
 	{
@@ -1593,6 +1687,11 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 				WorkStageLight();
 				stageLit = true;
 				drawValue[0] = sky ? 0.0f : 1.0f;
+				//its page's maps (SceneLightWorldPage): the normal map and the ORMH map answer to the sun, not on the sky
+				drawValue[1] = !sky && t.normal != 0 ? 1.0f : 0.0f;
+				drawValue[2] = !sky && t.orm != 0 ? 1.0f : 0.0f;
+				if (!sky && t.height && t.orm != 0)
+					surfaceValue[0] = worldLook.parallax;
 				if (!sky && stageLight.camera && !worldUp.decided && !glstate::BlendOn())
 					MeasureWorldUp(drawMode, count, indexType, indices);
 			}
@@ -1608,6 +1707,8 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 				drawValue[0] = t.stage >= 0 || world ? 1.0f : 0.0f;
 				drawValue[1] = t.normal != 0 ? 1.0f : 0.0f;
 				drawValue[2] = t.orm != 0 ? 1.0f : 0.0f;
+				if (t.height && t.orm != 0 && drawValue[0] > 0.5f)
+					surfaceValue[0] = battleLook.parallax;
 				if (drawValue[0] > 0.5f)
 					RenderShadowMap();
 			}
@@ -1632,7 +1733,7 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 				}
 				if (glstate::ActiveTexture() != active)
 					glActiveTexture(active);
-				mapsValue[0] = t.glows != 0 ? 1.0f : 0.0f;
+				mapsValue[0] = t.glows == 0 ? 0.0f : t.additive ? 2.0f : 1.0f;
 				mapsValue[1] = now.evening;
 				mapsValue[2] = now.glow;
 				mapsValue[3] = t.orm != 0 ? now.ao : 0.0f;
@@ -1646,7 +1747,7 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 	//a fighter: drawn by DEMASTER with smooth normals (its maps' units are set above, as for the game's draw)
 	if (stageLit && drawValue[0] < 0.5f && knownFighter && DrawFighter(program, drawMode, count, indexType, indices, sceneValue, mapsValue, drawValue))
 		return true;
-	Send(program, p, sceneValue, mapsValue, drawValue, stageLit);
+	Send(program, p, sceneValue, mapsValue, drawValue, stageLit, surfaceValue);
 	return false;
 }
 

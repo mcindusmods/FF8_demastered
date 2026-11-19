@@ -16,11 +16,12 @@ uniform vec4 demasterTileClamp;
 
 // DEMASTER (SCENE_LIGHT): battles and the world map. All zero unless DEMASTER lights this draw (a battle stage, the
 // fighters, the world map's ground): then the picture is multiplied by a colour in linear light (the time of day and the
-// place's rules in DEMASTER_EXP\scene_light.txt), and a battle stage page can bring a picture of its glows and an ORM map.
+// place's rules in DEMASTER_EXP\scene_light.txt), and a battle stage page or a world map page can bring a picture of its
+// glows (or an emissive map), an ORM map (an ORMH map: with its height) and a normal map.
 uniform vec4 demasterScene;        // rgb: what the picture is multiplied by; a: 1 = on
-uniform vec4 demasterSceneMaps;    // x: 1 = a picture of the glows is on demasterSceneEC; y: how much of it shows (how
-                                   // night it is) times its brightness in z; w: how much of the AO in demasterSceneORM is
-                                   // used (0: no ORM map)
+uniform vec4 demasterSceneMaps;    // x: 1 = a picture of the glows is on demasterSceneEC (2: an emissive map whose light
+                                   // is only added); y: how much of it shows (how night it is) times its brightness in z;
+                                   // w: how much of the AO in demasterSceneORM is used (0: no ORM map)
 uniform sampler2D demasterSceneEC; // the glows: colour (sRGB, times its coverage) and coverage (alpha), as in fields
 uniform sampler2D demasterSceneORM;
 // Battles, lit from the stage's own space. The game hands OpenGL corners that are already on the screen; with the numbers
@@ -42,6 +43,8 @@ uniform vec4 demasterSceneLightAt[8];     // the stage's own lights (0-3) and th
                                           // glow): xyz view space, w range (0: none)
 uniform vec4 demasterSceneLightColour[8]; // rgb, linear
 uniform sampler2D demasterSceneN;
+uniform vec4 demasterSceneSurface; // x: how deep the height in demasterSceneORM's alpha goes (an ORMH map: 1 the surface,
+                                   // 0 the deepest), the stage's units; 0: no parallax
 // The fighters' shadows on the stage: last frame's fighters as the sun sees them (a depth map)
 uniform sampler2D demasterSceneShadowMap;
 uniform mat4 demasterSceneShadowMatrix; // the stage's space to the map: x, y 0-1 across it, z its depth (0 nearest the sun)
@@ -114,10 +117,50 @@ vec4 demasterTileTexture(vec2 uv)
 	return vec4(rgb, a);
 }
 
+// DEMASTER (SCENE_LIGHT): the place in front of the camera this pixel shows (view space), from its depth and the projection
+vec3 demasterScenePlace()
+{
+	float z = 1.0 / gl_FragCoord.w;
+	vec2 screen = vec2(gl_FragCoord.x * demasterSceneProj.x, (demasterSceneProj.z - gl_FragCoord.y) * demasterSceneProj.y);
+	return vec3((screen - demasterSceneCentre.xy) * (z / demasterSceneProj.w), z);
+}
+
+// DEMASTER (SCENE_LIGHT): parallax from an ORMH map's height. What lies below the surface is seen further along the view:
+// the texture coordinates move against the view's slant across the surface, by the depth there (offset limited, so a
+// glancing view doesn't tear it)
+vec2 demasterParallax(vec2 uv)
+{
+	vec3 p = demasterScenePlace();
+	vec3 dp1 = dFdx(p), dp2 = dFdy(p);
+	vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+	vec3 face = cross(dp1, dp2);
+	float area = dot(face, face);
+	if (area <= 0.0)
+		return uv;
+	face *= inversesqrt(area);
+	if (dot(face, p) > 0.0)
+		face = -face;
+	vec3 dp2perp = cross(dp2, face), dp1perp = cross(face, dp1);
+	float det = dot(dp1perp, dp2);
+	if (abs(det) < 1e-20)
+		return uv;
+	// how u and v change across the surface (view space)
+	vec3 gu = (dp2perp * duv1.x + dp1perp * duv2.x) / det;
+	vec3 gv = (dp2perp * duv1.y + dp1perp * duv2.y) / det;
+	vec3 toEye = -normalize(p);
+	vec3 along = toEye - face * dot(toEye, face);
+	float depth = (1.0 - texture2D(demasterSceneORM, uv).a) * demasterSceneSurface.x;
+	return uv - vec2(dot(along, gu), dot(along, gv)) * depth;
+}
+
 void main()
 {
 	vec4 color = gl_Color;
-	vec4 texture_color = demasterTileClamp.x > 0.0 ? demasterTileTexture(gl_TexCoord[0].st) : texture2D(tex, gl_TexCoord[0].st);
+	// (DEMASTER: the page's texture coordinates, moved by its height when it has one)
+	vec2 uv = gl_TexCoord[0].st;
+	if (demasterScene.a > 0.0 && demasterSceneSurface.x > 0.0 && demasterSceneProj.w > 0.0)
+		uv = demasterParallax(uv);
+	vec4 texture_color = demasterTileClamp.x > 0.0 ? demasterTileTexture(gl_TexCoord[0].st) : texture2D(tex, uv);
 
 	if(texture_color.a <= 0.0) discard;
 
@@ -150,14 +193,12 @@ void main()
 	{
 		vec3 lit = demasterSceneToLinear(clamp(color.rgb, 0.0, 1.0));
 		if (demasterSceneMaps.w > 0.0)
-			lit *= mix(1.0, texture2D(demasterSceneORM, gl_TexCoord[0].st).r, demasterSceneMaps.w);
+			lit *= mix(1.0, texture2D(demasterSceneORM, uv).r, demasterSceneMaps.w);
 		vec3 base = lit; // the picture's own colour: what the stage's lights fall on
 		vec3 added = vec3(0.0);
 		if (demasterSceneProj.w > 0.0)
 		{
-			float z = 1.0 / gl_FragCoord.w;
-			vec2 screen = vec2(gl_FragCoord.x * demasterSceneProj.x, (demasterSceneProj.z - gl_FragCoord.y) * demasterSceneProj.y);
-			vec3 p = vec3((screen - demasterSceneCentre.xy) * (z / demasterSceneProj.w), z);
+			vec3 p = demasterScenePlace();
 			vec3 stage = demasterSceneRot * (p - demasterSceneTrans);
 			if (dot(stage.xz, stage.xz) < demasterSceneCentre.w * demasterSceneCentre.w)
 			{
@@ -178,7 +219,7 @@ void main()
 #endif
 					if (demasterSceneDraw.y > 0.5)
 					{
-						vec3 mapped = texture2D(demasterSceneN, gl_TexCoord[0].st).rgb * 2.0 - 1.0;
+						vec3 mapped = texture2D(demasterSceneN, uv).rgb * 2.0 - 1.0;
 						vec2 duv1 = dFdx(gl_TexCoord[0].st), duv2 = dFdy(gl_TexCoord[0].st);
 						vec3 dp2perp = cross(dp2, face), dp1perp = cross(face, dp1);
 						vec3 t = dp2perp * duv1.x + dp1perp * duv2.x;
@@ -214,7 +255,7 @@ void main()
 						lit *= clamp(1.0 + demasterSceneSunLight.w * (bent - towards), 0.2, 2.5);
 						if (demasterSceneDraw.z > 0.5 && demasterSceneCentre.z > 0.0 && bent > 0.0)
 						{
-							vec3 orm = texture2D(demasterSceneORM, gl_TexCoord[0].st).rgb;
+							vec3 orm = texture2D(demasterSceneORM, uv).rgb;
 							float roughness = clamp(orm.g, 0.08, 1.0);
 							float alpha2 = roughness * roughness * roughness * roughness;
 							vec3 halfway = normalize(demasterSceneSun.xyz - normalize(p));
@@ -240,8 +281,11 @@ void main()
 		lit = lit * demasterScene.rgb + added;
 		if (demasterSceneMaps.x > 0.5)
 		{
-			// a lit window (coverage 1) takes the darkened picture's place, a halo (coverage 0) only adds its light
-			vec4 glows = texture2D(demasterSceneEC, gl_TexCoord[0].st);
+			// a lit window (coverage 1) takes the darkened picture's place, a halo (coverage 0) only adds its light. An
+			// emissive map without coverage (x = 2: a world page's _E, the glows' colour on black) only adds
+			vec4 glows = texture2D(demasterSceneEC, uv);
+			if (demasterSceneMaps.x > 1.5)
+				glows.a = 0.0;
 			float showing = clamp(demasterSceneMaps.y, 0.0, 1.0);
 			lit = lit * (1.0 - glows.a * showing) + demasterSceneToLinear(glows.rgb) * (showing * demasterSceneMaps.z);
 		}

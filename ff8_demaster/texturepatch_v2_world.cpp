@@ -122,6 +122,7 @@ void WtpGl()
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		RenderTexture(ws[texIndex].buffer.get());
+		SceneLightWorldPage(ws[texIndex].localPath); //SCENE_LIGHT: the page's _N, _ORMH and _E maps
 
 		return;
 	}
@@ -172,6 +173,7 @@ void WtpGl()
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 			RenderTexture(ws[wmStructPointer].buffer.get());
+			SceneLightWorldPage(ws[wmStructPointer].localPath); //SCENE_LIGHT: the page's maps (far land, water, the moon...)
 		}
 	}
 	else if (textureType == 0)

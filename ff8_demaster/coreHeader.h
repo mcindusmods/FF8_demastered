@@ -154,6 +154,7 @@ void FrameLogTextureFilled(unsigned int texture);
 void SceneLightTextureFilled(unsigned int texture, bool whole); //the game (or a replacement of DEMASTER's) fills a texture
 void SceneLightTextureForget(unsigned int texture); //the texture is not one of the game's pictures any more
 void SceneLightStagePage(int stage, int page, const char* file); //DEMASTER's picture of a battle stage page is in the bound texture
+void SceneLightWorldPage(const char* file); //DEMASTER's picture of a world map page (texl_, wmset_) is in the bound texture
 void SceneLightFieldEntered(bool sky); //a field's .map is read
 bool SceneLightBeforeDraw(unsigned int mode, int count, unsigned int type, const void* indices); //before every draw of the game (true: drawn)
 void SceneLightFrameEnd(); //SwapBuffers

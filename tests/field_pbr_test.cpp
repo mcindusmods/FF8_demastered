@@ -1887,6 +1887,25 @@ static void TestSceneLight()
 	CHECK(w.empty());
 	CHECK(s.battle.night == -1 && s.battle.time == Time::Cycle && s.world.nightLevel == 0.3f && s.battle.ao == 0.5f);
 	CHECK(s.rules.empty());
+	CHECK(s.battle.parallax == 4.0f && s.world.parallax == 4.0f && s.world.ao == 0.5f && s.world.specular == 0.5f && s.world.relief == 1.0f);
+	{
+		scenelight::Settings p;
+		std::string pw;
+		scenelight::Parse("[world]\nparallax = 12\n[rule deep]\nwhere = battle\nparallax = 0\n[rule bad]\nparallax = 65\n", p, pw);
+		CHECK(p.world.parallax == 12.0f && p.battle.parallax == 4.0f && pw.find("parallax") != std::string::npos);
+		CHECK(scenelight::Resolve(p, Where::Battle, 3, -1).parallax == 0.0f && scenelight::Resolve(p, Where::World, -1, -1).parallax == 12.0f);
+	}
+	//the file shipped in DEMASTER_EXP is the defaults (when the tests run from the repository's folder)
+	if (FILE* f = fopen("DEMASTER_EXP/scene_light.txt", "rb"))
+	{
+		std::string shipped;
+		char buffer[4096];
+		size_t got = 0;
+		while ((got = fread(buffer, 1, sizeof(buffer), f)) > 0)
+			shipped.append(buffer, got);
+		fclose(f);
+		CHECK(shipped == scenelight::DefaultText());
+	}
 	CHECK(scenelight::DefaultText().find(";[rule lunar cry]") != std::string::npos);
 	//the rule as it was written before, taken away again, for the checks below
 	s = {};
