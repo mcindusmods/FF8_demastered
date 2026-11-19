@@ -1610,6 +1610,7 @@ bool fieldrt::PbrBeforeDraw(const GLuint boundTexture, const GLint program, cons
 	gameProgram = program;
 	glUseProgram(fieldProgram.id);
 	programSwapped = true;
+	LutUse(fieldProgram.id, !LutDrawAddsLight()); //LUT: the time of day's colour grade
 	static const float zeros[4] = { 0, 0, 0, 0 };
 	SetUniforms(page, tileClamp != nullptr ? tileClamp : zeros, blendMode);
 	FrameLogNote("drawn with DEMASTER's field program %u instead (PBR page, %zu PBR cells; %d character card(s), %d shadow map(s)%s)",

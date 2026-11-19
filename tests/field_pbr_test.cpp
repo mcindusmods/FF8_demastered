@@ -7,6 +7,7 @@
 #include "../ff8_demaster/field_layers.h"
 #include "../ff8_demaster/field_pbr.h"
 #include "../ff8_demaster/field_moving_lights.h"
+#include "../ff8_demaster/lut_grade.h"
 #include "../ff8_demaster/scene_light.h"
 #include "../fieldprep/archive.h"
 #include "../fieldprep/image_io.h"
@@ -2105,8 +2106,177 @@ static void TestSceneCamera()
 	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.empty());
 }
 
+//LUT: the tables (strips, .cube), the shaders' arithmetic on the CPU, and which times are mixed when
+static void TestLut()
+{
+	//the identity gives back what it gets, at any size
+	std::mt19937 random(7);
+	std::uniform_real_distribution<float> any(0.0f, 1.0f);
+	for (const int size : { 2, 17, 32 })
+	{
+		const lutgrade::Table id = lutgrade::Identity(size);
+		CHECK(id.Valid() && id.size == size);
+		double worst = 0;
+		for (int i = 0; i < 200; i++)
+		{
+			const float in[3] = { any(random), any(random), any(random) };
+			float out[3];
+			lutgrade::Apply(id, in, out);
+			for (int c = 0; c < 3; c++)
+				worst = std::max(worst, std::fabs(static_cast<double>(out[c] - in[c])));
+		}
+		CHECK(worst < 1e-4);
+		CHECK(lutgrade::IsIdentity(id, 1e-5)); //16 bits a value
+	}
+	//a strip picture: 32 squares of 32 x 32 side by side (red right, green down, blue from square to square), and the same
+	//one under the other
+	const int n = 32;
+	const auto f = [](const double r, const double g, const double b, double out[3])
+	{
+		out[0] = std::min(1.0, std::pow(r, 0.9) * 1.05);
+		out[1] = g * 0.95 + 0.04 * b;
+		out[2] = std::pow(b, 1.1) * 0.9 + 0.05;
+	};
+	std::vector<uint8_t> across(static_cast<size_t>(n) * n * n * 4), down(across.size());
+	for (int b = 0; b < n; b++)
+		for (int g = 0; g < n; g++)
+			for (int r = 0; r < n; r++)
+			{
+				double v[3];
+				f(r / (n - 1.0), g / (n - 1.0), b / (n - 1.0), v);
+				uint8_t* a = &across[(static_cast<size_t>(g) * n * n + static_cast<size_t>(b) * n + r) * 4];
+				uint8_t* d = &down[((static_cast<size_t>(b) * n + g) * n + r) * 4];
+				for (int c = 0; c < 3; c++)
+					a[c] = d[c] = static_cast<uint8_t>(std::lround(v[c] * 255));
+				a[3] = d[3] = 255;
+			}
+	lutgrade::Table fromAcross, fromDown;
+	std::string why;
+	CHECK(lutgrade::FromStrip(across.data(), n * n, n, fromAcross, why));
+	CHECK(lutgrade::FromStrip(down.data(), n, n * n, fromDown, why));
+	CHECK(fromAcross.size == n && fromAcross.rgba == fromDown.rgba);
+	CHECK(!lutgrade::IsIdentity(fromAcross, 1.0 / 255.0));
+	{
+		double worst = 0;
+		for (int i = 0; i < 300; i++)
+		{
+			const float in[3] = { any(random), any(random), any(random) };
+			float out[3];
+			double want[3];
+			lutgrade::Apply(fromAcross, in, out);
+			f(in[0], in[1], in[2], want);
+			for (int c = 0; c < 3; c++)
+				worst = std::max(worst, std::fabs(out[c] - want[c]));
+		}
+		CHECK(worst < 0.01); //8 bits a value and the straight lines between points
+	}
+	CHECK(!lutgrade::FromStrip(across.data(), 100, 12, fromDown, why) && !why.empty()); //not n x n by n
+	//.cube: the identity of size 3 in the file's order (red fastest); a domain of 0-2 is read again at 0-1
+	{
+		std::string text = "TITLE \"test\"\n# a comment\nLUT_3D_SIZE 3\n";
+		for (int b = 0; b < 3; b++)
+			for (int g = 0; g < 3; g++)
+				for (int r = 0; r < 3; r++)
+					text += std::to_string(r / 2.0) + " " + std::to_string(g / 2.0) + " " + std::to_string(b / 2.0) + "\n";
+		lutgrade::Table cube;
+		CHECK(lutgrade::FromCube(text, cube, why));
+		CHECK(cube.size == 3 && cube.rgba == lutgrade::Identity(3).rgba);
+		lutgrade::Table wide;
+		CHECK(lutgrade::FromCube("DOMAIN_MIN 0 0 0\nDOMAIN_MAX 2 2 2\n" + text, wide, why));
+		const float in[3] = { 0.8f, 0.2f, 0.5f };
+		float out[3];
+		lutgrade::Apply(wide, in, out);
+		NEAR(out[0], 0.4, 0.002);
+		NEAR(out[1], 0.1, 0.002);
+		NEAR(out[2], 0.25, 0.002);
+		CHECK(!lutgrade::FromCube("LUT_1D_SIZE 3\n0 0 0\n0.5 0.5 0.5\n1 1 1\n", cube, why));
+		CHECK(!lutgrade::FromCube("LUT_3D_SIZE 3\n0 0 0\n", cube, why) && why.find("27") != std::string::npos);
+		CHECK(!lutgrade::FromCube("0 0 0\n", cube, why));
+	}
+	//two LUTs mixed, and the strength
+	{
+		const lutgrade::Table id = lutgrade::Identity(n);
+		const float in[3] = { 0.3f, 0.6f, 0.9f };
+		float graded[3], half[3], none[3], mixed[3];
+		lutgrade::Apply(fromAcross, in, graded);
+		lutgrade::Apply(id, fromAcross, 1.0, 0.5, in, half);
+		lutgrade::Apply(id, fromAcross, 1.0, 0.0, in, none);
+		lutgrade::Apply(id, fromAcross, 0.25, 1.0, in, mixed);
+		for (int c = 0; c < 3; c++)
+		{
+			NEAR(half[c], (in[c] + graded[c]) / 2, 1e-5);
+			NEAR(none[c], in[c], 1e-6);
+			NEAR(mixed[c], in[c] * 0.75 + graded[c] * 0.25, 1e-4);
+		}
+	}
+	//when: the default cycle (480 s of day, 240 of night, 40 s fades, the evening at 0.9 of the day)
+	fieldpbr::DayNightCycle cycle;
+	const auto is = [&](const double t, const int from, const int to, const double mix)
+	{
+		const lutgrade::Blend b = lutgrade::At(cycle, t);
+		return b.from == from && b.to == to && std::fabs(b.mix - mix) < 1e-6;
+	};
+	CHECK(is(0, lutgrade::DAWN, lutgrade::DAY, 0)); //the middle of the dawn's fade: all dawn
+	CHECK(is(30, lutgrade::DAWN, lutgrade::DAY, 0.5)); //into the day over one and a half fades
+	CHECK(is(200, lutgrade::DAY, lutgrade::DAY, 0));
+	CHECK(is(432, lutgrade::DAY, lutgrade::DUSK, 0)); //the evening
+	CHECK(is(456, lutgrade::DAY, lutgrade::DUSK, 0.5));
+	CHECK(is(480, lutgrade::DUSK, lutgrade::NIGHT, 0)); //the middle of the dusk's fade: all dusk
+	CHECK(is(510, lutgrade::DUSK, lutgrade::NIGHT, 0.5)); //the blue hour
+	CHECK(is(600, lutgrade::NIGHT, lutgrade::NIGHT, 0));
+	CHECK(is(690, lutgrade::NIGHT, lutgrade::DAWN, 0.5));
+	CHECK(is(720 + 30, lutgrade::DAWN, lutgrade::DAY, 0.5)); //wrapped
+	//no jumps anywhere in the cycle: each time's share changes a little from one moment to the next
+	{
+		const auto shares = [&](const double t, double out[lutgrade::SLOT_COUNT])
+		{
+			for (int i = 0; i < lutgrade::SLOT_COUNT; i++)
+				out[i] = 0;
+			const lutgrade::Blend b = lutgrade::At(cycle, t);
+			out[b.from] += 1 - b.mix;
+			out[b.to] += b.mix;
+		};
+		double worst = 0;
+		for (double t = 0; t < cycle.Length(); t += 0.05)
+		{
+			double a[lutgrade::SLOT_COUNT], b[lutgrade::SLOT_COUNT];
+			shares(t, a);
+			shares(t + 0.05, b);
+			for (int i = 0; i < lutgrade::SLOT_COUNT; i++)
+				worst = std::max(worst, std::fabs(a[i] - b[i]));
+		}
+		CHECK(worst < 0.005);
+		//a short night and long fades: still in order and without jumps
+		fieldpbr::DayNightCycle odd;
+		odd.day = 100;
+		odd.night = 30;
+		odd.fade = 25;
+		worst = 0;
+		for (double t = 0; t < odd.Length(); t += 0.05)
+		{
+			double a[lutgrade::SLOT_COUNT], b[lutgrade::SLOT_COUNT];
+			const lutgrade::Blend x = lutgrade::At(odd, t), y = lutgrade::At(odd, t + 0.05);
+			for (int i = 0; i < lutgrade::SLOT_COUNT; i++)
+				a[i] = b[i] = 0;
+			a[x.from] += 1 - x.mix;
+			a[x.to] += x.mix;
+			b[y.from] += 1 - y.mix;
+			b[y.to] += y.mix;
+			for (int i = 0; i < lutgrade::SLOT_COUNT; i++)
+				worst = std::max(worst, std::fabs(a[i] - b[i]));
+		}
+		CHECK(worst < 0.02);
+	}
+	CHECK(lutgrade::Fixed(true) == (lutgrade::Blend{ lutgrade::NIGHT, lutgrade::NIGHT, 0 }));
+	const lutgrade::Blend lunar = lutgrade::Lunar({ lutgrade::DUSK, lutgrade::NIGHT, 0.3 });
+	CHECK(lunar.from == lutgrade::LUNAR_DUSK && lunar.to == lutgrade::LUNAR_NIGHT && lunar.mix == 0.3);
+	CHECK(lutgrade::BlendText({ lutgrade::DUSK, lutgrade::NIGHT, 0.4 }) == "dusk 40% into night");
+	CHECK(std::string(lutgrade::SlotName(lutgrade::LUNAR_DAWN)) == "lunar_dawn");
+}
+
 int main(int argc, char** argv)
 {
+	TestLut();
 	TestSceneCamera();
 	TestSceneLight();
 	TestEmissivePicture();

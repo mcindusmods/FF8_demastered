@@ -7,6 +7,7 @@
 //	5. a battle stage lit from its own space: a floor is drawn the way the game hands it to OpenGL (corners on the screen,
 //	   rhw = 1 / distance), with the camera a real battle had (the registers DEMASTER logged there); the shader has to find
 //	   the floor's place and direction again from that: the sun's part, one of the stage's own lights, a flat normal map.
+//	6. the colour grade (LUT): two LUTs mixed, part of the grade, in main.frag and main_char.frag, as lut_grade.h has it.
 //Run: scene_shader_test <DEMASTER_EXP/shaders folder>
 #define GL_GLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -16,6 +17,10 @@
 
 #include "../ff8_demaster/field_pbr.h"
 #include "../ff8_demaster/scene_light.h"
+#include "../ff8_demaster/lut_grade.h"
+
+#include <algorithm>
+#include <vector>
 
 #include <cmath>
 #include <cstdio>
@@ -438,6 +443,162 @@ int main(int argc, char** argv)
 		for (int c = 0; c < 3; c++)
 			want[c] = static_cast<int>(std::lround(painted[c]));
 		Check(near(got, want), "beyond the sky's distance: as painted");
+	}
+
+	//6. LUT: the colour grade in main.frag (and main_char.frag) against lut_grade.h's arithmetic: a 16 x 16 picture of
+	//colours drawn through two LUTs (strips, as DEMASTER uploads them), mixed, with part of the grade
+	{
+		glUseProgram(program);
+		glUniform1f(at("onScreen"), 0.0f);
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		glUniform4f(at("demasterScene"), 0, 0, 0, 0);
+		glUniform4f(at("demasterSceneMaps"), 0, 0, 0, 0);
+		glUniform4f(at("demasterSceneProj"), 0, 0, 0, 0);
+		glUniform4f(at("demasterSceneDraw"), 0, 0, 0, 0);
+		Check(at("demasterLut") >= 0 && at("demasterLutA") >= 0 && at("demasterLutB") >= 0, "main.frag has LUT's uniforms");
+		const int n = 33, side = 16;
+		const auto make = [&](const int which)
+		{
+			lutgrade::Table t = lutgrade::Identity(n);
+			for (int g = 0; g < n; g++)
+				for (int b = 0; b < n; b++)
+					for (int r = 0; r < n; r++)
+					{
+						const double v[3] = { r / (n - 1.0), g / (n - 1.0), b / (n - 1.0) };
+						double o[3];
+						if (which == 0) //warm: gold highlights, lifted violet shadows
+						{
+							const double y = 0.3 * v[0] + 0.6 * v[1] + 0.1 * v[2];
+							o[0] = v[0] * 0.9 + 0.1 * y + 0.05 * y * y;
+							o[1] = v[1] * 0.85 + 0.05 * y;
+							o[2] = v[2] * 0.7 + 0.06 * (1 - y);
+						}
+						else //cool and flat
+						{
+							o[0] = 0.1 + v[0] * 0.7;
+							o[1] = 0.08 + v[1] * 0.8;
+							o[2] = 0.15 + std::pow(v[2], 0.8) * 0.8;
+						}
+						uint16_t* to = &t.rgba[(static_cast<size_t>(g) * n * n + static_cast<size_t>(b) * n + r) * 4];
+						for (int c = 0; c < 3; c++)
+							to[c] = static_cast<uint16_t>(std::lround(std::clamp(o[c], 0.0, 1.0) * 65535));
+					}
+			return t;
+		};
+		const lutgrade::Table warm = make(0), cool = make(1);
+		const auto upload = [&](const lutgrade::Table& t)
+		{
+			GLuint id = 0;
+			glGenTextures(1, &id);
+			glBindTexture(GL_TEXTURE_2D, id);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16, t.size * t.size, t.size, 0, GL_RGBA, GL_UNSIGNED_SHORT, t.rgba.data());
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			return id;
+		};
+		glActiveTexture(GL_TEXTURE14);
+		glBindTexture(GL_TEXTURE_2D, upload(warm));
+		glActiveTexture(GL_TEXTURE15);
+		glBindTexture(GL_TEXTURE_2D, upload(cool));
+		//the picture: colours spread over the cube (texture x a white vertex colour = the texture)
+		std::vector<uint8_t> colours(side * side * 4);
+		uint32_t seed = 12345;
+		for (size_t i = 0; i < colours.size(); i++)
+		{
+			seed = seed * 1664525u + 1013904223u;
+			colours[i] = i % 4 == 3 ? 255 : static_cast<uint8_t>(seed >> 24);
+		}
+		GLuint picture = 0;
+		glActiveTexture(GL_TEXTURE0);
+		glGenTextures(1, &picture);
+		glBindTexture(GL_TEXTURE_2D, picture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, side, side, 0, GL_RGBA, GL_UNSIGNED_BYTE, colours.data());
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		GLuint grid = 0;
+		glGenTextures(1, &grid);
+		glBindTexture(GL_TEXTURE_2D, grid);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, side, side, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, grid, 0);
+		glViewport(0, 0, side, side);
+		const auto drawGrid = [&](const GLuint withProgram, std::vector<uint8_t>& out)
+		{
+			glUseProgram(withProgram);
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, picture);
+			glClearColor(0, 0, 0, 0);
+			glClear(GL_COLOR_BUFFER_BIT);
+			glBegin(GL_QUADS);
+			glColor4ub(255, 255, 255, 255);
+			glTexCoord2f(0, 0); glVertex2f(-1, -1);
+			glTexCoord2f(1, 0); glVertex2f(1, -1);
+			glTexCoord2f(1, 1); glVertex2f(1, 1);
+			glTexCoord2f(0, 1); glVertex2f(-1, 1);
+			glEnd();
+			out.resize(side * side * 4);
+			glReadPixels(0, 0, side, side, GL_RGBA, GL_UNSIGNED_BYTE, out.data());
+		};
+		//the largest difference from lut_grade.h's (in levels)
+		const auto compare = [&](const std::vector<uint8_t>& got, const double mix, const double strength)
+		{
+			int worst = 0;
+			for (int i = 0; i < side * side; i++)
+			{
+				const float in[3] = { colours[i * 4] / 255.0f, colours[i * 4 + 1] / 255.0f, colours[i * 4 + 2] / 255.0f };
+				float out[3];
+				lutgrade::Apply(warm, cool, mix, strength, in, out);
+				for (int c = 0; c < 3; c++)
+					worst = std::max(worst, std::abs(got[i * 4 + c] - static_cast<int>(std::lround(out[c] * 255))));
+			}
+			return worst;
+		};
+		glUniform1i(at("demasterLutA"), 14);
+		glUniform1i(at("demasterLutB"), 15);
+		std::vector<uint8_t> got;
+		glUniform4f(at("demasterLut"), 0, 0, static_cast<float>(n), 0);
+		drawGrid(program, got);
+		bool same = true;
+		for (int i = 0; i < side * side * 4; i++)
+			same = same && std::abs(got[i] - colours[i]) <= 1;
+		Check(same, "LUT off (strength 0): the picture as it is");
+		glUniform4f(at("demasterLut"), 0, 1, static_cast<float>(n), 0);
+		drawGrid(program, got);
+		int worst = compare(got, 0, 1);
+		Check(worst <= 2, "LUT: one LUT, all of it, as lut_grade.h works it out (worst " + std::to_string(worst) + " levels)");
+		glUniform4f(at("demasterLut"), 0.35f, 0.7f, static_cast<float>(n), 0);
+		drawGrid(program, got);
+		worst = compare(got, 0.35, 0.7);
+		Check(worst <= 2, "LUT: two mixed, 70% of the grade (worst " + std::to_string(worst) + " levels)");
+		printf("LUT: main.frag against lut_grade.h: within %d level(s)\n", worst);
+		//main_char.frag (DEMASTER's copy of the game's, with the grade): the same
+		const std::string charSource = ReadFile(folder + "main_char.frag");
+		Check(!charSource.empty(), "main_char.frag is there");
+		if (!charSource.empty())
+		{
+			const GLuint chara = glCreateProgram();
+			glAttachShader(chara, Compile(GL_VERTEX_SHADER, "#version 120\nvoid main(){gl_Position=gl_Vertex;gl_TexCoord[0]=gl_MultiTexCoord0;gl_FrontColor=gl_Color;}\n"));
+			glAttachShader(chara, Compile(GL_FRAGMENT_SHADER, charSource));
+			glLinkProgram(chara);
+			GLint ok = 0;
+			glGetProgramiv(chara, GL_LINK_STATUS, &ok);
+			Check(ok != 0, "main_char.frag links");
+			if (ok)
+			{
+				glUseProgram(chara);
+				const auto c = [&](const char* name) { return glGetUniformLocation(chara, name); };
+				glUniform1i(c("tex"), 0);
+				glUniform3f(c("ambientColor"), 0, 0, 0);
+				glUniform1i(c("demasterLutA"), 14);
+				glUniform1i(c("demasterLutB"), 15);
+				glUniform4f(c("demasterLut"), 0.35f, 0.7f, static_cast<float>(n), 0);
+				drawGrid(chara, got);
+				worst = compare(got, 0.35, 0.7);
+				Check(worst <= 2, "LUT: main_char.frag grades the same (worst " + std::to_string(worst) + " levels)");
+			}
+		}
 	}
 
 	printf("%d checks, %d failures\n", checks, failures);

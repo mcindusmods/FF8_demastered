@@ -107,6 +107,7 @@ namespace
 		float evening = 0; //the glows and the day-only lights go with this (DAY_NIGHT_EVENING: earlier than the night)
 		bool on = false;
 		bool sunByClock = false; //the night comes here: the sun and the moon go by the clock (else they stand at their highest)
+		scenelight::Time timeHere = scenelight::Time::Cycle; //for the colour grade (LUT)
 	} now;
 
 	void ForgetMaps()
@@ -203,6 +204,7 @@ namespace
 		now.glow = look.glow;
 		now.on = true;
 		now.sunByClock = !fixedPlace && look.time == scenelight::Time::Cycle && scenelight::NightHere(look, 1.0, outdoors) > 0.0;
+		now.timeHere = scenelight::TimeHere(look, fixedPlace, outdoors);
 		if (battle)
 			battleLook = look;
 	}
@@ -651,6 +653,7 @@ namespace
 		//the game's uniforms and its client arrays as they are, DEMASTER's arrays for this one draw
 		const GLint program = gameProgram;
 		glUseProgram(f.program);
+		LutUse(f.program, true); //LUT: the time of day's colour grade
 		if (f.vertextype >= 0)
 			glUniform1i(f.vertextype, 3);
 		const auto copyInt = [&](const GLint ours, const char* name)
@@ -1056,6 +1059,21 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 		return true;
 	Send(program, p, sceneValue, mapsValue, drawValue, stageLit);
 	return false;
+}
+
+//LUT: what time it is in this battle or on the world map as SCENE_LIGHT has it (scene_light.txt's time and night, where the
+//battle started): 0 the clock's, 1 always day, 2 always night; -1: SCENE_LIGHT is off
+int SceneLightTimeHere(const int mode)
+{
+	if (!SCENE_LIGHT || (mode != MODE_BATTLE && mode != MODE_WORLDMAP))
+		return -1;
+	Work(mode);
+	return now.timeHere == scenelight::Time::Day ? 1 : now.timeHere == scenelight::Time::Night ? 2 : 0;
+}
+
+int SceneLightMoment()
+{
+	return Moment();
 }
 
 //SwapBuffers hook: a frame is over

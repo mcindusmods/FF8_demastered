@@ -97,6 +97,9 @@ namespace scenelight
 	//How night it is here (0-1). clock: what the day/night clock says (0 day, 1 night); outdoors: what "night = auto"
 	//means for this battle (see above; the world map: true)
 	double NightHere(const Look& look, double clock, bool outdoors);
+	//What time it is here, for the colour grade (LUT): the look's own (time = day | night), the day for a battle started in a
+	//field with a fixed time (fixedPlace) and where the night doesn't come, else the clock's (Time::Cycle)
+	Time TimeHere(const Look& look, bool fixedPlace, bool outdoors);
 	//What the picture is multiplied by, in linear light: day_tint by day, night_level x night_tint by night
 	void Multiplier(const Look& look, double night, float out[3]);
 

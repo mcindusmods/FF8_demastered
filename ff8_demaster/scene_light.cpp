@@ -455,6 +455,15 @@ namespace scenelight
 		return std::clamp(clock, 0.0, 1.0);
 	}
 
+	Time TimeHere(const Look& look, const bool fixedPlace, const bool outdoors)
+	{
+		if (look.time != Time::Cycle)
+			return look.time;
+		if (fixedPlace || NightHere(look, 1.0, outdoors) <= 0.0)
+			return Time::Day;
+		return Time::Cycle;
+	}
+
 	void Multiplier(const Look& look, const double night, float out[3])
 	{
 		const float n = static_cast<float>(std::clamp(night, 0.0, 1.0));

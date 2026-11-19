@@ -986,6 +986,7 @@ namespace
 		glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA); //premultiplied
 		const CharProgram& p = charProgram;
 		glUseProgram(p.id);
+		LutUse(p.id, false); //the pictures reflections use are graded where they show (the background's own draw)
 		SetCommonUniforms(p, v, FIELD_PBR_VIEW);
 		const int count = std::min<int>(static_cast<int>(f.characters.size()), MAX_CHARACTERS);
 		const float tileSize = static_cast<float>(CAPTURE_TILE) / CAPTURE_SIZE;
@@ -1173,6 +1174,7 @@ namespace
 		glEnable(GL_SCISSOR_TEST);
 		const CharProgram& p = charProgram;
 		glUseProgram(p.id);
+		LutUse(p.id, false); //the face pictures: not graded
 		SetCommonUniforms(p, v, FIELD_PBR_VIEW);
 		const int count = std::min<int>(static_cast<int>(f.characters.size()), static_cast<int>(avatars.size()));
 		for (int c = 0; c < count; c++)
@@ -1568,6 +1570,7 @@ namespace
 			//5. the models on the game's screen, in the game's order: opaque first, then the rest as the game drew them
 			const CharProgram& p = charProgram;
 			glUseProgram(p.id);
+			LutUse(p.id, true); //LUT: the time of day's colour grade
 			SetCommonUniforms(p, v, FIELD_PBR_VIEW);
 			glUniform4f(p.charMode, 0.0f, 0.0f, 0.0f, 0.0f);
 			glUniform4f(p.viewer, 0.0f, 0.0f, 0.0f, 1.0f);

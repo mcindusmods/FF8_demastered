@@ -203,9 +203,15 @@ void* __stdcall HookGlTexImage2D(GLenum target,
 	FrameLogTextureFilled(boundId); //FIELD_FRAME_LOG: what kind of texture it is
 	//SCENE_LIGHT: the same. Without data it is storage for something drawn into (a framebuffer's texture), not a picture
 	if (data != nullptr)
+	{
 		SceneLightTextureFilled(boundId, true);
+		LutTextureFilled(boundId, true); //LUT: which draws are the scene
+	}
 	else
+	{
 		SceneLightTextureForget(boundId);
+		LutTextureForget(boundId);
+	}
 	if (DEBUG_GLTEXIMAGE2D)
 		OutputDebug("glTexImage2D (%d): format: %d, %dx%d, void: %08x\n",boundId, internalformat, width, height, data);
 	int lengthModifier = 0;
@@ -261,6 +267,7 @@ void __stdcall HookGlTexSubImage2D( 	GLenum target,
 		width, height, LastFilePath.c_str());
 	FrameLogTextureFilled(GetCurrentBoundTextureID()); //FIELD_FRAME_LOG
 	SceneLightTextureFilled(GetCurrentBoundTextureID(), false); //SCENE_LIGHT
+	LutTextureFilled(GetCurrentBoundTextureID(), false); //LUT
 
 	bool tryToReplace = false;
 	

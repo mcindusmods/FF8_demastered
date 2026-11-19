@@ -157,6 +157,16 @@ void SceneLightStagePage(int stage, int page, const char* file); //DEMASTER's pi
 void SceneLightFieldEntered(bool sky); //a field's .map is read
 bool SceneLightBeforeDraw(unsigned int mode, int count, unsigned int type, const void* indices); //before every draw of the game (true: drawn)
 void SceneLightFrameEnd(); //SwapBuffers
+int SceneLightTimeHere(int mode); //for LUT: 0 the clock's time here, 1 always day, 2 always night, -1 SCENE_LIGHT off
+int SceneLightMoment(); //the story's progress (the game's counter); -1: not known
+//LUT (texturepatch_v2_lut.cpp): the time of day's colour grade, done by the shaders on the scene's draws
+void LutTextureFilled(unsigned int texture, bool whole); //as SceneLightTextureFilled
+void LutTextureForget(unsigned int texture);
+void LutFieldEntered(const char* field, bool sky); //game thread, a field's .map is read
+void LutBeforeDraw(); //before every draw of the game: the game's main.frag / main_char.frag graded or not
+void LutUse(unsigned int program, bool scene); //one of DEMASTER's programs, in use: its draws are the scene (graded) or not
+bool LutDrawAddsLight(); //the blend set adds light or takes it away (such draws are not graded)
+void LutFrameEnd(); //SwapBuffers
 void FrameLogNote(const char* format, ...); //a line about what DEMASTER did, in the frame being logged
 //How long DEMASTER's field steps take: CPU time every frame (QueryPerformanceCounter; the frame log writes the average of
 //the frames before the logged one), GPU time in the logged frame (timestamps between the steps)

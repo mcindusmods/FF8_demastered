@@ -93,6 +93,12 @@ void ReadConfigFile()
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);
     SCENE_LIGHT = conf.GetInteger("", "SCENE_LIGHT", 1);
     SCENE_DEBUG = conf.GetInteger("", "SCENE_DEBUG", 0);
+    LUT = conf.GetInteger("", "LUT", 1);
+    LUT_STRENGTH = conf.GetReal("", "LUT_STRENGTH", 1.0);
+    LUT_INSIDE = conf.GetReal("", "LUT_INSIDE", 0.5);
+    LUT_LUNAR_FROM = conf.GetInteger("", "LUT_LUNAR_FROM", 0);
+    LUT_LUNAR_TO = conf.GetInteger("", "LUT_LUNAR_TO", 65535);
+    LUT_DEBUG = conf.GetInteger("", "LUT_DEBUG", 0);
     ANALOG_MOVEMENT = conf.GetInteger("", "ANALOG_MOVEMENT", 1);
     ANALOG_DEADZONE = conf.GetReal("", "ANALOG_DEADZONE", 0.25);
     ANALOG_WORLD_MAP = conf.GetInteger("", "ANALOG_WORLD_MAP", 1);

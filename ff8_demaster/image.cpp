@@ -67,6 +67,7 @@ void RenderTexture(const bimg::ImageContainer* img)
 {
 	//SCENE_LIGHT: a replacement goes into the game's texture (a compressed one never passes the glTexImage2D hook)
 	SceneLightTextureFilled(GetCurrentBoundTextureID(), true);
+	LutTextureFilled(GetCurrentBoundTextureID(), true); //LUT: the same
 	const TextureFormatInfo& texInfo = s_textureFormat[img->m_format];
 	if (isCompressed(img->m_format))
 		RenderCompressedTexture(img, texInfo);

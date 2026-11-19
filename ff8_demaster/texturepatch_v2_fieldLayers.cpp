@@ -375,6 +375,7 @@ namespace
 			PbrFieldTime(FieldFolder(name), name, language, time, &sky);
 		DayNightFieldEntered(name, time);
 		SceneLightFieldEntered(sky); //SCENE_LIGHT: a battle started here is under the sky or not
+		LutFieldEntered(name.c_str(), sky); //LUT: the field's own LUTs, open to the sky or not
 
 		Field next;
 		{

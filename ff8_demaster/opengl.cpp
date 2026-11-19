@@ -115,6 +115,7 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
     }
 #endif
     FrameLogDraw(mode, count, type, indices); //FIELD_FRAME_LOG, the game's own state, before DEMASTER changes any
+    LutBeforeDraw(); //LUT: the game's draw graded with the time of day or not (main.frag's, main_char.frag's uniform)
     //SCENE_LIGHT: battles and the world map (main.frag's uniforms); a fighter DEMASTER draws itself with smooth normals
     if (SceneLightBeforeDraw(mode, static_cast<int>(count), type, indices))
         return;
@@ -575,6 +576,7 @@ BOOL __stdcall HookSwapBuffers(const HDC hdc)
     const BOOL shown = swapBuffersTrampoline(hdc); //static_cast<BOOL (__stdcall*)(HDC)>(swapBuffersTrampoline)(hdc);
     TweenFrameEnd(hdc); //the next frame starts (with a second picture or not)
     SceneLightFrameEnd(); //SCENE_LIGHT: the battle camera is read once a frame
+    LutFrameEnd(); //LUT: Ctrl+F5
     return shown;
 }
 

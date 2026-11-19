@@ -424,6 +424,8 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClCompile Include="analog_move.cpp" />
     <ClCompile Include="texturepatch_v2_sceneLight.cpp" />
     <ClCompile Include="scene_light.cpp" />
+    <ClCompile Include="texturepatch_v2_lut.cpp" />
+    <ClCompile Include="lut_grade.cpp" />
     <ClCompile Include="frame_log.cpp" />
     <ClCompile Include="gl_state.cpp">
       <!-- Only Debug configurations exist; its hooks run on every GL call that sets state, so build this file optimized -->
@@ -631,6 +633,7 @@ del $(SolutionDir).dist\$(Configuration)\$(AssemblyName).lib</Command>
     <ClInclude Include="field_mirror.h" />
     <ClInclude Include="analog_move.h" />
     <ClInclude Include="scene_light.h" />
+    <ClInclude Include="lut_grade.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="minhook\dll_resources\MinHook.def" />

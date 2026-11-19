@@ -81,6 +81,13 @@ inline double FIELD_PARTY_LIGHT_STRENGTH;
 //Movement and motion (texturepatch_v2_analogMove.cpp, texturepatch_v2_fieldTween.cpp)
 inline int SCENE_LIGHT;               //battles and the world map: the time of day, scene_light.txt, stage pages' _EC and _ORM maps
 inline int SCENE_DEBUG;               //log what SCENE_LIGHT decides, and the projection's registers at a stage draw
+//The colour grade (texturepatch_v2_lut.cpp, lut_grade.h)
+inline int LUT;                       //the time of day's colour grade from DEMASTER_EXP\lut\ (day, dusk, night, dawn, lunar_*)
+inline double LUT_STRENGTH;           //how much of the grade (0-1)
+inline double LUT_INSIDE;             //the share of it where the place is not open to the sky (0-1)
+inline int LUT_LUNAR_FROM;            //the story's counter from which the Lunar Cry's set is used (0: never)
+inline int LUT_LUNAR_TO;              //and up to which
+inline int LUT_DEBUG;                 //log the grade's changes and the files read
 inline int ANALOG_MOVEMENT;           //fields: the pad's left stick walks at any angle (the game's own analogue code, answered for it)
 inline double ANALOG_DEADZONE;        //how far the stick moves before it counts (0.05-0.9 of its throw)
 inline int ANALOG_WORLD_MAP;          //the world map: the left stick moves at any angle too

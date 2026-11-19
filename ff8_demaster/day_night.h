@@ -34,6 +34,9 @@ double DayNightAmount(fieldpbr::FieldTime time);
 //1 - this and the glows come on with it. The clock's, or a field's fixed time
 double DayNightClockEvening();
 double DayNightEvening(fieldpbr::FieldTime time);
+//the clock itself: seconds into its cycle, and the cycle (DAY_NIGHT_DAY ...). Renderer thread
+double DayNightClockTime();
+fieldpbr::DayNightCycle DayNightCycleInUse();
 //where the clock is on the sun's arc (by day) or the moon's (by night), for the moving lights. With DAY_NIGHT off: the day,
 //mid-morning. Renderer thread
 fieldpbr::SkyTime DayNightSky();

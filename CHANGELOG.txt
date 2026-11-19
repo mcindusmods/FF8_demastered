@@ -15,6 +15,28 @@ The battle camera from the game itself (first step)
   - The camera filter (taking a register reading only when it agreed with the last) is left for the world map only,
     whose camera isn't known yet. With SCENE_DEBUG=1 the log says six times whether the game's camera and the registers
     agree at that moment.
+The colour grade by the time of day (second step; new: LUT, LUT_STRENGTH, LUT_INSIDE, LUT_LUNAR_FROM/_TO, LUT_DEBUG)
+  - LUTs (colour look-up tables) in DEMASTER_EXP\lut\: day, dusk, night, dawn, and lunar_day ... lunar_dawn for the
+    Lunar Cry, as ReShade's strips (1024 x 32; other sizes, either way round) or .cube files. One set for the whole
+    game; lut\field\<field>\, lut\battle\a0stgNNN\ and lut\world\ can replace any of them in that place. Read again
+    within two seconds when one changes.
+  - They cross-fade with the clock: the dusk from the evening (DAY_NIGHT_EVENING) to the middle of the dusk's fade, then
+    the blue hour into the night over one and a half fades; the dawn over one and a half fades either side of the middle
+    of the dawn's fade. Fixed-time fields have their time's; battles their time as SCENE_LIGHT gives it.
+  - The shaders grade (main.frag, the new main_char.frag: the game's own with the grade added, demaster_field.frag,
+    demaster_chara.frag, and the fighters' program): only the scene's draws (by the texture's type: field backgrounds
+    and models, battle stages, enemies and the party, the world map), not the menus, text or draws that add light. Two
+    strips on texture units 14 and 15, read the way the game's textures are, so no new kind of texture in the game's
+    programs.
+  - The ones in this release (tools\make_luts.py makes them, and a preview sheet): the day as painted (seen as changing
+    nothing, so not used), a golden dusk with violet shade, a rose dawn with lavender shade and a soft haze, a night
+    that cools and quietens what is already dark and keeps the lamps warm, and a red Lunar Cry set.
+  - LUT_INSIDE (0.5): places not open to the sky get that share. LUT_LUNAR_FROM is 0 (never) until the story counter's
+    value for the Lunar Cry is known; LUT_DEBUG logs the counter as it changes; Ctrl+F5 shows the Lunar Cry's set, then
+    no grade, then back.
+  - Tests: lut_grade.h in field_pbr_test (the strips both ways, .cube with and without a domain, the cross-fades at the
+    cycle's points and without jumps anywhere, also on an odd cycle), and main.frag and main_char.frag through Mesa
+    against the same arithmetic (scene_shader_test: within 0 levels).
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

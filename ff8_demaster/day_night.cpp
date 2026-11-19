@@ -561,6 +561,20 @@ double DayNightEvening(const fieldpbr::FieldTime time)
 	return DayNightClockEvening();
 }
 
+double DayNightClockTime()
+{
+	if (!DAY_NIGHT)
+		return 0.0;
+	Start();
+	return clockTime;
+}
+
+fieldpbr::DayNightCycle DayNightCycleInUse()
+{
+	Start();
+	return cycle;
+}
+
 fieldpbr::SkyTime DayNightSky()
 {
 	if (!DAY_NIGHT)

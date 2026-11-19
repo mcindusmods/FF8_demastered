@@ -10,7 +10,7 @@ Only opaque layers (blend 4) are PBR. The glow and shadow layers (blend 0-3, lik
 ## Setup
 
 1. Build with `build_demaster.bat`. It makes `ff8_demaster.dll` and `fieldprep.exe` (64-bit).
-2. Copy **every file** in `DEMASTER_EXP\shaders\` into the game's `DEMASTER_EXP\shaders\`: `main.frag`, `demaster_field.vert/.frag`, `demaster_chara.vert/.frag`, `demaster_shadow.frag`, `demaster_fighter.vert` (battles). Without them, PBR layers fall back to their paintings and characters are drawn by the game as before; the log says which file is missing.
+2. Copy **every file** in `DEMASTER_EXP\shaders\` into the game's `DEMASTER_EXP\shaders\`: `main.frag`, `main_char.frag` (v15.15: the game's own, with the colour grade), `demaster_field.vert/.frag`, `demaster_chara.vert/.frag`, `demaster_shadow.frag`, `demaster_fighter.vert` (battles). Copy `DEMASTER_EXP\lut\` too (the colour grade's LUTs, see "The colour grade"). Without them, PBR layers fall back to their paintings and characters are drawn by the game as before; the log says which file is missing.
 3. `demaster.conf` needs `FIELD_LAYERS=1` and `FIELD_PBR=1`. The `FIELD_PBR_*` switches are all on by default except `FIELD_AVATARS` (see "The switches" below).
 4. `fieldprep.exe` can go anywhere. It finds the game's data from the field folder you give it.
 5. **Run fieldprep again on fields you made with v13/v14.** It adds what v15 needs (the depth measurements, the camera, the light grid). Without the re-run the field still works: per-tile depth, and characters get only the added lights plus the game's own darkening.
@@ -159,6 +159,24 @@ One clock for the whole game (`DAY_NIGHT=1`): 8 minutes of day and 4 of night, w
 - **Ctrl+F6** jumps to 5 seconds before the next fade, to watch one at normal speed.
 - While the clock is paused or sped up, and for 4 seconds after a key, a thin bar across the top of the screen shows the cycle, starting at dawn on the left: amber day, blue night. The mark on it is where the clock is: white at 1x, yellow at 10x, orange at 60x, red paused, grey in a field that holds the clock. `DAY_NIGHT_BAR=0` turns it off.
 - The log says what each key did and the time: `DAY_NIGHT: swapped: night, 0:00 in (dawn starts in 3:20)`. You can also set the time in `daynight.txt` while the game is closed (`time = 500` is the start of the night).
+
+## The colour grade (v15.15, `LUT=1`)
+
+The time of day also changes the picture's colours: a golden dusk, a rose dawn, a cool night, the day as painted. It's done with LUTs (colour look-up tables: for every colour, the colour it becomes), one for each time of day, cross-fading with the clock, everywhere the clock is: fields, battles and the world map. The shaders do it on the scene itself (backgrounds, characters, models, battle stages, fighters, the world map), not on the menus, the text, or effects that add light (spells, glows, lamp halos), so those keep their colours.
+
+**When.** The dusk comes with the evening (`DAY_NIGHT_EVENING`, while the day's lamps go out) and is fullest in the middle of the dusk's fade, when the sun is down; over the next minute (one and a half fades) it turns into the night: the blue hour. The dawn comes over the minute before the middle of the dawn's fade and goes into the day over the minute after it. In battle that's three times slower, like the clock. A field with `time = day` or `night` in its `_pbr.txt` has that time's LUT; a battle has its time as `SCENE_LIGHT` gives it (`scene_light.txt`, and where the battle started).
+
+**The files** are in `DEMASTER_EXP\lut\`: `day.png`, `dusk.png`, `night.png`, `dawn.png`, and the Lunar Cry's `lunar_day.png`, `lunar_dusk.png`, `lunar_night.png`, `lunar_dawn.png`. Each is a strip of 32 squares of 32 x 32 (1024 x 32), the layout ReShade and Unreal use: in a square red goes right and green down, and blue steps from square to square. Other sizes (16, 64: n x n squares side by side, or one under the other) and `.cube` files (Resolve, Photoshop and most LUT tools export them) work too. A missing one leaves that time's colours as they are. Change one while you play: it's read again within two seconds.
+
+**A place of its own.** `lut\field\<field>\`, `lut\battle\a0stgNNN\` and `lut\world\` can hold any of the same files; each one there replaces the whole game's for that time, in that place only, and the times it doesn't have stay the whole game's. The log says which files a place uses (`LUT: field bghall_1: day lut\day.png, dusk lut\field\bghall_1\dusk.png, ...`) the first time, and for every place that has its own.
+
+**Making your own.** Grade a screenshot in any editor that can export a LUT (or a `.cube`), or start from the ones here: `tools\make_luts.py` makes them from a few numbers per time of day (white balance, the tint of the shade and of the light, how much the brightest parts keep their colour, saturation, contrast, the night's air) and writes a preview sheet of a screenshot through all eight (`python tools\make_luts.py --preview day.png night.png sheet.png`).
+
+**What the ones here do.** Day: nothing (it's there as a neutral one to start from). Dusk: amber light, violet shade, a little more colour and depth. Dawn: rose and peach light, lavender shade, a soft haze, a little quieter. Night: the night itself (PBR fields dimming, `SCENE_LIGHT` in battles) is already there before the grade, so the night LUT doesn't darken: it cools the shade, takes colour out of the dark parts the way eyes do at night, and leaves the lamps warm. The Lunar Cry's: the same four times under a red moon, greens and blues losing their colour.
+
+**The switches.** `LUT_STRENGTH` (0-1) is how much of the grade. `LUT_INSIDE` (0.5) is the share a place gets that isn't open to the sky (fields without `sky = 1` in their `_pbr.txt`, fields without PBR files, and battles started there): a room is coloured by the dusk outside only a little. `LUT_LUNAR_FROM` / `LUT_LUNAR_TO`: the story's counter between which the Lunar Cry's set is used; 0 (the default) never, because the counter's value for the Lunar Cry isn't known yet. `LUT_DEBUG=1` logs the counter whenever it changes, which is how to find it: play (or load a save) from just before the Lunar Cry and note where it goes. **Ctrl+F5** (with `DAY_NIGHT_KEYS=1`) shows the grade as the story has it, then the Lunar Cry's set, then no grade (to compare), in turn.
+
+**Needs** this release's `main.frag`, `main_char.frag`, `demaster_field.frag` and `demaster_chara.frag`; with an older one the draws it does just aren't graded. The cost: two to four texture reads per pixel of the scene during a cross-fade, two otherwise, none by day with the day LUT here (DEMASTER sees it changes nothing and doesn't use it).
 
 ## The look (v15.10): the maps change the painting itself
 
