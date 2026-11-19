@@ -40,6 +40,10 @@ varying vec3 demasterNormal;
 varying vec4 demasterLook;       // who looks: xyz a position (w 1) or the direction it looks along (w 0), view space
 varying float demasterMirror;    // 1: the picture is mirrored (seen from behind)
 varying vec3 demasterTileClip;   // instanced: x, y, w in the copy's own clip space
+// DEMASTER (EFFECT_LIGHTS): what glows in the field (a save point, a draw point, a spell in a scene) as two simple lights of
+// the room: no walls, no shadows. Range 0: none
+uniform vec4 demasterEffectAt[2];     // view x, y, z; w: range (view units)
+uniform vec4 demasterEffectColour[2]; // rgb, linear
 
 // DEMASTER (LUT): the time of day's colour grade (DEMASTER_EXP\lut\, see lut_grade.h). All zero unless this draw is part
 // of the scene and a grade is on: then the finished colour goes through two LUTs (colour look-up tables), mixed.
@@ -288,6 +292,20 @@ void main()
 		vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
 		vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
 		added += colour * falloff * nl * clear * (diffuseColour + specular * PI * demasterLightColor[i].a);
+	}
+	// the effects' lights (EFFECT_LIGHTS): diffuse only, a quarter even on what faces away (a glow is wide)
+	for (int i = 0; i < 2; i++)
+	{
+		vec4 at = demasterEffectAt[i];
+		if (at.w <= 0.0)
+			continue;
+		vec3 toEffect = at.xyz - p;
+		float x2 = dot(toEffect, toEffect) / (at.w * at.w);
+		if (x2 >= 1.0)
+			continue;
+		float edge = 1.0 - x2 * x2;
+		float facing = dot(n, toEffect * inversesqrt(max(dot(toEffect, toEffect), 0.000000000001)));
+		added += diffuseColour * demasterEffectColour[i].rgb * (edge * edge / (1.0 + 8.0 * x2) * (0.25 + 0.75 * max(facing, 0.0)));
 	}
 	added += base * emissive;
 

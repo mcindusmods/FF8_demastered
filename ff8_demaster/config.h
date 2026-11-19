@@ -81,7 +81,7 @@ inline double FIELD_PARTY_LIGHT_STRENGTH;
 //Movement and motion (texturepatch_v2_analogMove.cpp, texturepatch_v2_fieldTween.cpp)
 inline int SCENE_LIGHT;               //battles and the world map: the time of day, scene_light.txt, stage pages' _EC and _ORM maps
 inline int SCENE_DEBUG;               //log what SCENE_LIGHT decides, and the projection's registers at a stage draw
-inline int EFFECT_LIGHTS;             //battles: spells and other glowing effects light the stage and the fighters
+inline int EFFECT_LIGHTS;             //glowing effects light the battle stage and fighters, and PBR fields' rooms and characters
 inline double EFFECT_LIGHTS_STRENGTH; //how bright those lights are (1)
 //The colour grade (texturepatch_v2_lut.cpp, lut_grade.h)
 inline int LUT;                       //the time of day's colour grade from DEMASTER_EXP\lut\ (day, dusk, night, dawn, lunar_*)

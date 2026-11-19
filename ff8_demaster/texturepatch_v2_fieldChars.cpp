@@ -190,7 +190,7 @@ namespace
 		GLint charMode = -1, screenMatrix = -1, viewMatrix = -1, blendMode = -1, model = -1, game = -1, shade = -1, probeBox = -1,
 			probeInfo = -1, space = -1, depth = -1, roomSize = -1, features = -1, lightCount = -1, lightPos = -1, lightColor = -1,
 			lightFlicker = -1, viewer = -1, quality = -1, instanceMatrix = -1, instanceTile = -1, instanceLook = -1, night = -1,
-			nightTint = -1;
+			nightTint = -1, effectAt = -1, effectColour = -1;
 	};
 	CharProgram charProgram, shadowProgram;
 	bool programsTried = false;
@@ -233,6 +233,8 @@ namespace
 		p.lightColor = at("demasterLightColor");
 		p.lightFlicker = at("demasterLightFlicker");
 		p.viewer = at("demasterViewer");
+		p.effectAt = at("demasterEffectAt");
+		p.effectColour = at("demasterEffectColour");
 		p.quality = at("demasterQuality");
 		p.instanceMatrix = at("demasterInstanceMatrix");
 		p.instanceTile = at("demasterInstanceTile");
@@ -728,6 +730,12 @@ namespace
 		glUniform4f(p.space, static_cast<float>(space.zoom), static_cast<float>(space.originX), static_cast<float>(space.originY),
 			space.model == fieldpbr::DepthModel::Inverse ? 1.0f : 0.0f);
 		glUniform4f(p.depth, static_cast<float>(space.a), static_cast<float>(space.b), static_cast<float>(space.nearest), 0.0f);
+		if (p.effectAt >= 0) //EFFECT_LIGHTS: what glows in the field
+		{
+			const EffectGlows& effects = FieldEffectGlows();
+			glUniform4fv(p.effectAt, MAX_EFFECT_GLOWS, effects.at);
+			glUniform4fv(p.effectColour, MAX_EFFECT_GLOWS, effects.colour);
+		}
 		glUniform4f(p.roomSize, static_cast<float>(std::max(1, v.canvasWidth)), static_cast<float>(std::max(1, v.canvasHeight)),
 			v.room != 0 ? 1.0f : 0.0f, 0.0f);
 		glUniform4f(p.features, 0.0f, 0.0f, 0.0f, FIELD_PBR_SHADOWS && v.room != 0 ? 1.0f : 0.0f);

@@ -65,6 +65,13 @@ Spells light the stage (fourth step; new: EFFECT_LIGHTS=1, EFFECT_LIGHTS_STRENGT
     camera; kept and faded from frame to frame, four at most), scene_shader_test (the gathering shaders through Mesa: two
     quads drawn as the game draws them found again where they were, at their depth, in their colour; an effect's slot
     lights the floor as a stage light does).
+  - PBR fields too (fifth step): a save point, a draw point, a spell in a scene, drawn by the game's main.frag adding light
+    (not the field's own glowing tiles: texture types 25 and 41), gathered the same way and put back into the room
+    through the field's projection (the characters' own). Up to two, as simple lights of their own in demaster_field.frag
+    and demaster_chara.frag (demasterEffectAt, demasterEffectColour: diffuse only, no wall checks, no shadows), so they
+    take none of the field's eight light places and cost little; reaching three times as far as they spread, 60-320 of
+    the field's own pixels. pbr_shader_test: an effect light brightens around it, nothing far away, nothing darker, and
+    the picture is as before without it.
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

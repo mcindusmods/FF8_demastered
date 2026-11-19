@@ -148,6 +148,17 @@ namespace fieldrt
 		int partyFollow = -1; //the lights file's [party] follow: the script entity that carries the party light (-1: DEMASTER picks)
 	};
 	const FieldView& PbrView();
+	//--- EFFECT_LIGHTS in PBR fields (gathered by texturepatch_v2_sceneLight.cpp, as in battle): what glows (a save point, a
+	//draw point, a spell in a scene) as up to two simple lights of the room for the field and character shaders
+	//(demasterEffectAt, demasterEffectColour: no walls, no shadows)
+	constexpr int MAX_EFFECT_GLOWS = 2;
+	struct EffectGlows
+	{
+		uint64_t serial = 1; //changes whenever the lights do
+		float at[MAX_EFFECT_GLOWS * 4] = {}; //view x, y, z; range (0: none)
+		float colour[MAX_EFFECT_GLOWS * 4] = {}; //linear
+	};
+	const EffectGlows& FieldEffectGlows();
 	const LightUniforms& PbrLights(); //the field's lights now (flicker, light groups)
 
 	//--- what the field program gets of the characters (filled by the character module before the background is drawn)

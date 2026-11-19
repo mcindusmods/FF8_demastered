@@ -43,6 +43,7 @@ namespace
 {
 	//(11: battle stages and the enemies; 18 and 27: the world map's ground, its sky and horizon; 35: the party in battle)
 	constexpr int TYPE_BATTLE_STAGE = 11, TYPE_WORLD = 18, TYPE_WORLD_SKY = 27, TYPE_BATTLE_CHARACTER = 35;
+	constexpr int TYPE_FIELD_BACKGROUND = 25, TYPE_FIELD_BACKGROUND_2 = 41; //(EFFECT_LIGHTS: a field's own glowing tiles are not effects)
 	constexpr int UNIT_GLOWS = 10, UNIT_ORM = 11, UNIT_NORMAL = 12, UNIT_SHADOW = 13;
 	constexpr double FIGHTER_SIZE = 4000.0; //a draw larger than this (the stage's units) casts no shadow: it is the stage's
 	constexpr float SKY_DISTANCE = 20000.0f; //a stage's sky stands about 30,000 units from its middle; the fighters within a few thousand
@@ -107,9 +108,13 @@ namespace
 		std::vector<GlowVertex> vertices;
 		std::vector<GlowRun> runs;
 		bool waiting[2] = { false, false }, timing[2] = { false, false }; //a read back (a GPU time) is on its way in that slot
-		scenelight::Camera camera[2]; //the camera of the frame each slot was gathered in
+		scenelight::Camera camera[2]; //the camera of the frame each slot was gathered in (battles)
+		fieldchars::Projection projection[2]; //the field's screen to its room (PBR fields)
+		int mode[2] = { -1, -1 }; //where each slot was gathered
 		uint64_t frame = 0;
-		scenelight::EffectLights lights;
+		scenelight::EffectLights lights; //battles: the stage's space
+		scenelight::EffectLights fieldLights; //PBR fields: the room's view space
+		fieldrt::EffectGlows fieldOut;
 		//what it costs (SCENE_DEBUG, every 10 s of battle)
 		long long cpu = 0; //QueryPerformanceCounter ticks, keeping and gathering
 		uint64_t draws = 0, corners = 0, frames = 0, lit = 0, timed = 0;
@@ -1024,7 +1029,41 @@ namespace
 		return true;
 	}
 
-	//a draw of the game that adds light, in battle: its corners kept for the frame's end
+	//the PBR field's screen to its room, as the character module has it
+	fieldchars::Projection FieldProjection()
+	{
+		const FieldView& v = PbrView();
+		fieldchars::Projection p;
+		if (v.settings != nullptr)
+		{
+			p.space = v.settings->space;
+			p.gameDepth = v.settings->gameDepth > 0 ? v.settings->gameDepth : fieldpbr::GAME_DEPTH_PER_VIEW;
+		}
+		p.offsetX = v.offsetKnown ? v.offsetX : 0.0;
+		p.offsetY = v.offsetKnown ? v.offsetY : 0.0;
+		p.screenPerCanvas = 2.0;
+		return p;
+	}
+
+	//a field's glow as a simple light of the room: where it is (its place on the screen and its depth, back into the room),
+	//its colour as in battle, reaching three times as far as it spreads (60-320 of the field's own pixels)
+	bool FieldGlowToLight(const fieldchars::Projection& projection, const scenelight::Glow& glow, const double strength,
+		scenelight::EffectLight& light)
+	{
+		const fieldchars::V3 v = projection.ToView(glow.x, glow.y, glow.depth > 0 ? 1.0 / glow.depth : 0.0);
+		if (!(v.z > 0.0f) || projection.space.zoom <= 0)
+			return false;
+		scenelight::Camera none;
+		light = scenelight::GlowToLight(none, glow, strength); //(its colour; the place and range are the field's, below)
+		light.stage[0] = v.x;
+		light.stage[1] = v.y;
+		light.stage[2] = v.z;
+		const double spread = glow.spread / projection.screenPerCanvas;
+		light.range = static_cast<float>(std::clamp(3.0 * spread, 60.0, 320.0) * v.z / projection.space.zoom);
+		return true;
+	}
+
+	//a draw of the game that adds light, in battle or a PBR field: its corners kept for the frame's end
 	void KeepGlow(const GLint program, const GLenum mode, const GLsizei count, const GLenum type, const void* indices)
 	{
 		Glows& g = glows;
@@ -1144,25 +1183,68 @@ namespace
 		glClearColor(clear[0], clear[1], clear[2], clear[3]);
 		glstate::Apply(game);
 		g.waiting[slot] = true;
-		g.camera[slot] = stageLight.view;
+		g.mode[slot] = currentMode;
+		if (currentMode == MODE_BATTLE)
+			g.camera[slot] = stageLight.view;
+		else
+			g.projection[slot] = FieldProjection();
 	}
 
-	//SwapBuffers in battle: the last frame's grid into lights, this frame's onto the grid
+	//the field's effect lights for its shaders (two at most), when they changed
+	void SendFieldGlows()
+	{
+		Glows& g = glows;
+		fieldrt::EffectGlows next;
+		next.serial = g.fieldOut.serial;
+		const std::vector<scenelight::EffectLight>& lights = g.fieldLights.Lights();
+		for (size_t i = 0; i < lights.size() && i < static_cast<size_t>(MAX_EFFECT_GLOWS); i++)
+			for (int k = 0; k < 3; k++)
+			{
+				next.at[i * 4 + k] = static_cast<float>(lights[i].stage[k]);
+				next.colour[i * 4 + k] = lights[i].colour[k];
+				next.at[i * 4 + 3] = lights[i].range;
+			}
+		if (memcmp(next.at, g.fieldOut.at, sizeof(next.at)) != 0 || memcmp(next.colour, g.fieldOut.colour, sizeof(next.colour)) != 0)
+		{
+			next.serial++;
+			g.fieldOut = next;
+		}
+	}
+
+	//glowing effects are gathered here: battles, and PBR fields
+	bool GlowPlace(const int mode)
+	{
+		return mode == MODE_BATTLE || (mode == MODE_FIELD && PbrView().active && PbrView().settings != nullptr);
+	}
+
+	//SwapBuffers: the last frame's grid into lights, this frame's onto the grid
 	void GlowsFrameEnd()
 	{
 		Glows& g = glows;
-		if (!EFFECT_LIGHTS || currentMode != MODE_BATTLE)
+		const int mode = currentMode;
+		if (!EFFECT_LIGHTS || !GlowPlace(mode))
 		{
 			g.vertices.clear();
 			g.runs.clear();
 			g.waiting[0] = g.waiting[1] = false;
 			g.lights.Clear();
+			g.fieldLights.Clear();
+			SendFieldGlows();
 			g.statsFrom = 0;
 			return;
+		}
+		if (mode != MODE_BATTLE)
+			g.lights.Clear();
+		if (mode != MODE_FIELD)
+		{
+			g.fieldLights.Clear();
+			SendFieldGlows();
 		}
 		const long long started = Ticks();
 		const int write = static_cast<int>(g.frame & 1), read = write ^ 1;
 		std::vector<scenelight::EffectLight> seen;
+		if (g.waiting[read] && g.mode[read] != mode)
+			g.waiting[read] = false; //gathered somewhere else (a battle has just started or ended)
 		if (g.waiting[read])
 		{
 			g.waiting[read] = false;
@@ -1188,11 +1270,23 @@ namespace
 					}
 				glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
 				for (const scenelight::Glow& glow : scenelight::FindGlows(grid, static_cast<int>(scenelight::MAX_EFFECT_LIGHTS), 10, 0.02))
-					seen.push_back(scenelight::GlowToLight(g.camera[read], glow, EFFECT_LIGHTS_STRENGTH));
+				{
+					scenelight::EffectLight light;
+					if (mode == MODE_BATTLE)
+						seen.push_back(scenelight::GlowToLight(g.camera[read], glow, EFFECT_LIGHTS_STRENGTH));
+					else if (FieldGlowToLight(g.projection[read], glow, EFFECT_LIGHTS_STRENGTH, light))
+						seen.push_back(light);
+				}
 			}
 			glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 		}
-		g.lights.Frame(seen, 0.75);
+		if (mode == MODE_BATTLE)
+			g.lights.Frame(seen, 0.75);
+		else
+		{
+			g.fieldLights.Frame(seen, 0.75);
+			SendFieldGlows();
+		}
 		if (g.timing[read])
 		{
 			GLint available = 0;
@@ -1206,15 +1300,15 @@ namespace
 				g.timing[read] = false;
 			}
 		}
-		if (!g.runs.empty() && stageLight.camera && MakeGlows())
+		if (!g.runs.empty() && (mode != MODE_BATTLE || stageLight.camera) && MakeGlows())
 			GatherGlows(write);
 		g.vertices.clear();
 		g.runs.clear();
 		g.frame++;
 		g.cpu += Ticks() - started;
 		g.frames++;
-		g.lit += g.lights.Lights().size();
-		//what it costs, every 10 s of battle (SCENE_DEBUG)
+		g.lit += mode == MODE_BATTLE ? g.lights.Lights().size() : std::min(g.fieldLights.Lights().size(), static_cast<size_t>(MAX_EFFECT_GLOWS));
+		//what it costs, every 10 s (SCENE_DEBUG)
 		const ULONGLONG tick = GetTickCount64();
 		if (g.statsFrom == 0)
 			g.statsFrom = tick;
@@ -1223,8 +1317,8 @@ namespace
 			LARGE_INTEGER frequency;
 			QueryPerformanceFrequency(&frequency);
 			const double frames = static_cast<double>(g.frames);
-			OutputDebug("EFFECT_LIGHTS: the last %.0f s: %.1f glowing draws a frame (%.0f corners), %.1f lights on; CPU %.3f ms a frame, GPU %s\n",
-				(tick - g.statsFrom) / 1000.0, g.draws / frames, g.corners / frames, g.lit / frames, g.cpu * 1000.0 / frequency.QuadPart / frames,
+			OutputDebug("EFFECT_LIGHTS: %s, the last %.0f s: %.1f glowing draws a frame (%.0f corners), %.1f lights on; CPU %.3f ms a frame, GPU %s\n",
+				mode == MODE_BATTLE ? "battle" : "field", (tick - g.statsFrom) / 1000.0, g.draws / frames, g.corners / frames, g.lit / frames, g.cpu * 1000.0 / frequency.QuadPart / frames,
 				g.timed > 0 ? (std::to_string(g.gpu / g.timed).substr(0, 5) + " ms a gathering pass").c_str() : "not measured");
 			g.statsFrom = tick;
 			g.draws = g.corners = g.frames = g.lit = g.timed = 0;
@@ -1243,7 +1337,8 @@ void SceneLightTextureFilled(const unsigned int texture, const bool whole)
 	const auto known = textures.find(texture);
 	if (known == textures.end())
 	{
-		if (type == TYPE_BATTLE_STAGE || type == TYPE_WORLD || type == TYPE_WORLD_SKY || type == TYPE_BATTLE_CHARACTER)
+		if (type == TYPE_BATTLE_STAGE || type == TYPE_WORLD || type == TYPE_WORLD_SKY || type == TYPE_BATTLE_CHARACTER
+			|| type == TYPE_FIELD_BACKGROUND || type == TYPE_FIELD_BACKGROUND_2)
 			textures[texture].type = type;
 		return;
 	}
@@ -1328,6 +1423,21 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 		else if (mode == MODE_FIELD)
 			fromWorld = false;
 		lastMode = mode;
+	}
+	//EFFECT_LIGHTS: a draw of the game's main.frag that adds light in battle or a PBR field (a spell, a GF's fire, a save
+	//point) is kept to light the stage, or the room, in the next frames; not a field's own glowing tiles
+	if (EFFECT_LIGHTS && GlowPlace(mode) && glstate::BlendOn() && glstate::BlendEquationRgb() == GL_FUNC_ADD)
+	{
+		GLint source = 0, destination = 0;
+		glstate::BlendFactors(source, destination);
+		const GLint drawing = glstate::Program();
+		if (destination == GL_ONE && drawing != 0 && GameProgramOf(drawing).kind == ProgramKind::Main)
+		{
+			const auto known = textures.find(glstate::BoundTexture2D());
+			const bool tile = known != textures.end() && (known->second.type == TYPE_FIELD_BACKGROUND || known->second.type == TYPE_FIELD_BACKGROUND_2);
+			if (!(mode == MODE_FIELD && tile))
+				KeepGlow(drawing, drawMode, count, indexType, indices);
+		}
 	}
 	const bool scene = mode == MODE_BATTLE || mode == MODE_WORLDMAP;
 	if (!scene && programsOn == 0)
@@ -1422,14 +1532,6 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 				LogProjection(program, count, true);
 		}
 	}
-	//EFFECT_LIGHTS: a draw that adds light in battle (a spell, a GF's fire) is kept to light the stage in the next frames
-	if (EFFECT_LIGHTS && mode == MODE_BATTLE && glstate::BlendOn() && glstate::BlendEquationRgb() == GL_FUNC_ADD)
-	{
-		GLint source = 0, destination = 0;
-		glstate::BlendFactors(source, destination);
-		if (destination == GL_ONE)
-			KeepGlow(program, drawMode, count, indexType, indices);
-	}
 	//a fighter: drawn by DEMASTER with smooth normals (its maps' units are set above, as for the game's draw)
 	if (stageLit && drawValue[0] < 0.5f && knownFighter && DrawFighter(program, drawMode, count, indexType, indices, sceneValue, mapsValue, drawValue))
 		return true;
@@ -1450,6 +1552,11 @@ int SceneLightTimeHere(const int mode)
 int SceneLightMoment()
 {
 	return Moment();
+}
+
+const fieldrt::EffectGlows& fieldrt::FieldEffectGlows()
+{
+	return glows.fieldOut;
 }
 
 //SwapBuffers hook: a frame is over

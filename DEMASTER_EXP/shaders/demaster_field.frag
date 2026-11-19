@@ -65,6 +65,10 @@ uniform int demasterShadowCount;
 uniform mat4 demasterShadowMatrix[8];  // view to the light's clip space
 uniform vec4 demasterShadowInfo[8];    // x: light; y, z: tile corner in the atlas (0-1); w: tile size
 uniform sampler2D demasterShadowMap;
+// DEMASTER (EFFECT_LIGHTS): what glows in the field (a save point, a draw point, a spell in a scene) as two simple lights of
+// the room: no walls, no shadows. Range 0: none
+uniform vec4 demasterEffectAt[2];     // view x, y, z; w: range (view units)
+uniform vec4 demasterEffectColour[2]; // rgb, linear
 
 // DEMASTER (LUT): the time of day's colour grade (DEMASTER_EXP\lut\, see lut_grade.h). All zero unless this draw is part
 // of the scene and a grade is on: then the finished colour goes through two LUTs (colour look-up tables), mixed.
@@ -522,6 +526,20 @@ bool demasterPbrShade(vec2 uv, out vec4 result)
 		vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
 		vec3 specular = distribution * geometry * fresnel * (PI / max(4.0 * nv * nl, 0.0001));
 		added += (falloff * nl * lit) * (colour.rgb * (diffuseColour + specular * colour.a) + gloss * specular);
+	}
+	// the effects' lights (EFFECT_LIGHTS): diffuse only, a quarter even on what faces away (a glow is wide)
+	for (int i = 0; i < 2; i++)
+	{
+		vec4 at = demasterEffectAt[i];
+		if (at.w <= 0.0 || sky)
+			continue;
+		vec3 toEffect = at.xyz - position;
+		float x2 = dot(toEffect, toEffect) / (at.w * at.w);
+		if (x2 >= 1.0)
+			continue;
+		float edge = 1.0 - x2 * x2;
+		float facing = dot(normal, toEffect * inversesqrt(max(dot(toEffect, toEffect), 0.000000000001)));
+		added += diffuseColour * demasterEffectColour[i].rgb * (edge * edge / (1.0 + 8.0 * x2) * (0.25 + 0.75 * max(facing, 0.0)));
 	}
 	added *= ao;
 

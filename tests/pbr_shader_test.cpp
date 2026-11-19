@@ -919,6 +919,60 @@ int main(int argc, char** argv)
 				farCount ? farSum / farCount / 3 : 0.0, darker);
 			if (!movingNow[0].on || nearCount == 0 || nearSum / nearCount / 3 < 2.0 || (farCount && farSum / farCount / 3 > 0.05) || darker > 0)
 				failures++;
+			//EFFECT_LIGHTS: a glow where the party light was (a save point), as one of the two simple effect lights: brighter
+			//around it, nothing beyond its range, nothing darker; without it the picture is as before
+			movingNow.clear();
+			const GLint effectAt = glGetUniformLocation(program, "demasterEffectAt"), effectColour = glGetUniformLocation(program, "demasterEffectColour");
+			if (effectAt < 0 || effectColour < 0)
+			{
+				printf("EFFECT_LIGHTS: demaster_field.frag has no demasterEffectAt / demasterEffectColour\n");
+				failures++;
+			}
+			else
+			{
+				const double effectRange = space.ViewLength(120.0, leader.center.z);
+				const float at[8] = { static_cast<float>(leader.center.x), static_cast<float>(leader.center.y), static_cast<float>(leader.center.z),
+					static_cast<float>(effectRange), 0, 0, 0, 0 };
+				const float colour[8] = { 0.4f, 0.8f, 1.6f, 0, 0, 0, 0, 0 };
+				glUniform4fv(effectAt, 2, at);
+				glUniform4fv(effectColour, 2, colour);
+				const Image glowing = draw(0, true, 0.0, false, "effect_light.png");
+				const float none[8] = {};
+				glUniform4fv(effectAt, 2, none);
+				glUniform4fv(effectColour, 2, none);
+				nearSum = farSum = 0;
+				nearCount = farCount = darker = 0;
+				const double effectReach = 120.0 * scale;
+				for (int y = 0; y < height; y++)
+					for (int x = 0; x < width; x++)
+					{
+						const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+						if (rest.rgba[i + 3] == 0)
+							continue;
+						double more = 0;
+						for (int c = 0; c < 3; c++)
+						{
+							more += glowing.rgba[i + c] - rest.rgba[i + c];
+							darker += glowing.rgba[i + c] < rest.rgba[i + c];
+						}
+						const double d = std::hypot(x - cx, y - cy);
+						if (d < effectReach * 0.3)
+						{
+							nearSum += more;
+							nearCount++;
+						}
+						else if (d > effectReach * 2.5)
+						{
+							farSum += more;
+							farCount++;
+						}
+					}
+				const double back = difference(draw(0, true, 0.0, false, ""), rest);
+				printf("effect light: +%.2f levels around it, +%.3f far from it, %zu values darker; without it %.3f from before\n",
+					nearCount ? nearSum / nearCount / 3 : 0.0, farCount ? farSum / farCount / 3 : 0.0, darker, back);
+				if (nearCount == 0 || nearSum / nearCount / 3 < 2.0 || (farCount && farSum / farCount / 3 > 0.05) || darker > 0 || back != 0.0)
+					failures++;
+			}
 		}
 		movingNow.clear();
 		use = &lights;

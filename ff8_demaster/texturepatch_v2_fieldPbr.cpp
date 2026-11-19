@@ -1021,8 +1021,9 @@ void main()
 		GLint tileClamp = -1, pbr = -1, space = -1, depth = -1, ambient = -1, count = -1, lightPos = -1, lightColor = -1, lightFlicker = -1;
 		GLint stepAside = -1, quality = -1, sky = -1, roomSize = -1, features = -1, charCount = -1, cardCenter = -1, cardUp = -1,
 			cardRight = -1, cardDir = -1, contact = -1, shadowCount = -1, shadowMatrix = -1, shadowInfo = -1, blendMode = -1;
-		GLint emissive = -1, emissiveTint = -1, night = -1, nightTint = -1, lightPaint = -1, look = -1;
+		GLint emissive = -1, emissiveTint = -1, night = -1, nightTint = -1, lightPaint = -1, look = -1, effectAt = -1, effectColour = -1;
 		uint64_t sent = 0; //the uniformSerial its per-frame uniforms were last sent at
+		uint64_t effectsSent = 0; //the effects' lights (EFFECT_LIGHTS) as last sent
 	};
 	FieldProgram fieldProgram;
 	bool unitsBound = false, programSwapped = false;
@@ -1061,6 +1062,8 @@ void main()
 		p.lightFlicker = at("demasterLightFlicker");
 		p.lightPaint = at("demasterLightPaint");
 		p.look = at("demasterLook");
+		p.effectAt = at("demasterEffectAt");
+		p.effectColour = at("demasterEffectColour");
 		p.stepAside = at("demasterStepAside");
 		p.quality = at("demasterQuality");
 		p.sky = at("demasterSky");
@@ -1297,6 +1300,14 @@ void main()
 		glUniform4f(p.tileClamp, tileClamp[0], tileClamp[1], tileClamp[2], tileClamp[3]);
 		glUniform4f(p.pbr, 1.0f, static_cast<float>(FIELD_PBR_VIEW), static_cast<float>(page.cellsX), static_cast<float>(page.cellsY));
 		glUniform1i(p.blendMode, blendMode);
+		//EFFECT_LIGHTS: what glows in the field, when it changed
+		const EffectGlows& effects = FieldEffectGlows();
+		if (p.effectAt >= 0 && p.effectsSent != effects.serial)
+		{
+			p.effectsSent = effects.serial;
+			glUniform4fv(p.effectAt, MAX_EFFECT_GLOWS, effects.at);
+			glUniform4fv(p.effectColour, MAX_EFFECT_GLOWS, effects.colour);
+		}
 		if (p.sent == uniformSerial)
 			return;
 		p.sent = uniformSerial;
