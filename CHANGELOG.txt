@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - the battle camera from the game, LUT colour grading, island padding
---------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - the battle camera from the game, LUT colour grading, island padding, spells light
+---------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -47,6 +47,24 @@ Island padding in fieldprep model (third step; new: --no-pad)
   - The normal and ORME DDS are now also made again when the albedo changes (its alpha says where the islands are).
   - Tests: fieldprep_model_test (an island on black: the padded levels' edge texels keep its colour, normal and data;
     unpadded ones don't; textures without see-through texels).
+Spells light the stage (fourth step; new: EFFECT_LIGHTS=1, EFFECT_LIGHTS_STRENGTH)
+  - In battle every draw that adds light (blend ONE, ONE or SRC_ALPHA, ONE: spells, a GF's fire, a limit's flash) is kept
+    as the game hands it over, and at the frame's end DEMASTER draws them all again onto a 40 x 30 grid of the screen on
+    the graphics card (two float targets: the light in linear terms; its brightness, and brightness x depth). The grid is
+    read back without waiting for it (the next frame's end picks it up), the brightest joined patches of it become up to
+    four lights in the stage's space, where the glow was and as deep, in its colour, as bright as it is large and bright
+    (at most 4), reaching three times as far as it spreads (1500-6000 units), and they light the stage and the fighters
+    from the frame after. From frame to frame a light keeps the brighter of now and before (faded to 75%), so a
+    flickering spell doesn't strobe, and fades out when the spell is gone.
+  - Draws without a depth of their own (the menus, the screen's white flashes) are left out; so are draws that take light
+    away.
+  - main.frag has eight stage lights now: 0-3 the stage's own (scene_light.txt), 4-7 the effects'.
+  - The cost is measured: with SCENE_DEBUG=1 the log says every 10 s of battle how many glowing draws a frame, how many
+    lights, the CPU time a frame (keeping the corners, gathering, reading back) and the GPU time of the gathering pass.
+  - Tests: field_pbr_test (glows found on a grid where they are, how deep, how bright; back into the stage through the
+    camera; kept and faded from frame to frame, four at most), scene_shader_test (the gathering shaders through Mesa: two
+    quads drawn as the game draws them found again where they were, at their depth, in their colour; an effect's slot
+    lights the floor as a stage light does).
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

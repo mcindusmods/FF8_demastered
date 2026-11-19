@@ -38,8 +38,9 @@ uniform vec4 demasterSceneSunLight; // rgb: its light (colour x strength); w: re
 uniform vec4 demasterSceneDraw;    // this draw: x 1 = the stage (the sun's part; fighters only get the lights), y 1 = a
                                    // normal map on demasterSceneN, z 1 = an ORM map on demasterSceneORM; w: a fighter
                                    // DEMASTER draws (DEMASTER_FIGHTER): its share of the sun's darkening
-uniform vec4 demasterSceneLightAt[4];     // the stage's own lights: xyz view space, w range (0: none)
-uniform vec4 demasterSceneLightColour[4]; // rgb, linear
+uniform vec4 demasterSceneLightAt[8];     // the stage's own lights (0-3) and the effects' (4-7, EFFECT_LIGHTS: a spell's
+                                          // glow): xyz view space, w range (0: none)
+uniform vec4 demasterSceneLightColour[8]; // rgb, linear
 uniform sampler2D demasterSceneN;
 // The fighters' shadows on the stage: last frame's fighters as the sun sees them (a depth map)
 uniform sampler2D demasterSceneShadowMap;
@@ -223,7 +224,7 @@ void main()
 								* (alpha2 / (3.14159265 * d * d) * 0.25 * bent * demasterSceneCentre.z);
 						}
 					}
-					for (int i = 0; i < 4; i++)
+					for (int i = 0; i < 8; i++)
 					{
 						if (demasterSceneLightAt[i].w <= 0.0)
 							continue;

@@ -78,8 +78,44 @@ namespace
 		double sunStage[3] = { 0, -1, 0 }; //towards the sun or moon, the stage's space
 		float sunShadow = 0; //how much of the sun a shadow takes (the look's shadow x the sun's strength)
 		float proj[4] = { 0, 0, 0, 0 }, centre[4] = { 0, 0, 0, 0 }, rot[9] = {}, trans[3] = {}, sun[4] = { 0, 0, 0, 0 },
-			sunLight[4] = { 0, 0, 0, 0 }, lightAt[16] = {}, lightColour[16] = {};
+			sunLight[4] = { 0, 0, 0, 0 }, lightAt[32] = {}, lightColour[32] = {}; //0-3 the stage's own, 4-7 the effects'
 	} stageLight;
+
+	//--- the effects' light (EFFECT_LIGHTS): the frame's glowing draws are kept (their corners, texture and how they add),
+	//drawn again at the frame's end onto a 40 x 30 grid of the screen (two float targets: the light, and its brightness
+	//with brightness x depth), read back without waiting (the next frame's end picks it up), and the brightest few become
+	//lights of the stage (scene_light.h, FindGlows) for the frames after
+	constexpr int GLOW_WIDTH = 40, GLOW_HEIGHT = 30;
+	constexpr size_t GLOW_MOST_CORNERS = 12000; //a frame's glowing corners kept at most (the rest: not gathered)
+	struct GlowVertex
+	{
+		float pos[4];
+		uint8_t color[4];
+		float uv[2];
+	};
+	struct GlowRun
+	{
+		GLuint texture = 0;
+		size_t first = 0, count = 0;
+		float alpha = 0, share = 1; //alpha 1: the light is times the texture's alpha (blend SRC_ALPHA, ONE); share: of it
+	};
+	struct Glows
+	{
+		bool tried = false, failed = false;
+		GLuint program = 0, framebuffer = 0, targets[2] = { 0, 0 }, pixels[2] = { 0, 0 }, timer[2] = { 0, 0 };
+		GLint alphaAt = -1, shareAt = -1;
+		std::vector<GlowVertex> vertices;
+		std::vector<GlowRun> runs;
+		bool waiting[2] = { false, false }, timing[2] = { false, false }; //a read back (a GPU time) is on its way in that slot
+		scenelight::Camera camera[2]; //the camera of the frame each slot was gathered in
+		uint64_t frame = 0;
+		scenelight::EffectLights lights;
+		//what it costs (SCENE_DEBUG, every 10 s of battle)
+		long long cpu = 0; //QueryPerformanceCounter ticks, keeping and gathering
+		uint64_t draws = 0, corners = 0, frames = 0, lit = 0, timed = 0;
+		double gpu = 0; //ms, the gathering pass
+		ULONGLONG statsFrom = 0;
+	} glows;
 	uint64_t sceneFrame = 0; //counts SwapBuffers
 	scenelight::CameraFilter cameraFilter;
 	scenelight::Look battleLook; //this moment's, for the stage's light
@@ -306,8 +342,26 @@ namespace
 				next.lightAt[count * 4 + 3] = light.range;
 				count++;
 			}
+			//the effects' (EFFECT_LIGHTS), in slots 4-7
+			size_t slot = scenelight::MAX_LIGHTS;
+			for (const scenelight::EffectLight& light : glows.lights.Lights())
+			{
+				if (slot >= scenelight::MAX_LIGHTS + scenelight::MAX_EFFECT_LIGHTS)
+					break;
+				double view[3];
+				scenelight::PlaceToView(camera, light.stage, view);
+				if (view[2] <= 1.0)
+					continue;
+				for (int i = 0; i < 3; i++)
+				{
+					next.lightAt[slot * 4 + i] = static_cast<float>(view[i]);
+					next.lightColour[slot * 4 + i] = light.colour[i];
+				}
+				next.lightAt[slot * 4 + 3] = light.range;
+				slot++;
+			}
 		}
-		if (memcmp(next.proj, stageLight.proj, sizeof(float) * (4 + 4 + 9 + 3 + 4 + 4 + 16 + 16)) != 0 || next.camera != stageLight.camera)
+		if (memcmp(next.proj, stageLight.proj, sizeof(float) * (4 + 4 + 9 + 3 + 4 + 4 + 32 + 32)) != 0 || next.camera != stageLight.camera)
 			next.serial = stageLight.serial + 1;
 		stageLight = next;
 	}
@@ -441,8 +495,8 @@ namespace
 				glUniform3fv(p.trans, 1, stageLight.trans);
 				glUniform4fv(p.sun, 1, stageLight.sun);
 				glUniform4fv(p.sunLight, 1, stageLight.sunLight);
-				glUniform4fv(p.lightAt, 4, stageLight.lightAt);
-				glUniform4fv(p.lightColour, 4, stageLight.lightColour);
+				glUniform4fv(p.lightAt, 8, stageLight.lightAt);
+				glUniform4fv(p.lightColour, 8, stageLight.lightColour);
 			}
 		}
 		SendShadow(p, stage && draw[0] > 0.5f);
@@ -864,6 +918,320 @@ namespace
 				shadow.on ? ", the shadow map on" : "");
 		}
 	}
+
+	//--- the effects' light (EFFECT_LIGHTS)
+	long long Ticks()
+	{
+		LARGE_INTEGER t;
+		QueryPerformanceCounter(&t);
+		return t.QuadPart;
+	}
+
+	bool MakeGlows()
+	{
+		Glows& g = glows;
+		if (g.tried)
+			return !g.failed;
+		g.tried = true;
+		g.failed = true;
+		//the game's corners straight onto the grid (scene_light.h: GLOW_VERTEX_SHADER, GLOW_FRAGMENT_SHADER)
+		const char* const vertex = scenelight::GLOW_VERTEX_SHADER;
+		const char* const fragment = scenelight::GLOW_FRAGMENT_SHADER;
+		const auto compile = [](const GLenum kind, const char* text) -> GLuint
+		{
+			const GLuint shader = glCreateShader(kind);
+			glShaderSource(shader, 1, &text, nullptr);
+			glCompileShader(shader);
+			GLint ok = GL_FALSE;
+			glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+			if (ok != GL_TRUE)
+			{
+				glDeleteShader(shader);
+				return 0;
+			}
+			return shader;
+		};
+		const GLuint vs = compile(GL_VERTEX_SHADER, vertex), fs = compile(GL_FRAGMENT_SHADER, fragment);
+		if (vs != 0 && fs != 0)
+		{
+			g.program = glCreateProgram();
+			glAttachShader(g.program, vs);
+			glAttachShader(g.program, fs);
+			glLinkProgram(g.program);
+			GLint ok = GL_FALSE;
+			glGetProgramiv(g.program, GL_LINK_STATUS, &ok);
+			if (ok != GL_TRUE)
+			{
+				glDeleteProgram(g.program);
+				g.program = 0;
+			}
+		}
+		if (vs != 0)
+			glDeleteShader(vs);
+		if (fs != 0)
+			glDeleteShader(fs);
+		if (g.program == 0)
+		{
+			OutputDebug("EFFECT_LIGHTS: the gathering shader doesn't compile here: spells don't light the stage\n");
+			return false;
+		}
+		g.alphaAt = glGetUniformLocation(g.program, "demasterGlowAlpha");
+		g.shareAt = glGetUniformLocation(g.program, "demasterGlowShare");
+		const GLint previous = glstate::Program();
+		glUseProgram(g.program);
+		glUniform1i(glGetUniformLocation(g.program, "tex"), 0);
+		glUseProgram(static_cast<GLuint>(previous));
+		const GLenum active = glstate::ActiveTexture();
+		const GLuint unit0 = glstate::Texture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+		glGenTextures(2, g.targets);
+		for (const GLuint t : g.targets)
+		{
+			glBindTexture(GL_TEXTURE_2D, t);
+			RawTexImage(GL_RGBA16F, GLOW_WIDTH, GLOW_HEIGHT, GL_RGBA, GL_FLOAT, nullptr);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		}
+		glBindTexture(GL_TEXTURE_2D, unit0);
+		glActiveTexture(active);
+		const GLuint drawBefore = glstate::DrawFramebuffer(), readBefore = glstate::ReadFramebuffer();
+		glGenFramebuffers(1, &g.framebuffer);
+		glBindFramebuffer(GL_FRAMEBUFFER, g.framebuffer);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g.targets[0], 0);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, g.targets[1], 0);
+		static const GLenum both[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+		glDrawBuffers(2, both);
+		const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawBefore);
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, readBefore);
+		if (status != GL_FRAMEBUFFER_COMPLETE)
+		{
+			OutputDebug("EFFECT_LIGHTS: the gathering targets can't be drawn into here (0x%x): spells don't light the stage\n", status);
+			return false;
+		}
+		glGenBuffers(2, g.pixels);
+		for (const GLuint b : g.pixels)
+		{
+			glBindBuffer(GL_PIXEL_PACK_BUFFER, b);
+			glBufferData(GL_PIXEL_PACK_BUFFER, GLOW_WIDTH * GLOW_HEIGHT * 4 * sizeof(float) * 2, nullptr, GL_STREAM_READ);
+		}
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		if (SCENE_DEBUG && glGenQueries != nullptr)
+			glGenQueries(2, g.timer);
+		g.failed = false;
+		OutputDebug("EFFECT_LIGHTS: spells and other glowing effects light the stage and the fighters (a %d x %d grid, up to %zu lights)\n",
+			GLOW_WIDTH, GLOW_HEIGHT, scenelight::MAX_EFFECT_LIGHTS);
+		return true;
+	}
+
+	//a draw of the game that adds light, in battle: its corners kept for the frame's end
+	void KeepGlow(const GLint program, const GLenum mode, const GLsizei count, const GLenum type, const void* indices)
+	{
+		Glows& g = glows;
+		if (mode != GL_TRIANGLES || count < 3 || g.failed || g.vertices.size() + static_cast<size_t>(count) > GLOW_MOST_CORNERS)
+			return;
+		const long long started = Ticks();
+		static std::vector<fieldchars::GameVertex> corners;
+		if (!ReadDrawCorners(count, type, indices, corners) || corners.size() != static_cast<size_t>(count))
+			return;
+		//the menus and the screen's flashes have no depth of their own (rhw 1): not in the stage
+		double rhw = 0;
+		for (const fieldchars::GameVertex& c : corners)
+			rhw += c.rhw;
+		rhw /= static_cast<double>(corners.size());
+		if (!(rhw > 0.0) || rhw > 0.05)
+		{
+			g.cpu += Ticks() - started;
+			return;
+		}
+		GLint source = 0, destination = 0;
+		glstate::BlendFactors(source, destination);
+		const GameProgram& game = GameProgramOf(program);
+		const int blendMode = game.blendMode >= 0 ? glstate::UniformInt(program, game.blendMode) : 0;
+		GlowRun run;
+		run.texture = glstate::BoundTexture2D();
+		run.first = g.vertices.size();
+		run.count = corners.size();
+		run.alpha = source == GL_SRC_ALPHA ? 1.0f : 0.0f;
+		run.share = blendMode == 3 ? 0.25f : 1.0f; //the game's BLEND_25P
+		for (const fieldchars::GameVertex& c : corners)
+		{
+			GlowVertex v;
+			v.pos[0] = c.x;
+			v.pos[1] = c.y;
+			v.pos[2] = 0.0f;
+			v.pos[3] = c.rhw;
+			memcpy(v.color, c.color, 4);
+			v.uv[0] = c.u;
+			v.uv[1] = c.v;
+			g.vertices.push_back(v);
+		}
+		if (!g.runs.empty() && g.runs.back().texture == run.texture && g.runs.back().alpha == run.alpha && g.runs.back().share == run.share
+			&& g.runs.back().first + g.runs.back().count == run.first)
+			g.runs.back().count += run.count;
+		else
+			g.runs.push_back(run);
+		g.draws++;
+		g.corners += corners.size();
+		g.cpu += Ticks() - started;
+	}
+
+	//this frame's glowing draws onto the grid, and its read back started (picked up at the next frame's end)
+	void GatherGlows(const int slot)
+	{
+		Glows& g = glows;
+		glstate::RenderState game;
+		glstate::Capture(game);
+		glstate::ClientState client;
+		glstate::SaveClient(client);
+		float clear[4];
+		double clearDepth = 1.0;
+		glstate::ClearValues(clear, clearDepth);
+		const GLint program = glstate::Program();
+		const GLenum active = glstate::ActiveTexture();
+		const GLuint unit0 = glstate::Texture(GL_TEXTURE_2D, 0);
+		const bool timing = g.timer[slot] != 0 && !g.timing[slot];
+		if (timing)
+			glBeginQuery(GL_TIME_ELAPSED, g.timer[slot]);
+		glBindFramebuffer(GL_FRAMEBUFFER, g.framebuffer);
+		glstate::RawViewport(0, 0, GLOW_WIDTH, GLOW_HEIGHT);
+		glstate::Enable(GL_SCISSOR_TEST, false);
+		glstate::Enable(GL_DEPTH_TEST, false);
+		glstate::Enable(GL_ALPHA_TEST, false);
+		glstate::Enable(GL_CULL_FACE, false);
+		glstate::Enable(GL_STENCIL_TEST, false);
+		glstate::Enable(GL_BLEND, true);
+		glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE, GL_ONE);
+		glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glClearColor(0, 0, 0, 0);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glUseProgram(g.program);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		const uint8_t* base = reinterpret_cast<const uint8_t*>(g.vertices.data());
+		glVertexPointer(4, GL_FLOAT, sizeof(GlowVertex), base + offsetof(GlowVertex, pos));
+		glEnableClientState(GL_VERTEX_ARRAY);
+		glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(GlowVertex), base + offsetof(GlowVertex, color));
+		glEnableClientState(GL_COLOR_ARRAY);
+		glDisableClientState(GL_NORMAL_ARRAY);
+		glClientActiveTexture(GL_TEXTURE0);
+		glTexCoordPointer(2, GL_FLOAT, sizeof(GlowVertex), base + offsetof(GlowVertex, uv));
+		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+		glActiveTexture(GL_TEXTURE0);
+		for (const GlowRun& run : g.runs)
+		{
+			glBindTexture(GL_TEXTURE_2D, run.texture);
+			glUniform1f(g.alphaAt, run.alpha);
+			glUniform1f(g.shareAt, run.share);
+			glDrawArrays(GL_TRIANGLES, static_cast<GLint>(run.first), static_cast<GLsizei>(run.count));
+		}
+		//the read back, into a buffer: the driver copies it when the drawing is done, nothing waits for it here
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, g.pixels[slot]);
+		glReadBuffer(GL_COLOR_ATTACHMENT0);
+		glReadPixels(0, 0, GLOW_WIDTH, GLOW_HEIGHT, GL_RGBA, GL_FLOAT, nullptr);
+		glReadBuffer(GL_COLOR_ATTACHMENT1);
+		glReadPixels(0, 0, GLOW_WIDTH, GLOW_HEIGHT, GL_RGBA, GL_FLOAT, reinterpret_cast<void*>(GLOW_WIDTH * GLOW_HEIGHT * 4 * sizeof(float)));
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		if (timing)
+		{
+			glEndQuery(GL_TIME_ELAPSED);
+			g.timing[slot] = true;
+		}
+		glstate::RestoreClient(client);
+		glBindTexture(GL_TEXTURE_2D, unit0);
+		glActiveTexture(active);
+		glUseProgram(static_cast<GLuint>(program));
+		glClearColor(clear[0], clear[1], clear[2], clear[3]);
+		glstate::Apply(game);
+		g.waiting[slot] = true;
+		g.camera[slot] = stageLight.view;
+	}
+
+	//SwapBuffers in battle: the last frame's grid into lights, this frame's onto the grid
+	void GlowsFrameEnd()
+	{
+		Glows& g = glows;
+		if (!EFFECT_LIGHTS || currentMode != MODE_BATTLE)
+		{
+			g.vertices.clear();
+			g.runs.clear();
+			g.waiting[0] = g.waiting[1] = false;
+			g.lights.Clear();
+			g.statsFrom = 0;
+			return;
+		}
+		const long long started = Ticks();
+		const int write = static_cast<int>(g.frame & 1), read = write ^ 1;
+		std::vector<scenelight::EffectLight> seen;
+		if (g.waiting[read])
+		{
+			g.waiting[read] = false;
+			glBindBuffer(GL_PIXEL_PACK_BUFFER, g.pixels[read]);
+			if (const float* data = static_cast<const float*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)))
+			{
+				scenelight::GlowGrid grid;
+				grid.width = GLOW_WIDTH;
+				grid.height = GLOW_HEIGHT;
+				grid.cells.resize(static_cast<size_t>(GLOW_WIDTH) * GLOW_HEIGHT * 5);
+				const float* info = data + GLOW_WIDTH * GLOW_HEIGHT * 4;
+				for (int y = 0; y < GLOW_HEIGHT; y++)
+					for (int x = 0; x < GLOW_WIDTH; x++)
+					{
+						//the grid's rows top first; OpenGL's bottom first
+						const size_t from = (static_cast<size_t>(GLOW_HEIGHT - 1 - y) * GLOW_WIDTH + x) * 4;
+						float* to = &grid.cells[(static_cast<size_t>(y) * GLOW_WIDTH + x) * 5];
+						to[0] = data[from];
+						to[1] = data[from + 1];
+						to[2] = data[from + 2];
+						to[3] = info[from];
+						to[4] = info[from + 1];
+					}
+				glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+				for (const scenelight::Glow& glow : scenelight::FindGlows(grid, static_cast<int>(scenelight::MAX_EFFECT_LIGHTS), 10, 0.02))
+					seen.push_back(scenelight::GlowToLight(g.camera[read], glow, EFFECT_LIGHTS_STRENGTH));
+			}
+			glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		}
+		g.lights.Frame(seen, 0.75);
+		if (g.timing[read])
+		{
+			GLint available = 0;
+			glGetQueryObjectiv(g.timer[read], GL_QUERY_RESULT_AVAILABLE, &available);
+			if (available)
+			{
+				GLuint64 ns = 0;
+				glGetQueryObjectui64v(g.timer[read], GL_QUERY_RESULT, &ns);
+				g.gpu += ns / 1e6;
+				g.timed++;
+				g.timing[read] = false;
+			}
+		}
+		if (!g.runs.empty() && stageLight.camera && MakeGlows())
+			GatherGlows(write);
+		g.vertices.clear();
+		g.runs.clear();
+		g.frame++;
+		g.cpu += Ticks() - started;
+		g.frames++;
+		g.lit += g.lights.Lights().size();
+		//what it costs, every 10 s of battle (SCENE_DEBUG)
+		const ULONGLONG tick = GetTickCount64();
+		if (g.statsFrom == 0)
+			g.statsFrom = tick;
+		else if (SCENE_DEBUG && tick - g.statsFrom >= 10000 && g.frames > 0)
+		{
+			LARGE_INTEGER frequency;
+			QueryPerformanceFrequency(&frequency);
+			const double frames = static_cast<double>(g.frames);
+			OutputDebug("EFFECT_LIGHTS: the last %.0f s: %.1f glowing draws a frame (%.0f corners), %.1f lights on; CPU %.3f ms a frame, GPU %s\n",
+				(tick - g.statsFrom) / 1000.0, g.draws / frames, g.corners / frames, g.lit / frames, g.cpu * 1000.0 / frequency.QuadPart / frames,
+				g.timed > 0 ? (std::to_string(g.gpu / g.timed).substr(0, 5) + " ms a gathering pass").c_str() : "not measured");
+			g.statsFrom = tick;
+			g.draws = g.corners = g.frames = g.lit = g.timed = 0;
+			g.cpu = 0;
+			g.gpu = 0;
+		}
+	}
 }
 
 //the glTexImage2D / glTexSubImage2D hooks: the game fills a texture (its type is the one of the upload under way)
@@ -1054,6 +1422,14 @@ bool SceneLightBeforeDraw(const GLenum drawMode, const int count, const GLenum i
 				LogProjection(program, count, true);
 		}
 	}
+	//EFFECT_LIGHTS: a draw that adds light in battle (a spell, a GF's fire) is kept to light the stage in the next frames
+	if (EFFECT_LIGHTS && mode == MODE_BATTLE && glstate::BlendOn() && glstate::BlendEquationRgb() == GL_FUNC_ADD)
+	{
+		GLint source = 0, destination = 0;
+		glstate::BlendFactors(source, destination);
+		if (destination == GL_ONE)
+			KeepGlow(program, drawMode, count, indexType, indices);
+	}
 	//a fighter: drawn by DEMASTER with smooth normals (its maps' units are set above, as for the game's draw)
 	if (stageLit && drawValue[0] < 0.5f && knownFighter && DrawFighter(program, drawMode, count, indexType, indices, sceneValue, mapsValue, drawValue))
 		return true;
@@ -1081,7 +1457,10 @@ void SceneLightFrameEnd()
 {
 	sceneFrame++;
 	if (SCENE_LIGHT)
+	{
 		FightersFrameEnd();
+		GlowsFrameEnd(); //EFFECT_LIGHTS
+	}
 	if (SCENE_LIGHT && currentMode != MODE_BATTLE)
 		cameraFilter.Reset(); //the next battle starts with its own camera
 }

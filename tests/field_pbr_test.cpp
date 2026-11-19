@@ -2106,6 +2106,107 @@ static void TestSceneCamera()
 	CHECK(w.empty() && s.battle.sun == 0.35f && s.battle.sunAzimuth == 30.0f && s.rules.empty());
 }
 
+//EFFECT_LIGHTS: glows found on the grid, turned into lights of the stage, and kept steady from frame to frame
+static void TestEffectLights()
+{
+	//a 40 x 30 grid with two glows: a big orange one around cell (10, 8) at depth 3000, a small blue one at (32, 20), 1500
+	scenelight::GlowGrid grid;
+	grid.width = 40;
+	grid.height = 30;
+	grid.cells.assign(40 * 30 * 5, 0.0f);
+	const auto put = [&](const int x, const int y, const float r, const float g, const float b, const float depth)
+	{
+		float* c = &grid.cells[(static_cast<size_t>(y) * 40 + x) * 5];
+		const float bright = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+		c[0] += r;
+		c[1] += g;
+		c[2] += b;
+		c[3] += bright;
+		c[4] += bright * depth;
+	};
+	for (int y = 6; y <= 10; y++)
+		for (int x = 8; x <= 12; x++)
+			put(x, y, 1.0f, 0.5f, 0.1f, 3000.0f);
+	put(32, 20, 0.1f, 0.2f, 0.9f, 1500.0f);
+	const std::vector<scenelight::Glow> glows = scenelight::FindGlows(grid, 4, 5, 0.02);
+	CHECK(glows.size() == 2);
+	if (glows.size() == 2)
+	{
+		NEAR(glows[0].x, 10.5 * 16, 1e-6); //the middle of cell 10: 168 on the 640-wide screen
+		NEAR(glows[0].y, 8.5 * 16, 1e-6);
+		NEAR(glows[0].depth, 3000, 1e-3);
+		NEAR(glows[0].rgb[0], 25.0, 1e-4);
+		CHECK(glows[0].spread > 16 && glows[0].spread < 40);
+		NEAR(glows[1].x, 32.5 * 16, 1e-6);
+		NEAR(glows[1].depth, 1500, 1e-3);
+		CHECK(glows[1].spread == 0);
+	}
+	CHECK(scenelight::FindGlows(grid, 1, 5, 0.02).size() == 1);
+	CHECK(scenelight::FindGlows(grid, 4, 5, 10.0).empty()); //nothing that bright
+	//a glow back into the stage: where the camera saw it
+	scenelight::Camera camera;
+	camera.distance = 512;
+	camera.centreX = 160;
+	camera.centreY = 112;
+	const double c = std::cos(0.3), s = std::sin(0.3);
+	const double r[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
+	for (int i = 0; i < 9; i++)
+		camera.r[i] = r[i];
+	camera.t[0] = 100;
+	camera.t[1] = 300;
+	camera.t[2] = 6000;
+	if (!glows.empty())
+	{
+		const scenelight::EffectLight light = scenelight::GlowToLight(camera, glows[0], 1.0);
+		double view[3];
+		scenelight::PlaceToView(camera, light.stage, view);
+		NEAR(view[2], 3000, 1e-3);
+		NEAR(2.0 * (camera.centreX + camera.distance * view[0] / view[2]), glows[0].x, 1e-6);
+		NEAR(2.0 * (camera.centreY + camera.distance * view[1] / view[2]), glows[0].y, 1e-6);
+		NEAR(light.colour[0], 25.0 / 16.0, 1e-5); //the summed light / 16
+		CHECK(light.range >= 1500 && light.range <= 6000);
+		//very bright: at most 4
+		scenelight::Glow blaze = glows[0];
+		for (double& v : blaze.rgb)
+			v *= 100;
+		const scenelight::EffectLight capped = scenelight::GlowToLight(camera, blaze, 1.0);
+		NEAR(std::max({ capped.colour[0], capped.colour[1], capped.colour[2] }), 4.0, 1e-5);
+	}
+	//frame to frame: a light seen again keeps the brighter of now and before (faded); one not seen fades and goes
+	scenelight::EffectLights lights;
+	scenelight::EffectLight a;
+	a.stage[0] = 0;
+	a.colour[0] = 1.0f;
+	a.range = 2000;
+	lights.Frame({ a }, 0.75);
+	CHECK(lights.Lights().size() == 1);
+	scenelight::EffectLight dimmer = a;
+	dimmer.stage[0] = 300; //moved a little
+	dimmer.colour[0] = 0.2f;
+	lights.Frame({ dimmer }, 0.75);
+	CHECK(lights.Lights().size() == 1);
+	if (!lights.Lights().empty())
+	{
+		NEAR(lights.Lights()[0].colour[0], 0.75, 1e-6);
+		NEAR(lights.Lights()[0].stage[0], 300, 1e-9);
+	}
+	for (int i = 0; i < 20; i++)
+		lights.Frame({}, 0.75);
+	CHECK(lights.Lights().empty());
+	//never more than four
+	std::vector<scenelight::EffectLight> many;
+	for (int i = 0; i < 7; i++)
+	{
+		scenelight::EffectLight l;
+		l.stage[0] = i * 10000.0;
+		l.colour[1] = 0.1f * (i + 1);
+		l.range = 2000;
+		many.push_back(l);
+	}
+	lights.Frame(many, 0.75);
+	CHECK(lights.Lights().size() == scenelight::MAX_EFFECT_LIGHTS && lights.Lights()[0].colour[1] > lights.Lights()[3].colour[1]);
+}
+
 //LUT: the tables (strips, .cube), the shaders' arithmetic on the CPU, and which times are mixed when
 static void TestLut()
 {
@@ -2277,6 +2378,7 @@ static void TestLut()
 int main(int argc, char** argv)
 {
 	TestLut();
+	TestEffectLights();
 	TestSceneCamera();
 	TestSceneLight();
 	TestEmissivePicture();

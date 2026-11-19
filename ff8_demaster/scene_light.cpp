@@ -560,6 +560,160 @@ namespace scenelight
 		view[2] = z;
 	}
 
+	const char* const GLOW_VERTEX_SHADER = "#version 120\nvarying float demasterGlowDepth;\nvoid main() {\n\tvec4 p = gl_Vertex;\n"
+		"\tdemasterGlowDepth = p.w > 0.0 ? 1.0 / p.w : 0.0;\n\tgl_Position = vec4(p.x / 320.0 - 1.0, 1.0 - p.y / 240.0, 0.0, 1.0);\n"
+		"\tgl_FrontColor = gl_Color.bgra;\n\tgl_TexCoord[0] = gl_MultiTexCoord0;\n}\n";
+	const char* const GLOW_FRAGMENT_SHADER = "#version 120\nuniform sampler2D tex;\nuniform float demasterGlowAlpha;\nuniform float demasterGlowShare;\n"
+		"varying float demasterGlowDepth;\nvoid main() {\n\tvec4 t = texture2D(tex, gl_TexCoord[0].st);\n"
+		"\tvec3 light = pow(clamp(t.rgb * gl_Color.rgb, 0.0, 1.0), vec3(2.2)) * (mix(1.0, t.a, demasterGlowAlpha) * demasterGlowShare);\n"
+		"\tfloat b = dot(light, vec3(0.2126, 0.7152, 0.0722));\n\tgl_FragData[0] = vec4(light, 0.0);\n"
+		"\tgl_FragData[1] = vec4(b, b * demasterGlowDepth, 0.0, 0.0);\n}\n";
+
+	std::vector<Glow> FindGlows(GlowGrid grid, const int most, const int radius, const double least)
+	{
+		std::vector<Glow> glows;
+		const int w = grid.width, h = grid.height;
+		if (w <= 0 || h <= 0 || grid.cells.size() != static_cast<size_t>(w) * h * 5)
+			return glows;
+		const double cellW = 640.0 / w, cellH = 480.0 / h;
+		while (static_cast<int>(glows.size()) < most)
+		{
+			int best = -1;
+			double brightest = least;
+			for (int i = 0; i < w * h; i++)
+				if (grid.cells[static_cast<size_t>(i) * 5 + 3] > brightest)
+				{
+					brightest = grid.cells[static_cast<size_t>(i) * 5 + 3];
+					best = i;
+				}
+			if (best < 0)
+				break;
+			//the glow: the cells joined to the brightest one (side by side) that are at least a twentieth as bright, not
+			//farther from it than `radius` cells; they are taken off the grid
+			const int bx = best % w, by = best / w;
+			const double floor = std::max(least, brightest / 20.0);
+			Glow g;
+			double sx = 0, sy = 0, sxx = 0, syy = 0, depth = 0;
+			std::vector<int> stack{ best };
+			std::vector<uint8_t> seen(static_cast<size_t>(w) * h, 0);
+			seen[best] = 1;
+			while (!stack.empty())
+			{
+				const int i = stack.back();
+				stack.pop_back();
+				const int x = i % w, y = i / w;
+				float* c = &grid.cells[static_cast<size_t>(i) * 5];
+				const double b = c[3];
+				for (int k = 0; k < 3; k++)
+					g.rgb[k] += c[k];
+				g.brightness += b;
+				depth += c[4];
+				const double px = (x + 0.5) * cellW, py = (y + 0.5) * cellH;
+				sx += b * px;
+				sy += b * py;
+				sxx += b * px * px;
+				syy += b * py * py;
+				for (int k = 0; k < 5; k++)
+					c[k] = 0;
+				const int next[4][2] = { { x - 1, y }, { x + 1, y }, { x, y - 1 }, { x, y + 1 } };
+				for (const auto& n : next)
+				{
+					if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h || std::abs(n[0] - bx) > radius || std::abs(n[1] - by) > radius)
+						continue;
+					const int j = n[1] * w + n[0];
+					if (!seen[j] && grid.cells[static_cast<size_t>(j) * 5 + 3] >= floor)
+					{
+						seen[j] = 1;
+						stack.push_back(j);
+					}
+				}
+			}
+			if (g.brightness <= 0)
+				break;
+			g.x = sx / g.brightness;
+			g.y = sy / g.brightness;
+			g.depth = depth / g.brightness;
+			g.spread = std::sqrt(std::max(0.0, (sxx / g.brightness - g.x * g.x) + (syy / g.brightness - g.y * g.y)));
+			glows.push_back(g);
+		}
+		return glows;
+	}
+
+	EffectLight GlowToLight(const Camera& camera, const Glow& glow, const double strength)
+	{
+		EffectLight light;
+		double view[3];
+		ScreenToView(camera, glow.x, glow.y, glow.depth > 0 ? 1.0 / glow.depth : 0.0, view);
+		PlaceToStage(camera, view, light.stage);
+		double rgb[3], most = 0;
+		for (int k = 0; k < 3; k++)
+		{
+			rgb[k] = glow.rgb[k] * strength / 16.0;
+			most = std::max(most, rgb[k]);
+		}
+		const double scale = most > 4.0 ? 4.0 / most : 1.0;
+		for (int k = 0; k < 3; k++)
+			light.colour[k] = static_cast<float>(rgb[k] * scale);
+		//its spread on the screen at its depth, in view units (the stage's: the camera only turns and moves)
+		const double d = camera.distance > 0 ? camera.distance : 1.0;
+		const double spread = glow.spread * 0.5 * std::max(glow.depth, 1.0) / d;
+		light.range = static_cast<float>(std::clamp(3.0 * spread, 1500.0, 6000.0));
+		return light;
+	}
+
+	void EffectLights::Frame(const std::vector<EffectLight>& seen, const double fade)
+	{
+		const auto brightness = [](const EffectLight& l) { return std::max({ l.colour[0], l.colour[1], l.colour[2] }); };
+		const auto apart = [](const EffectLight& a, const EffectLight& b)
+		{
+			double s = 0;
+			for (int k = 0; k < 3; k++)
+				s += (a.stage[k] - b.stage[k]) * (a.stage[k] - b.stage[k]);
+			return std::sqrt(s);
+		};
+		const double keep = std::clamp(fade, 0.0, 1.0);
+		std::vector<EffectLight> next;
+		std::vector<bool> used(lights.size(), false);
+		for (const EffectLight& now : seen)
+		{
+			EffectLight l = now;
+			int nearest = -1;
+			double best = 1e30;
+			for (size_t i = 0; i < lights.size(); i++)
+			{
+				const double a = apart(lights[i], now);
+				if (!used[i] && a < std::max(lights[i].range, now.range) * 0.5 && a < best)
+				{
+					best = a;
+					nearest = static_cast<int>(i);
+				}
+			}
+			if (nearest >= 0)
+			{
+				used[nearest] = true;
+				const EffectLight& old = lights[nearest];
+				for (int k = 0; k < 3; k++)
+					l.colour[k] = std::max(now.colour[k], static_cast<float>(old.colour[k] * keep));
+				l.range = std::max(now.range, static_cast<float>(old.range * keep));
+			}
+			next.push_back(l);
+		}
+		for (size_t i = 0; i < lights.size(); i++)
+		{
+			if (used[i])
+				continue;
+			EffectLight l = lights[i];
+			for (float& c : l.colour)
+				c = static_cast<float>(c * keep);
+			if (brightness(l) >= 0.02f)
+				next.push_back(l);
+		}
+		std::sort(next.begin(), next.end(), [&](const EffectLight& a, const EffectLight& b) { return brightness(a) > brightness(b); });
+		if (next.size() > MAX_EFFECT_LIGHTS)
+			next.resize(MAX_EFFECT_LIGHTS);
+		lights = std::move(next);
+	}
+
 	bool FitSunShadow(const double towards[3], const std::vector<float>& places, const double margin, float out[16])
 	{
 		const double length = std::sqrt(towards[0] * towards[0] + towards[1] * towards[1] + towards[2] * towards[2]);

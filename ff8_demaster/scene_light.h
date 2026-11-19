@@ -146,6 +146,56 @@ namespace scenelight
 		bool has = false, hasPending = false;
 	};
 
+	//--- lights from the effects (EFFECT_LIGHTS): a spell, a GF's fire, a limit's flash lights the stage and the fighters
+	//What the frame's glowing draws (the ones that add light) put on the screen, gathered on a small grid over the game's
+	//640 x 480 screen (DEMASTER draws them a second time into it, on the GPU): per cell the light added (linear r g b), its
+	//brightness, and its brightness times its depth (the cell's depth is that / the brightness)
+	struct GlowGrid
+	{
+		int width = 0, height = 0;
+		std::vector<float> cells; //5 per cell, rows top first
+	};
+	//one glow: where on the screen (640 x 480) and how deep, the light it adds (summed over its cells), how far it spreads
+	//on the screen (pixels: the brightness-weighted distance from its middle)
+	struct Glow
+	{
+		double x = 0, y = 0, depth = 0;
+		double rgb[3] = { 0, 0, 0 };
+		double brightness = 0, spread = 0;
+	};
+	//The shaders DEMASTER gathers with (GLSL 1.20; uniforms: tex, demasterGlowAlpha 1 = the light is times the texture's
+	//alpha, demasterGlowShare its share; two targets: the light, and its brightness with brightness x depth). The corners
+	//are the game's own (TLVERTEX: x, y on its 640 x 480 screen, w = rhw), colour as the game sends it (BGRA)
+	extern const char* const GLOW_VERTEX_SHADER;
+	extern const char* const GLOW_FRAGMENT_SHADER;
+	//The brightest few: the brightest cell left and the cells joined to it that are at least a twentieth as bright, up to
+	//`radius` cells from it, are one glow (and taken off the grid), until there are `most` or nothing brighter than
+	//`least` is left
+	std::vector<Glow> FindGlows(GlowGrid grid, int most, int radius, double least);
+	constexpr size_t MAX_EFFECT_LIGHTS = 4;
+	struct EffectLight
+	{
+		double stage[3] = { 0, 0, 0 }; //the stage's space
+		float colour[3] = { 0, 0, 0 }; //linear
+		float range = 0;
+	};
+	//A glow as a light in the stage's space: back through the camera from its place on the screen and its depth, its colour
+	//the summed light x strength / 16 (a glow of sixteen cells at full white is a light of 1), at most 4 bright; its range
+	//three times its spread in the stage's units, 1500 to 6000
+	EffectLight GlowToLight(const Camera& camera, const Glow& glow, double strength);
+	//The effect lights from frame to frame. A spell flickers and moves: a light of this frame takes the place of the one
+	//of the last frame nearest it (within its range), keeping the brighter of the two, the last one's faded by `fade`;
+	//lights not seen again fade by `fade` each frame and go below a brightness of 0.02. The brightest MAX_EFFECT_LIGHTS stay
+	class EffectLights
+	{
+	public:
+		void Frame(const std::vector<EffectLight>& seen, double fade);
+		const std::vector<EffectLight>& Lights() const { return lights; }
+		void Clear() { lights.clear(); }
+	private:
+		std::vector<EffectLight> lights;
+	};
+
 	//The sun or the moon over the stage, from the clock: towards it in the stage's space (unit; y is down there), its
 	//light's colour (linear), and how much of it there is (0 at the horizon, 1 from about 10 degrees up)
 	struct Sun

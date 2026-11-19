@@ -8,6 +8,7 @@
 //	   rhw = 1 / distance), with the camera a real battle had (the registers DEMASTER logged there); the shader has to find
 //	   the floor's place and direction again from that: the sun's part, one of the stage's own lights, a flat normal map.
 //	6. the colour grade (LUT): two LUTs mixed, part of the grade, in main.frag and main_char.frag, as lut_grade.h has it.
+//	7. EFFECT_LIGHTS: the gathering pass (two glowing quads drawn as the game does, found again where and how deep they are).
 //Run: scene_shader_test <DEMASTER_EXP/shaders folder>
 #define GL_GLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -431,6 +432,26 @@ int main(int argc, char** argv)
 			want[c] = level(linear(painted[c]) * (1.0 + colour[c] * reach * reach * (0.25 + 0.75 * facing)));
 		Check(std::abs(got[0] - want[0]) <= 2 && std::abs(got[1] - want[1]) <= 2 && std::abs(got[2] - want[2]) <= 2, "a light of the stage's own above the floor");
 		printf("stage, own light %.0f away: got %d %d %d, want %d %d %d\n", away, got[0], got[1], got[2], want[0], want[1], want[2]);
+		//the same light as an effect's (EFFECT_LIGHTS: slots 4-7): the same
+		{
+			float effectAt[32]{}, effectColour[32]{};
+			for (int c = 0; c < 4; c++)
+			{
+				effectAt[5 * 4 + c] = lightAt[c];
+				effectColour[5 * 4 + c] = lightColour[c];
+			}
+			glUniform4fv(at("demasterSceneLightAt[0]"), 8, effectAt);
+			glUniform4fv(at("demasterSceneLightColour[0]"), 8, effectColour);
+			uint8_t effect[4];
+			drawFloor(effect, px, py);
+			Check(effect[0] == got[0] && effect[1] == got[1] && effect[2] == got[2], "an effect's light (slot 5) lights the floor as a stage light does");
+			glUniform4fv(at("demasterSceneLightAt[0]"), 8, effectAt);
+			float none32[32]{};
+			glUniform4fv(at("demasterSceneLightAt[0]"), 8, none32);
+			glUniform4fv(at("demasterSceneLightColour[0]"), 8, none32);
+			glUniform4fv(at("demasterSceneLightAt[0]"), 4, lightAt);
+			glUniform4fv(at("demasterSceneLightColour[0]"), 4, lightColour);
+		}
 		//a fighter (not the stage) gets the lights but not the sun's part
 		sun(1, -0.2, 0.3, 0.8f, 1.0f);
 		glUniform4f(at("demasterSceneDraw"), 0, 0, 0, 0);
@@ -598,6 +619,100 @@ int main(int argc, char** argv)
 				worst = compare(got, 0.35, 0.7);
 				Check(worst <= 2, "LUT: main_char.frag grades the same (worst " + std::to_string(worst) + " levels)");
 			}
+		}
+	}
+
+	//7. EFFECT_LIGHTS: the gathering pass as DEMASTER does it (its shaders, two float targets of 40 x 30, added up): two
+	//glowing quads the way the game hands them over (corners on its 640 x 480 screen, w = rhw, colour BGRA), read back and
+	//found again on the grid, each where it was drawn, at its depth, in its colour
+	{
+		const GLuint gather = glCreateProgram();
+		glAttachShader(gather, Compile(GL_VERTEX_SHADER, scenelight::GLOW_VERTEX_SHADER));
+		glAttachShader(gather, Compile(GL_FRAGMENT_SHADER, scenelight::GLOW_FRAGMENT_SHADER));
+		glLinkProgram(gather);
+		GLint ok = 0;
+		glGetProgramiv(gather, GL_LINK_STATUS, &ok);
+		Check(ok != 0, "EFFECT_LIGHTS: the gathering shaders link");
+		if (ok)
+		{
+			const int W = 40, H = 30;
+			GLuint targets[2], fb = 0;
+			glGenTextures(2, targets);
+			for (const GLuint t : targets)
+			{
+				glBindTexture(GL_TEXTURE_2D, t);
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, W, H, 0, GL_RGBA, GL_FLOAT, nullptr);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			}
+			glGenFramebuffers(1, &fb);
+			glBindFramebuffer(GL_FRAMEBUFFER, fb);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, targets[0], 0);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, targets[1], 0);
+			const GLenum both[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+			glDrawBuffers(2, both);
+			Check(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "EFFECT_LIGHTS: the float targets");
+			glViewport(0, 0, W, H);
+			glDisable(GL_DEPTH_TEST);
+			glEnable(GL_BLEND);
+			glBlendFunc(GL_ONE, GL_ONE);
+			glClearColor(0, 0, 0, 0);
+			glClear(GL_COLOR_BUFFER_BIT);
+			glUseProgram(gather);
+			glUniform1i(glGetUniformLocation(gather, "tex"), 0);
+			glUniform1f(glGetUniformLocation(gather, "demasterGlowAlpha"), 1.0f);
+			glUniform1f(glGetUniformLocation(gather, "demasterGlowShare"), 1.0f);
+			const GLuint white = Texture1(255, 255, 255, 255);
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, white);
+			//a quad 160 x 128 around (200, 150) at depth 2500, orange (sent BGRA: blue first); one 64 x 64 around (520, 360) at 1200, blue
+			const auto quad = [](const float cx, const float cy, const float hw, const float hh, const float depth, const uint8_t b, const uint8_t g, const uint8_t r)
+			{
+				glBegin(GL_QUADS);
+				glColor4ub(b, g, r, 255);
+				glVertex4f(cx - hw, cy - hh, 0, 1.0f / depth);
+				glVertex4f(cx + hw, cy - hh, 0, 1.0f / depth);
+				glVertex4f(cx + hw, cy + hh, 0, 1.0f / depth);
+				glVertex4f(cx - hw, cy + hh, 0, 1.0f / depth);
+				glEnd();
+			};
+			quad(200, 150, 80, 64, 2500, 20, 128, 255);
+			quad(520, 360, 32, 32, 1200, 255, 80, 30);
+			std::vector<float> light(W * H * 4), info(W * H * 4);
+			glReadBuffer(GL_COLOR_ATTACHMENT0);
+			glReadPixels(0, 0, W, H, GL_RGBA, GL_FLOAT, light.data());
+			glReadBuffer(GL_COLOR_ATTACHMENT1);
+			glReadPixels(0, 0, W, H, GL_RGBA, GL_FLOAT, info.data());
+			scenelight::GlowGrid grid;
+			grid.width = W;
+			grid.height = H;
+			grid.cells.resize(W * H * 5);
+			for (int y = 0; y < H; y++)
+				for (int x = 0; x < W; x++)
+				{
+					const size_t from = (static_cast<size_t>(H - 1 - y) * W + x) * 4; //as DEMASTER turns it: rows top first
+					float* to = &grid.cells[(static_cast<size_t>(y) * W + x) * 5];
+					to[0] = light[from];
+					to[1] = light[from + 1];
+					to[2] = light[from + 2];
+					to[3] = info[from];
+					to[4] = info[from + 1];
+				}
+			const std::vector<scenelight::Glow> found = scenelight::FindGlows(grid, 4, 10, 0.02); //as DEMASTER does
+			Check(found.size() == 2, "EFFECT_LIGHTS: two glows found (" + std::to_string(found.size()) + ")");
+			if (found.size() == 2)
+			{
+				const scenelight::Glow& big = found[0];
+				const scenelight::Glow& small = found[1];
+				printf("EFFECT_LIGHTS: glows at %.0f %.0f depth %.0f (rgb %.1f %.1f %.1f) and %.0f %.0f depth %.0f\n", big.x, big.y, big.depth,
+					big.rgb[0], big.rgb[1], big.rgb[2], small.x, small.y, small.depth);
+				Check(std::fabs(big.x - 200) < 12 && std::fabs(big.y - 150) < 12 && std::fabs(big.depth - 2500) < 25, "EFFECT_LIGHTS: the orange one where it was drawn, at its depth");
+				Check(big.rgb[0] > big.rgb[1] && big.rgb[1] > big.rgb[2], "EFFECT_LIGHTS: the orange one is orange (the colour sent BGRA)");
+				Check(std::fabs(small.x - 520) < 12 && std::fabs(small.y - 360) < 12 && std::fabs(small.depth - 1200) < 15 && small.rgb[2] > small.rgb[0],
+					"EFFECT_LIGHTS: the blue one where it was drawn, at its depth, blue");
+			}
+			glDisable(GL_BLEND);
+			glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 		}
 	}
 

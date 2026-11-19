@@ -93,6 +93,8 @@ void ReadConfigFile()
     FIELD_FRAME_LOG = conf.GetInteger("", "FIELD_FRAME_LOG", 0);
     SCENE_LIGHT = conf.GetInteger("", "SCENE_LIGHT", 1);
     SCENE_DEBUG = conf.GetInteger("", "SCENE_DEBUG", 0);
+    EFFECT_LIGHTS = conf.GetInteger("", "EFFECT_LIGHTS", 1);
+    EFFECT_LIGHTS_STRENGTH = conf.GetReal("", "EFFECT_LIGHTS_STRENGTH", 1.0);
     LUT = conf.GetInteger("", "LUT", 1);
     LUT_STRENGTH = conf.GetReal("", "LUT_STRENGTH", 1.0);
     LUT_INSIDE = conf.GetReal("", "LUT_INSIDE", 0.5);
