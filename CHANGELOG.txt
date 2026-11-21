@@ -1,7 +1,7 @@
 DEMASTER changelog (MCINDUS's continuation)
 
-v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps, smooth ground and lights
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+v15.15 (in the source; not packaged yet) - game cameras, LUT colour grading, island padding, effect lights, per-save time, world sun, Deling by the story, world maps, smooth ground, lights, fieldprep battle
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Built in steps. Not run in the game yet; tested on Linux as before.
 The battle camera from the game itself (first step)
   - The original game's code is in the Remastered install (FFVIII_EN.exe.dat, FFVIII_JP.exe.dat: the PC exe's image,
@@ -186,6 +186,25 @@ Lights on the world map at night (eleventh step; new: light = in [world], Ctrl+F
   - A battle rule keeps all its lights now (a stage lights its first four); world rules' lights reach the world map.
   - Tests: field_pbr_test (the cell sums against the game's own for the target, round trips, the map's wrap, a target
     just outside the map, the nearest lights, the file's limits); scene_shader_test (the sky takes no lights).
+fieldprep battle: the battle textures packed and as BC7 DDS (twelfth step)
+  - New command: fieldprep battle <image or folder>. For one image (or any of its maps) or the whole hd_new folder:
+    every image there, the stages' pages and the fighters', enemies', bosses' and GFs' textures, each with whatever
+    maps it has (--match a0stg* for some only; several with commas). BC7 DDS files with every mip level, made the way
+    fieldprep model makes the field models' (the albedo in linear light, cut-outs keeping their coverage, normals unit
+    length, island padding): <image>.dds (the albedo: _A, _AM, else the image), _N.dds, _ORMH.dds packed from _O, _R,
+    _M, _H (or a packed _ORMH.png; missing ones plain, the height 1: the surface), _E.dds and _EC.dds.
+  - An animated page's maps can be one set for all its frames (a0stg012_17_N.png without an a0stg012_17.png): made at
+    their own size. Only what changed is made again (--force: all); the log is fieldprep_battle.txt in the folder.
+  - _E: DEMASTER now adds an _E's colour and doesn't read its alpha (battle stages read _E as well as _EC now; on the
+    world map an _E with an alpha used to be taken as its coverage, which a BC7 DDS always has). fieldprep writes
+    _E.dds with a white alpha (BC7 keeps the colour better) and an _E.png with an alpha of its own as _EC.dds (the
+    picture of the glows with its coverage), and says so; an _EC.dds left from before such a change is pointed out.
+  - fieldprep model is as it was (the new names _ORMH, _H and _EC are ignored there).
+  - Tests (fieldprep_model_test, 5,617 checks): the names, the ORMH packing and its defaults, the emissive levels in
+    linear light, the patterns; a whole folder (a stage page with separate O R M H, a normal map and a coloured glow,
+    an animated page with one normal map for its frames, an enemy without maps, a character with a packed ORMH, a GF
+    with an _EC, a boss whose _E has an alpha) read back level by level: every channel where it should be, the formats
+    (BC7 sRGB for the albedo and the glows), the sizes; up to date the second time, --match, one image named by a map.
 
 v15.14 (in the source; not packaged yet) - lights by time of day, night pictures, fieldprep stops on missing layers
 -----------------------------------------------------------------------------------------------------------------------

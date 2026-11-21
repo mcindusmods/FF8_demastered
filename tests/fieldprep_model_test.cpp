@@ -414,6 +414,145 @@ static void TestFolder(const fs::path& dir, double& seconds1024)
 	}
 }
 
+//fieldprep battle: the battle textures' folder, every image with whatever maps it has
+static void TestBattle(const fs::path& dir)
+{
+	//names: the stage pages' maps, an animated page's frames
+	std::string suffix;
+	CHECK(ModelStem("a0stg012_16_ORMH.png", &suffix) == "a0stg012_16" && suffix == "_ORMH");
+	CHECK(ModelStem("a0stg012_16_H.png", &suffix) == "a0stg012_16" && suffix == "_H");
+	CHECK(ModelStem("a0stg012_16_EC.png", &suffix) == "a0stg012_16" && suffix == "_EC");
+	CHECK(ModelStem("a0stg012_16_E.png", &suffix) == "a0stg012_16" && suffix == "_E");
+	CHECK(ModelStem("a0stg012_16_3.png", &suffix) == "a0stg012_16_3" && suffix.empty());
+	CHECK(ModelStem("c0m001_0.png", &suffix) == "c0m001_0" && suffix.empty());
+	CHECK(NameMatches("", "c0m001_0") && NameMatches("a0stg*", "A0STG012_16") && !NameMatches("a0stg*", "c0m001_0"));
+	CHECK(NameMatches("c0m*, mag*", "mag001_0") && NameMatches("c0m*,mag*", "c0m001_0") && !NameMatches("c0m*,mag*", "d0c000_0"));
+	//ORMH: plain where a map is missing, the height 1 (the surface)
+	{
+		const Image h = Grey(2, 2, [](int x, int) { return x ? 40 : 220; });
+		const Image ormh = PackOrmh(2, 2, nullptr, nullptr, nullptr, &h);
+		CHECK(ormh.rgba[0] == 255 && ormh.rgba[1] == 179 && ormh.rgba[2] == 0 && ormh.rgba[3] == 220 && ormh.rgba[7] == 40);
+		const Image plain = PackOrmh(1, 1, nullptr, nullptr, nullptr, nullptr);
+		CHECK(plain.rgba[3] == 255);
+	}
+	//the emissive map's levels: colour in linear light whatever the alpha (a halo where the coverage is 0 still averages in);
+	//added: the alpha white (nothing reads it); a coverage averaged on its own
+	{
+		const Image glow = Make(2, 2, [](int x, int y, uint8_t* p) { const uint8_t v = (x + y) % 2 ? 255 : 0; p[0] = v; p[1] = v / 2; p[2] = 0; p[3] = v ? 0 : 255; });
+		const std::vector<Image> added = EmissiveLevels(glow, true), covered = EmissiveLevels(glow, false);
+		CHECK(added.size() == 2 && added[0].rgba[3] == 255 && added[1].rgba[3] == 255 && std::abs(added[1].rgba[0] - 188) <= 1);
+		CHECK(std::abs(covered[1].rgba[0] - 188) <= 1 && std::abs(covered[1].rgba[3] - 128) <= 1 && covered[0].rgba[3] == 255 && covered[0].rgba[7] == 0);
+	}
+
+	fs::remove_all(dir);
+	fs::create_directories(dir);
+	std::string error;
+	const auto save = [&](const std::string& name, const Image& im) { CHECK(SavePng((dir / name).string(), im, error)); };
+	//a stage page with separate O, R, M, H, a normal map and a coloured glow on black (no alpha: added)
+	save("a0stg012_16.png", Albedo(256, 256, false));
+	save("a0stg012_16_N.png", Normals(256, 256));
+	save("a0stg012_16_O.png", Grey(256, 256, [](int x, int y) { return 255 - ((x / 16 + y / 16) % 3) * 40; }));
+	save("a0stg012_16_R.png", Grey(256, 256, [](int x, int) { return x; }));
+	save("a0stg012_16_M.png", Grey(256, 256, [](int x, int y) { return (x < 128 && y < 128) ? 255 : 0; }));
+	save("a0stg012_16_H.png", Grey(256, 256, [](int, int y) { return y; }));
+	Image glow = Make(256, 256, [](int x, int y, uint8_t* p)
+	{
+		const bool lit = (x - 200) * (x - 200) + (y - 60) * (y - 60) < 400;
+		p[0] = lit ? 255 : 0; p[1] = lit ? 180 : 0; p[2] = lit ? 60 : 0; p[3] = 255;
+	});
+	save("a0stg012_16_E.png", glow);
+	//an animated page: two frames, one normal map for both (no image of the page itself), at half their size
+	save("a0stg012_17_0.png", Albedo(128, 128, false));
+	save("a0stg012_17_1.png", Albedo(128, 128, false));
+	save("a0stg012_17_N.png", Normals(64, 64));
+	//an enemy without maps (its albedo only), a character with a packed ORMH, a GF with a picture of its glows
+	save("c0m001_0.png", Albedo(128, 64, true));
+	save("d0c000_0.png", Albedo(64, 64, false));
+	save("d0c000_0_ORMH.png", Make(64, 64, [](int x, int y, uint8_t* p) { p[0] = 255; p[1] = static_cast<uint8_t>(x * 4); p[2] = 0; p[3] = static_cast<uint8_t>(y * 4); }));
+	save("mag001_0.png", Albedo(64, 64, false));
+	save("mag001_0_EC.png", Make(64, 64, [](int x, int, uint8_t* p) { p[0] = 250; p[1] = 240; p[2] = 200; p[3] = x < 32 ? 255 : 0; }));
+	//a boss whose _E has an alpha of its own: a picture of the glows, written as _EC
+	save("c0m100_0.png", Albedo(64, 64, false));
+	save("c0m100_0_E.png", Make(64, 64, [](int, int y, uint8_t* p) { p[0] = 40; p[1] = 200; p[2] = 255; p[3] = y < 16 ? 255 : 0; }));
+
+	ModelOptions o;
+	o.threads = std::max(1u, std::thread::hardware_concurrency());
+	CHECK(Battle(dir.string(), o) == 0);
+	for (const char* name : { "a0stg012_16.dds", "a0stg012_16_N.dds", "a0stg012_16_ORMH.dds", "a0stg012_16_E.dds", "a0stg012_17_0.dds",
+		"a0stg012_17_1.dds", "a0stg012_17_N.dds", "c0m001_0.dds", "d0c000_0.dds", "d0c000_0_ORMH.dds", "mag001_0.dds", "mag001_0_EC.dds",
+		"c0m100_0.dds", "c0m100_0_EC.dds", "fieldprep_battle.txt" })
+	{
+		const bool there = fs::exists(dir / name);
+		CHECK(there);
+		if (!there)
+			printf("  (missing: %s)\n", name);
+	}
+	CHECK(!fs::exists(dir / "a0stg012_17.dds") && !fs::exists(dir / "a0stg012_16_ORME.dds") && !fs::exists(dir / "c0m001_0_N.dds"));
+	CHECK(!fs::exists(dir / "c0m100_0_E.dds") && !fs::exists(dir / "a0stg012_16_EC.dds"));
+	//the packed ORMH: each channel its own map, the height in the alpha
+	{
+		const DdsFile d = ReadDds(dir / "a0stg012_16_ORMH.dds");
+		CHECK(d.ok && d.mips == 9 && d.dxgi == 98 && d.width == 256);
+		const auto at = [&](int x, int y, int c) { return static_cast<int>(d.levels[0].rgba[(static_cast<size_t>(y) * 256 + x) * 4 + c]); };
+		CHECK(at(20, 20, 2) > 245 && at(200, 200, 2) < 10); //metallic
+		CHECK(std::abs(at(100, 150, 1) - 100) <= 6); //roughness: the x ramp
+		CHECK(std::abs(at(40, 30, 3) - 30) <= 6 && std::abs(at(40, 220, 3) - 220) <= 6); //height: the y ramp
+		CHECK(at(5, 5, 0) > 245); //AO
+		const DdsFile packed = ReadDds(dir / "d0c000_0_ORMH.dds");
+		CHECK(packed.ok && std::abs(packed.levels[0].rgba[(static_cast<size_t>(40) * 64 + 10) * 4 + 3] - 160) <= 6);
+	}
+	//the glows: colour as painted (sRGB), the alpha white (DEMASTER adds an _E's colour); a picture of the glows keeps its
+	//coverage, and so does an _E.png with an alpha (as _EC)
+	{
+		const DdsFile e = ReadDds(dir / "a0stg012_16_E.dds");
+		CHECK(e.ok && e.dxgi == 99 && e.mips == 9);
+		const uint8_t* lit = e.levels[0].rgba.data() + (static_cast<size_t>(60) * 256 + 200) * 4;
+		const uint8_t* dark = e.levels[0].rgba.data() + (static_cast<size_t>(200) * 256 + 30) * 4;
+		CHECK(std::abs(lit[0] - 255) <= 3 && std::abs(lit[1] - 180) <= 3 && std::abs(lit[2] - 60) <= 3 && lit[3] >= 250);
+		CHECK(dark[0] <= 2 && dark[3] >= 250); //(BC7 keeps a white alpha to within a level or so; nothing reads it)
+		const DdsFile ec = ReadDds(dir / "mag001_0_EC.dds");
+		CHECK(ec.ok && ec.dxgi == 99 && ec.levels[0].rgba[(10 * 64 + 5) * 4 + 3] >= 250 && ec.levels[0].rgba[(10 * 64 + 50) * 4 + 3] <= 5);
+		const DdsFile boss = ReadDds(dir / "c0m100_0_EC.dds");
+		CHECK(boss.ok && boss.levels[0].rgba[(5 * 64 + 5) * 4 + 3] >= 250 && boss.levels[0].rgba[(40 * 64 + 5) * 4 + 3] <= 5
+			&& std::abs(boss.levels[0].rgba[(5 * 64 + 5) * 4 + 2] - 255) <= 3);
+	}
+	//the page's map without its image: at its own size; an enemy's albedo with its cut-outs
+	{
+		const DdsFile n = ReadDds(dir / "a0stg012_17_N.dds");
+		CHECK(n.ok && n.width == 64 && n.height == 64 && n.mips == 7 && n.dxgi == 98);
+		const DdsFile c = ReadDds(dir / "c0m001_0.dds");
+		CHECK(c.ok && c.width == 128 && c.height == 64 && c.mips == 8 && c.dxgi == 99);
+	}
+	//again: all up to date; --match: only those
+	{
+		const auto before = fs::last_write_time(dir / "c0m001_0.dds"), beforeStage = fs::last_write_time(dir / "a0stg012_16_ORMH.dds");
+		std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+		CHECK(Battle(dir.string(), o) == 0);
+		CHECK(fs::last_write_time(dir / "c0m001_0.dds") == before && fs::last_write_time(dir / "a0stg012_16_ORMH.dds") == beforeStage);
+		ModelOptions only = o;
+		only.force = true;
+		only.match = "c0m*";
+		CHECK(Battle(dir.string(), only) == 0);
+		CHECK(fs::last_write_time(dir / "c0m001_0.dds") != before && fs::last_write_time(dir / "a0stg012_16_ORMH.dds") == beforeStage);
+		//one image, named by one of its maps
+		save("a0stg012_16_H.png", Grey(256, 256, [](int x, int) { return x; }));
+		std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+		const auto beforeN = fs::last_write_time(dir / "a0stg012_16_N.dds");
+		CHECK(Battle((dir / "a0stg012_16_H.png").string(), o) == 0);
+		CHECK(fs::last_write_time(dir / "a0stg012_16_ORMH.dds") != beforeStage && fs::last_write_time(dir / "a0stg012_16_N.dds") == beforeN);
+	}
+	//the field models' command is as it was: no ORMH, the _E in the ORME
+	{
+		const fs::path models = dir / "models";
+		fs::create_directories(models);
+		CHECK(SavePng((models / "d001_0.png").string(), Albedo(64, 64, false), error));
+		CHECK(SavePng((models / "d001_0_H.png").string(), Grey(64, 64, [](int, int) { return 10; }), error));
+		CHECK(SavePng((models / "d001_0_E.png").string(), Grey(64, 64, [](int, int) { return 200; }), error));
+		CHECK(Models(models.string(), o) == 0);
+		CHECK(fs::exists(models / "d001_0_ORME.dds") && !fs::exists(models / "d001_0_ORMH.dds") && !fs::exists(models / "d001_0_E.dds"));
+	}
+}
+
 int main(int argc, char** argv)
 {
 	if (argc < 2)
@@ -424,6 +563,7 @@ int main(int argc, char** argv)
 	TestPieces();
 	double seconds = 0;
 	TestFolder(fs::path(argv[1]), seconds);
+	TestBattle(fs::path(argv[1]) / "battle");
 	printf("one 1024x1024 image (albedo, normal, ORME): %.1f s with %u threads\n", seconds, std::max(1u, std::thread::hardware_concurrency()));
 	printf("%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;

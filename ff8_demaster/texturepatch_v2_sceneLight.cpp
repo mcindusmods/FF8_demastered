@@ -68,7 +68,6 @@ namespace
 	struct MapFile
 	{
 		GLuint texture = 0;
-		bool alpha = false; //the file has an alpha channel
 	};
 	std::unordered_map<std::string, MapFile> maps;
 	int mapsStage = -1;
@@ -574,7 +573,6 @@ namespace
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		made.texture = texture;
-		made.alpha = image->m_hasAlpha;
 		return made;
 	}
 
@@ -1724,8 +1722,11 @@ void SceneLightStagePage(const int stage, const int page, const char* file)
 		std::string stem = file;
 		if (const size_t dot = stem.find_last_of('.'); dot != std::string::npos)
 			stem.resize(dot);
-		t.glows = PageMap(stem, stage, page, "_EC").texture;
-		t.additive = false;
+		//the glows at night: _EC (a picture of them with its coverage), else _E (their colour, added: its alpha isn't read)
+		const MapFile covered = PageMap(stem, stage, page, "_EC");
+		const MapFile emissive = covered.texture != 0 ? covered : PageMap(stem, stage, page, "_E");
+		t.glows = emissive.texture;
+		t.additive = covered.texture == 0 && emissive.texture != 0;
 		const MapFile ormh = PageMap(stem, stage, page, "_ORMH");
 		t.orm = ormh.texture != 0 ? ormh.texture : PageMap(stem, stage, page, "_ORM").texture;
 		t.height = ormh.texture != 0;
@@ -1736,7 +1737,8 @@ void SceneLightStagePage(const int stage, const int page, const char* file)
 		{
 			said = stem;
 			OutputDebug("SCENE_LIGHT: stage %d page %d: %s%s%s%s\n", stage, page, t.normal != 0 ? "a normal map (_N)" : "no _N",
-				t.glows != 0 ? ", a picture of its glows (_EC)" : ", no _EC", t.orm != 0 ? (t.height ? ", an ORMH map (the height in its alpha)" : ", an ORM map") : ", no _ORM",
+				t.glows != 0 ? (covered.texture != 0 ? ", a picture of its glows (_EC)" : ", an emissive map (_E)") : ", no _E or _EC",
+				t.orm != 0 ? (t.height ? ", an ORMH map (the height in its alpha)" : ", an ORM map") : ", no _ORMH",
 				t.glows == 0 && t.orm == 0 && t.normal == 0 ? " (next to its picture; the time of day and the stage's lights work without them)" : "");
 		}
 	}
@@ -1748,8 +1750,9 @@ void SceneLightStagePage(const int stage, const int page, const char* file)
 
 //texturepatch_v2_world.cpp: DEMASTER just put its own picture of a world map page (texl_NNN_P, wmset_NNN_P) into the bound
 //texture. Its maps are next to it: <file without extension>_N (normals, green up), _ORMH (AO, roughness, metalness, height in
-//the alpha: 1 the surface; or _ORM, without the height), and the glows at night: _E (their colour on black: added) or _EC (a
-//picture of the glows with its coverage, as battle stages have). A palette's own (texl_003_2_N), else the first palette's
+//the alpha: 1 the surface; or _ORM, without the height), and the glows at night: _E (their colour on black: added; its alpha
+//isn't read) or _EC (a picture of the glows with its coverage, as battle stages have). A palette's own (texl_003_2_N), else
+//the first palette's
 void SceneLightWorldPage(const char* file)
 {
 	if (!SCENE_LIGHT || file == nullptr)
@@ -1775,7 +1778,7 @@ void SceneLightWorldPage(const char* file)
 		const MapFile covered = WorldMap(stem, "_EC");
 		const MapFile emissive = covered.texture != 0 ? covered : WorldMap(stem, "_E");
 		t.glows = emissive.texture;
-		t.additive = covered.texture == 0 && emissive.texture != 0 && !emissive.alpha;
+		t.additive = covered.texture == 0 && emissive.texture != 0; //(an _E's alpha isn't read: its colour is added)
 		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(bound));
 		static std::unordered_map<std::string, bool> said;
 		if ((t.glows != 0 || t.orm != 0 || t.normal != 0 || SCENE_DEBUG) && !said[stem])
@@ -1784,8 +1787,7 @@ void SceneLightWorldPage(const char* file)
 			const size_t slash = stem.find_last_of("\\/");
 			OutputDebug("SCENE_LIGHT: world page %s: %s%s%s\n", stem.c_str() + (slash == std::string::npos ? 0 : slash + 1),
 				t.normal != 0 ? "a normal map (_N)" : "no _N", t.orm != 0 ? (t.height ? ", an ORMH map (the height in its alpha)" : ", an ORM map")
-				: ", no _ORMH", t.glows != 0 ? (covered.texture != 0 ? ", its glows' picture (_EC)" : t.additive ? ", an emissive map (_E, added)"
-				: ", an emissive map (_E, with its coverage)") : ", no _E");
+				: ", no _ORMH", t.glows != 0 ? (covered.texture != 0 ? ", its glows' picture (_EC)" : ", an emissive map (_E, added)") : ", no _E");
 		}
 	}
 	catch (...)

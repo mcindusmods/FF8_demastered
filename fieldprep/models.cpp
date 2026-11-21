@@ -24,8 +24,10 @@ namespace fieldprep
 	namespace
 	{
 		//the maps' suffixes (the image itself: ""); _A/_AM albedo, _N normal, _O AO, _R/_RC/_RM roughness, _M/_MC/_MM metallic,
-		//_E emissive, _ORME the four packed
-		const char* const SUFFIXES[] = { "_ORME", "_AM", "_A", "_N", "_O", "_RC", "_RM", "_R", "_MC", "_MM", "_M", "_E" };
+		//_E emissive, _ORME the four packed; battle: _H height, _ORMH AO roughness metallic height packed, _EC the glows'
+		//picture with its coverage (longer ones first: _ORMH before _H, _EC before _E)
+		const char* const SUFFIXES[] = { "_ORME", "_ORMH", "_AM", "_A", "_N", "_O", "_RC", "_RM", "_R", "_MC", "_MM", "_M", "_EC", "_E",
+			"_H" };
 
 		std::string Lower(std::string s)
 		{
@@ -305,13 +307,15 @@ namespace fieldprep
 			const auto start = std::chrono::steady_clock::now();
 			const auto has = [&](const char* suffix) { return m.files.count(suffix) > 0; };
 			const auto file = [&](const char* suffix) { return m.files.at(suffix); };
-			if (!has(""))
+			//battle: a page's maps without its image (an animated page's, for all its frames) are made at their own size
+			const bool noImage = !has("");
+			if (noImage && !o.battle)
 			{
 				r.skipped = true;
 				r.text = "  " + m.stem + ": no " + m.stem + ".png next to its maps (the game places the image by it): skipped\n";
 				return r;
 			}
-			const fs::path image = file("");
+			const fs::path image = noImage ? m.files.begin()->second : file("");
 			Image base;
 			std::string error, notes, made;
 			if (!LoadRgba(image.string(), base, error))
@@ -320,6 +324,8 @@ namespace fieldprep
 				r.text = "  " + m.stem + ": ERROR " + image.filename().string() + ": " + error + "\n";
 				return r;
 			}
+			if (noImage)
+				notes += ", no " + m.stem + ".png: its maps at " + image.filename().string() + "'s size";
 			const int width = base.width, height = base.height;
 			const auto fail = [&](const std::string& what)
 			{
@@ -328,7 +334,8 @@ namespace fieldprep
 				return r;
 			};
 			const char* albedoSuffix = has("_A") ? "_A" : has("_AM") ? "_AM" : "";
-			const fs::path albedoSource = file(albedoSuffix);
+			const bool albedoThere = !noImage || *albedoSuffix != '\0';
+			const fs::path albedoSource = albedoThere ? file(albedoSuffix) : image;
 			//the islands (for padding the normal and ORME maps): from the albedo's alpha, read once
 			std::vector<uint8_t> islands;
 			bool islandsRead = false;
@@ -337,6 +344,8 @@ namespace fieldprep
 				if (islandsRead || !o.pad)
 					return true;
 				islandsRead = true;
+				if (!albedoThere)
+					return true; //(no albedo: nothing says where the islands are)
 				Image albedo = base;
 				std::string ignored;
 				if (*albedoSuffix != '\0' && !Load(albedoSource, width, height, albedo, ignored, error))
@@ -345,6 +354,7 @@ namespace fieldprep
 				return true;
 			};
 			//the albedo
+			if (albedoThere)
 			{
 				const fs::path source = albedoSource, out = folder / (m.stem + ".dds");
 				if (!o.force && UpToDate(out, { source, image }))
@@ -392,8 +402,10 @@ namespace fieldprep
 					r.made++;
 				}
 			}
-			//AO, roughness, metallic, emissive
-			const char* const channels[4][3] = { { "_O", nullptr, nullptr }, { "_R", "_RC", "_RM" }, { "_M", "_MC", "_MM" }, { "_E", nullptr, nullptr } };
+			//AO, roughness, metallic, and emissive (a field model's ORME) or height (a battle texture's ORMH)
+			const char* const packedSuffix = o.battle ? "_ORMH" : "_ORME";
+			const char* const channels[4][3] = { { "_O", nullptr, nullptr }, { "_R", "_RC", "_RM" }, { "_M", "_MC", "_MM" },
+				{ o.battle ? "_H" : "_E", nullptr, nullptr } };
 			const char* chosen[4] = {};
 			bool anySeparate = false;
 			for (int k = 0; k < 4; k++)
@@ -403,7 +415,7 @@ namespace fieldprep
 						chosen[k] = s;
 						anySeparate = true;
 					}
-			if (anySeparate || has("_ORME"))
+			if (anySeparate || has(packedSuffix))
 			{
 				std::vector<fs::path> sources{ image, albedoSource };
 				if (anySeparate)
@@ -413,8 +425,8 @@ namespace fieldprep
 							sources.push_back(file(s));
 				}
 				else
-					sources.push_back(file("_ORME"));
-				const fs::path out = folder / (m.stem + "_ORME.dds");
+					sources.push_back(file(packedSuffix));
+				const fs::path out = folder / (m.stem + packedSuffix + ".dds");
 				if (!o.force && UpToDate(out, sources))
 					r.upToDate++;
 				else
@@ -424,7 +436,7 @@ namespace fieldprep
 					if (anySeparate)
 					{
 						Image maps[4];
-						const char* names[4] = { "AO", "roughness", "metallic", "emissive" };
+						const char* names[4] = { "AO", "roughness", "metallic", o.battle ? "height" : "emissive" };
 						for (int k = 0; k < 4; k++)
 						{
 							if (chosen[k] == nullptr)
@@ -433,14 +445,14 @@ namespace fieldprep
 								return fail(error);
 							which += std::string(which.empty() ? "" : " ") + names[k];
 						}
-						orme = PackOrme(width, height, chosen[0] ? &maps[0] : nullptr, chosen[1] ? &maps[1] : nullptr, chosen[2] ? &maps[2] : nullptr,
-							chosen[3] ? &maps[3] : nullptr);
-						if (has("_ORME"))
-							notes += ", " + file("_ORME").filename().string() + " not used (the separate maps are)";
+						orme = (o.battle ? PackOrmh : PackOrme)(width, height, chosen[0] ? &maps[0] : nullptr, chosen[1] ? &maps[1] : nullptr,
+							chosen[2] ? &maps[2] : nullptr, chosen[3] ? &maps[3] : nullptr);
+						if (has(packedSuffix))
+							notes += ", " + file(packedSuffix).filename().string() + " not used (the separate maps are)";
 					}
 					else
 					{
-						if (!Load(file("_ORME"), width, height, orme, notes, error))
+						if (!Load(file(packedSuffix), width, height, orme, notes, error))
 							return fail(error);
 						which = "packed";
 					}
@@ -448,12 +460,52 @@ namespace fieldprep
 						return fail(error);
 					if (!WriteLevels(out, DataLevels(orme, islands), false, o, threads, error))
 						return fail(error);
-					made += std::string(made.empty() ? "" : ", ") + "ORME (" + which + ")";
+					made += std::string(made.empty() ? "" : ", ") + (packedSuffix + 1) + std::string(" (") + which + ")";
 					r.made++;
 				}
 			}
+			//a battle texture's glows at night: _E, their colour (DEMASTER adds it: the DDS's alpha is left white, BC7 keeps the
+			//colour better), _EC, a picture of the glows with its coverage. An _E.png with an alpha of its own is that picture:
+			//it becomes _EC.dds (unless there is an _EC.png)
+			if (o.battle)
+				for (const char* suffix : { "_E", "_EC" })
+				{
+					if (!has(suffix))
+						continue;
+					const bool isEc = strcmp(suffix, "_EC") == 0;
+					const fs::path source = file(suffix), asE = folder / (m.stem + "_E.dds"), asEc = folder / (m.stem + "_EC.dds");
+					//(an _E.png's alpha decides which it makes: either up to date is enough)
+					if (!o.force && (isEc ? UpToDate(asEc, { source, image })
+						: UpToDate(asE, { source, image }) || (!has("_EC") && UpToDate(asEc, { source, image }))))
+					{
+						r.upToDate++;
+						continue;
+					}
+					Image glows;
+					if (!Load(source, width, height, glows, notes, error))
+						return fail(error);
+					bool covered = isEc;
+					if (!isEc && fieldpbr::EmissiveHasAlpha(glows.rgba.data(), static_cast<size_t>(width) * height))
+					{
+						if (has("_EC"))
+							notes += ", " + source.filename().string() + "'s alpha isn't read (there is an _EC.png: DEMASTER takes it)";
+						else
+							covered = true;
+					}
+					if (!isEc && !covered && !has("_EC") && FileExists(asEc.string()))
+						notes += ", " + asEc.filename().string() + " from before is still there (made when " + source.filename().string()
+							+ " had an alpha): DEMASTER takes it before _E.dds, delete it";
+					if (!WriteLevels(covered ? asEc : asE, EmissiveLevels(glows, !covered), true, o, threads, error))
+						return fail(error);
+					made += std::string(made.empty() ? "" : ", ") + (isEc ? "the glows' picture (_EC)" : covered
+						? "the glows' picture (_E.png has an alpha: its coverage, written as _EC.dds)" : "emissive (_E, added)");
+					r.made++;
+				}
+			if (o.battle && has("_E") && has("_EC"))
+				notes += ", both _E and _EC (DEMASTER takes _EC)";
 			if (o.pad && islandsRead)
-				notes += islands.empty() ? ", not padded (the albedo has no see-through texels to tell its islands by)"
+				notes += !albedoThere ? ", not padded (no albedo to tell its islands by)"
+					: islands.empty() ? ", not padded (the albedo has no see-through texels to tell its islands by)"
 					: ", padded around its islands";
 			const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 			char head[96];
@@ -774,6 +826,87 @@ namespace fieldprep
 		return out;
 	}
 
+	Image PackOrmh(const int width, const int height, const Image* ao, const Image* roughness, const Image* metallic, const Image* heightMap)
+	{
+		Image out;
+		out.width = width;
+		out.height = height;
+		out.rgba.resize(static_cast<size_t>(width) * height * 4);
+		for (size_t i = 0; i < static_cast<size_t>(width) * height; i++)
+		{
+			uint8_t* p = out.rgba.data() + i * 4;
+			p[0] = ao != nullptr ? ao->rgba[i * 4] : 255; //grey maps: their first channel
+			p[1] = roughness != nullptr ? roughness->rgba[i * 4] : 179; //0.7
+			p[2] = metallic != nullptr ? metallic->rgba[i * 4] : 0;
+			p[3] = heightMap != nullptr ? heightMap->rgba[i * 4] : 255; //the surface (DEMASTER's parallax moves nothing)
+		}
+		return out;
+	}
+
+	std::vector<Image> EmissiveLevels(const Image& level0, const bool additive)
+	{
+		Image first = level0;
+		if (additive)
+			for (size_t i = 3; i < first.rgba.size(); i += 4)
+				first.rgba[i] = 255;
+		std::vector<Image> levels{ first };
+		Floats f;
+		f.width = first.width;
+		f.height = first.height;
+		f.v.resize(first.rgba.size());
+		for (size_t i = 0; i < first.rgba.size(); i += 4)
+		{
+			for (int c = 0; c < 3; c++)
+				f.v[i + c] = fieldpbr::SrgbToLinear(first.rgba[i + c] / 255.0f);
+			f.v[i + 3] = first.rgba[i + 3] / 255.0;
+		}
+		while (f.width > 1 || f.height > 1)
+		{
+			f = Half(f, [](const double* in, const double w, double* sum)
+			{
+				for (int c = 0; c < 4; c++)
+					sum[c] += in[c] * w;
+			}, [](double* sum, const double w)
+			{
+				for (int c = 0; c < 4; c++)
+					sum[c] /= w;
+			});
+			Image out;
+			out.width = f.width;
+			out.height = f.height;
+			out.rgba.resize(f.v.size());
+			for (size_t i = 0; i < f.v.size(); i += 4)
+			{
+				for (int c = 0; c < 3; c++)
+					out.rgba[i + c] = Byte(255.0 * fieldpbr::LinearToSrgb(static_cast<float>(f.v[i + c])));
+				out.rgba[i + 3] = Byte(255.0 * f.v[i + 3]);
+			}
+			levels.push_back(std::move(out));
+		}
+		return levels;
+	}
+
+	bool NameMatches(const std::string& patterns, const std::string& name)
+	{
+		std::string list = patterns;
+		std::replace(list.begin(), list.end(), ',', ' ');
+		bool any = false;
+		size_t at = 0;
+		while (at < list.size())
+		{
+			const size_t start = list.find_first_not_of(" \t", at);
+			if (start == std::string::npos)
+				break;
+			const size_t end = list.find_first_of(" \t", start);
+			const std::string one = list.substr(start, end == std::string::npos ? std::string::npos : end - start);
+			any = true;
+			if (fieldpbr::NameMatches(one, name))
+				return true;
+			at = end == std::string::npos ? list.size() : end;
+		}
+		return !any;
+	}
+
 	int Models(const std::string& target, const ModelOptions& o)
 	{
 		std::error_code error;
@@ -789,10 +922,12 @@ namespace fieldprep
 		const fs::path folder = folderMode ? path : (path.has_parent_path() ? path.parent_path() : fs::path("."));
 		const std::map<std::string, ModelFiles> scanned = ScanFolder(folder);
 		std::vector<const ModelFiles*> jobs;
+		const char* const name = o.battle ? "battle" : "model";
 		if (folderMode)
 		{
+			//a field model only when it has maps; a battle texture always (its albedo as a DDS), the ones that match
 			for (const auto& [key, m] : scanned)
-				if (m.files.size() > 1 || (m.files.size() == 1 && m.files.count("") == 0))
+				if (o.battle ? NameMatches(o.match, m.stem) : m.files.size() > 1 || (m.files.size() == 1 && m.files.count("") == 0))
 					jobs.push_back(&m);
 		}
 		else
@@ -801,11 +936,14 @@ namespace fieldprep
 			if (it != scanned.end())
 				jobs.push_back(&it->second);
 		}
-		printf("fieldprep model: %s, %zu image(s) with PBR maps, BC7 quality %d, %d threads\n", folder.string().c_str(), jobs.size(), o.quality,
-			o.threads);
+		printf("fieldprep %s: %s, %zu image(s)%s%s, BC7 quality %d, %d threads\n", name, folder.string().c_str(), jobs.size(),
+			o.battle ? "" : " with PBR maps", o.battle && folderMode && !o.match.empty() ? (" matching " + o.match).c_str() : "", o.quality, o.threads);
 		if (jobs.empty())
 		{
-			printf("  nothing to do: an image needs at least one map next to it (<image>_A, _N, _O, _R, _M, _E or _ORME .png)\n");
+			if (o.battle)
+				printf("  nothing to do: no PNG image there%s\n", folderMode && !o.match.empty() ? " whose name matches" : "");
+			else
+				printf("  nothing to do: an image needs at least one map next to it (<image>_A, _N, _O, _R, _M, _E or _ORME .png)\n");
 			return 0;
 		}
 		std::vector<Result> results(jobs.size());
@@ -846,9 +984,15 @@ namespace fieldprep
 		fputs(summary, stdout);
 		if (folderMode)
 		{
-			std::ofstream file(folder / "fieldprep_model.txt", std::ios::binary | std::ios::trunc);
+			std::ofstream file(folder / (std::string("fieldprep_") + name + ".txt"), std::ios::binary | std::ios::trunc);
 			file << log << summary;
 		}
 		return failed;
+	}
+
+	int Battle(const std::string& target, ModelOptions o)
+	{
+		o.battle = true;
+		return Models(target, o);
 	}
 }

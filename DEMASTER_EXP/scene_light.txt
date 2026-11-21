@@ -11,9 +11,10 @@
 ; ao          = how much of a page's ORM map's AO is used (0-1)
 ; glow        = how bright a page's glows are at night (<page>_EC, a world page's _E; 1: as painted)
 ; A page's maps are next to its picture: a battle stage page's <page>_N (normals, green up), _ORMH (AO, roughness,
-; metalness, and the height in its alpha: 1 the surface; or _ORM without it) and _EC (a picture of its glows, with
-; their coverage); a world map page's (texl_003_0, wmset_016_0 ...) _N, _ORMH and _E (the glows' colour on black,
-; added at night) or _EC. A palette's own world maps (texl_003_2_N), else the first palette's (texl_003_0_N).
+; metalness, and the height in its alpha: 1 the surface; or _ORM without it) and its glows at night: _E (their
+; colour on black, added; its alpha isn't read) or _EC (a picture of them, its alpha their coverage); a world map
+; page's (texl_003_0, wmset_016_0 ...) the same. A palette's own world maps (texl_003_2_N), else the first
+; palette's (texl_003_0_N). fieldprep battle makes a battle texture's as BC7 DDS files (ORMH from _O, _R, _M, _H).
 
 [battle]
 night = auto

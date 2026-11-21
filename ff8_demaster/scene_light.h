@@ -28,8 +28,8 @@
 //	  parallax    = 0-64    how deep the height in a page's ORMH map (its alpha: 1 the surface) goes, in the place's
 //	                        units: what is lower shifts with the view (0: off)
 //	  smooth      = 0 | 1   [world]: its ground drawn with smooth normals (GroundNormals; 0: each triangle lit flat)
-//	A battle stage page's maps are <page>_N, _ORMH (or _ORM), _EC; a world map page's (texl_NNN_P, wmset_NNN_P) _N,
-//	_ORMH (or _ORM) and _E (the glows' colour on black, added at night) or _EC
+//	A battle stage page's maps and a world map page's (texl_NNN_P, wmset_NNN_P): <page>_N, _ORMH (or _ORM), and _E (the
+//	glows' colour on black, added at night; its alpha isn't read) or _EC (a picture of the glows, its alpha their coverage)
 //	  sun_azimuth = degrees, sun_height = degrees   where it rises (0: along the stage's +x) and how high it climbs
 //	[rule <name>]        the same keys (only the ones written change anything), for where its conditions hold:
 //	  where  = battle | world | both      (left out: both)

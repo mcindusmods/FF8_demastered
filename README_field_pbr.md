@@ -188,10 +188,34 @@ The time of day also changes the picture's colours: a golden dusk, a rose dawn, 
 Battles and the world map are drawn by the game's `main.frag` (DEMASTER's version in `DEMASTER_EXP\shaders`). `DEMASTER_EXP\scene_light.txt` (written with the defaults, explained, when it's missing; read again within a second of saving) says what the time of day does there: the night's tint and level, the sun and the moon crossing the place by the clock (the camera is read from the game every frame), and rules for some stages or some part of the story.
 
 **A page's maps**, next to its picture, DDS or PNG:
-- a battle stage page (`textures\battle.fs\hd_new\a0stgNNN_P`): `_N` (normals, green up), `_ORMH` (AO, roughness, metalness, and the height in the alpha: 1 the surface, 0 the deepest; or `_ORM` without the height), `_EC` (a picture of its glows with their coverage);
+- a battle stage page (`textures\battle.fs\hd_new\a0stgNNN_P`): `_N` (normals, green up), `_ORMH` (AO, roughness, metalness, and the height in the alpha: 1 the surface, 0 the deepest; or `_ORM` without the height), and its glows at night: `_E` (a coloured emissive: their colour on black, added) or `_EC` (a picture of its glows with their coverage);
 - a world map page (v15.15: `textures\world\dat\texl\texl_NNN_P`, `wmset\wmset_NNN_P`, the ground, the far land, the sea, the moon): `_N`, `_ORMH` (or `_ORM`), and its glows at night: `_E` (a coloured emissive: their colour on black, added) or `_EC`. A palette's own (`texl_003_2_N`), else the first palette's (`texl_003_0_N`).
 
 The normal map's slopes, the AO, a highlight by roughness and metalness, and the glows from the evening on. `parallax` (0-64, default 4) is how deep an `_ORMH` map's height goes in the place's units: lower parts shift with the view. The log says which maps each page has.
+
+An `_E`'s alpha isn't read: its colour is only added. A picture of the glows that should cover the darkened picture where it's lit is an `_EC`, its alpha the coverage.
+
+**Making them with fieldprep (v15.15):** `fieldprep battle` packs and converts the battle textures, for one image or the whole folder:
+
+```
+fieldprep battle "<game>\DEMASTER_EXP\textures\battle.fs\hd_new\a0stg012_16.png"   (one image; any of its maps works too)
+fieldprep battle "<game>\DEMASTER_EXP\textures\battle.fs\hd_new"                    (every image there)
+fieldprep battle "<game>\DEMASTER_EXP\textures\battle.fs\hd_new" --match a0stg*     (only the stages; "c0m*,mag*": enemies and GFs)
+```
+
+Every image in the folder: the stages' pages (`a0stg012_16`, an animated page's frames `a0stg012_16_0` ...) and the fighters', enemies', bosses' and GFs' textures (`d0c000_0`, `c0m001_0`, `mag001_0` ...), each with whatever maps it has. BC7 DDS files with every mip level, made as `fieldprep model` makes them (the albedo in linear light, cut-outs keeping their coverage, normals unit length, padding around the islands):
+
+| You put next to `a0stg012_16.png` | fieldprep writes |
+|---|---|
+| nothing, or `a0stg012_16_A.png` (or `_AM`) | `a0stg012_16.dds`: the albedo, BC7 sRGB |
+| `a0stg012_16_N.png`: normal, green up | `a0stg012_16_N.dds` |
+| `a0stg012_16_O.png`, `_R.png`, `_M.png`, `_H.png` (grey; `_RC`/`_RM`, `_MC`/`_MM` work too), or one packed `a0stg012_16_ORMH.png` | `a0stg012_16_ORMH.dds`: AO, roughness, metallic, height. Missing ones are plain (AO 1, roughness 0.7, not metal, height 1: the surface, nothing moves) |
+| `a0stg012_16_E.png`: the glows' colour on black | `a0stg012_16_E.dds` (added at night). An `_E.png` with an alpha of its own is a picture of the glows: it becomes `_EC.dds` |
+| `a0stg012_16_EC.png` | `a0stg012_16_EC.dds`, its alpha the coverage |
+
+- **An animated page's maps** can be one set for all its frames, named after the page (`a0stg012_17_N.png` next to `a0stg012_17_0.png`, `a0stg012_17_1.png` ...): they're made at their own size, and DEMASTER uses them for every frame without a map of its own.
+- **DEMASTER reads the DDS whenever there is one** (before the PNG), so after changing a PNG run fieldprep again: only what changed is made again (`--force`: all). The log, `fieldprep_battle.txt` in the folder, says what each image got.
+- `--quality`, `--flip-green`, `--coverage` and `--no-pad` as for `fieldprep model`.
 
 **The world map's ground** is drawn with smooth normals (v15.15): DEMASTER keeps the faces around each corner from frame to frame by its place on the map, so the ground's many small draws meet without seams and each corner gets its neighbourhood's normal; a cliff's edge (faces more than 60° apart) stays sharp. `smooth = 0` in `[world]` puts the game's flat triangles back.
 

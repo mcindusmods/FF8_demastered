@@ -1324,6 +1324,7 @@ namespace
 			"\n"
 			"  fieldprep [command] <folder> [options]\n"
 			"  fieldprep model <image or folder> [options]\n"
+			"  fieldprep battle <image or folder> [options]\n"
 			"\n"
 			"<folder>: a field's folder (DEMASTER_EXP\\textures\\field_bg\\bv\\bvtr_1), or a folder of them (field_bg, field_bg\\bv):\n"
 			"          every field in it.\n"
@@ -1336,6 +1337,22 @@ namespace
 			"       --quality <0-4>  BC7 effort (default 2)    --flip-green  the normal maps are green down (DirectX)\n"
 			"       --coverage <0-1> the game's cut-out test, kept in the albedo's small levels (default 0.44; 0: off)\n"
 			"       --no-pad         don't fill around the islands (the albedo's see-through texels) in every level\n"
+			"\n"
+			"battle: the battle textures (DEMASTER_EXP\\textures\\battle.fs\\hd_new): the stages' pages (a0stg012_16.png, an\n"
+			"       animated page's frames a0stg012_16_0.png ...) and the fighters', enemies', bosses' and GFs' (d0c000_0, c0m001_0,\n"
+			"       mag001_0 ...). Give one image (or any of its maps) or the folder: every image in it, each with the maps it has\n"
+			"       (--match a0stg*: only the stages; several with commas: \"c0m*,mag*\"). BC7 DDS files with every mip level:\n"
+			"         <image>.dds       the albedo (<image>_A.png, else <image>.png)\n"
+			"         <image>_N.dds     from <image>_N.png, green up\n"
+			"         <image>_ORMH.dds  AO, roughness, metallic, height packed, from <image>_O, _R, _M, _H.png (grey; _RC/_RM and\n"
+			"                           _MC/_MM work too), or a packed <image>_ORMH.png; missing ones plain (AO 1, roughness 0.7,\n"
+			"                           not metal, height 1: the surface)\n"
+			"         <image>_E.dds     from <image>_E.png: the glows' colour at night, on black: DEMASTER adds it\n"
+			"         <image>_EC.dds    from <image>_EC.png: a picture of the glows with their coverage (its alpha); an _E.png\n"
+			"                           with an alpha of its own is one too and becomes _EC.dds\n"
+			"       A page's maps without its image (a0stg012_16_N.png for all of an animated page's frames) are made at their own\n"
+			"       size. DEMASTER reads the DDS whenever there is one, so run it again after changing a PNG (only what changed is\n"
+			"       made again; --force: all). The same --quality, --flip-green, --coverage and --no-pad as model.\n"
 			"\n"
 			"Commands:\n"
 			"  prep     (the default) from your maps: <field>_<pupu>_A for every opaque layer, <field>_LF, <field>_ND,\n"
@@ -1351,6 +1368,7 @@ namespace
 			"  all      prep, then orme\n"
 			"  compose  only writes <field>.png: the opaque layers put together (what to run Marigold/CHORD on)\n"
 			"  model    the field models' textures, not a field: see model above\n"
+			"  battle   the battle textures: see battle above\n"
 			"\n"
 			"Your maps, in the field's folder, all PNG, at the canvas size (layer images from PuPu or FME: the canvas is FME's\n"
 			"when all of them are FME's, else the box around the opaque layers' pictures; maps made for the other one are moved\n"
@@ -1374,7 +1392,7 @@ namespace
 			"  --relight            find the lights again and rewrite <field>_lights.txt (it's kept otherwise; the old one is kept\n"
 			"                       as <field>_lights_old.txt). A <field>_LIGHTS.png newer than _lights.txt does the same.\n"
 			"  --rebake             bake <field>_O again (it's kept otherwise)\n"
-			"  --force              compose: write <field>.png even if there is one; model: make every DDS again\n"
+			"  --force              compose: write <field>.png even if there is one; model, battle: make every DDS again\n"
 			"  --tint <0-1>         how much of the light's colour moves from the albedo into the lightmap (default 0.5)\n"
 			"  --ao-radius <px>     AO reach, native pixels (default 10)    --ao-strength <x>  (default 1)\n"
 			"  --light-intensity <x>  light each found light adds on top (default 0.2; 0 keeps the painting as it is)\n"
@@ -1446,6 +1464,8 @@ int main(int argc, char** argv)
 			o.model.flipGreen = true;
 		else if (a == "--no-pad")
 			o.model.pad = false;
+		else if (a == "--match" && i + 1 < argc)
+			o.model.match = argv[++i];
 		else if (!a.empty() && a[0] == '-')
 		{
 			fprintf(stderr, "unknown option %s (fieldprep --help)\n", a.c_str());
@@ -1454,10 +1474,12 @@ int main(int argc, char** argv)
 		else
 			plain.push_back(a);
 	}
-	if (plain.size() == 2 && plain[0] == "model")
+	if (plain.size() == 2 && (plain[0] == "model" || plain[0] == "battle"))
 	{
 		o.model.threads = o.threads;
 		o.model.force = o.force;
+		if (plain[0] == "battle")
+			return fieldprep::Battle(plain[1], o.model) == 0 ? 0 : 1;
 		return fieldprep::Models(plain[1], o.model) == 0 ? 0 : 1;
 	}
 	if (!plain.empty() && (plain[0] == "prep" || plain[0] == "orme" || plain[0] == "ormh" || plain[0] == "all" || plain[0] == "compose"))
